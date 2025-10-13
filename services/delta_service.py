@@ -31,9 +31,9 @@ class DeltaEmailService:
         self.scheduler = AsyncIOScheduler()
         self.delta_tokens_file = "delta_tokens.json"
         self.active_users_file = "active_users.json"
-        self.polling_interval = 180  # 3 minutes default
+        self.polling_interval = 60  # 1 minute for automated workflow
         self.is_running = False
-        
+
         # Ensure directories exist
         os.makedirs("delta_cache", exist_ok=True)
         
@@ -84,9 +84,10 @@ class DeltaEmailService:
         if user_email not in active_users:
             active_users.append(user_email)
             await self.save_active_users(active_users)
-            logger.info(f"✅ Added {user_email} to email monitoring")
+            logger.info(f"✅ User added to monitoring list")
+            logger.info(f"📊 Total active users: {len(active_users)}")
         else:
-            logger.info(f"👤 User {user_email} already being monitored")
+            logger.info(f"ℹ️  User already in monitoring list")
     
     async def remove_user_from_monitoring(self, user_email: str):
         """Remove a user from email monitoring"""
@@ -94,14 +95,15 @@ class DeltaEmailService:
         if user_email in active_users:
             active_users.remove(user_email)
             await self.save_active_users(active_users)
-            
+
             # Also remove their delta token
             delta_tokens = await self.load_delta_tokens()
             if user_email in delta_tokens:
                 del delta_tokens[user_email]
                 await self.save_delta_tokens(delta_tokens)
-            
-            logger.info(f"🗑️ Removed {user_email} from email monitoring")
+
+            logger.info(f"✅ User removed from monitoring list")
+            logger.info(f"📊 Remaining active users: {len(active_users)}")
     
     async def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
         """Get delta messages for a user"""
@@ -191,36 +193,41 @@ class DeltaEmailService:
     async def process_user_messages(self, user_email: str, messages: List[Dict]):
         """Process new messages for a user with liberal price change filtering"""
         from main import process_user_message
-        
+
         processed_count = 0
         skipped_count = 0
-        
-        for message in messages:
+
+        for i, message in enumerate(messages, 1):
             try:
+                subject = message.get('subject', 'No Subject')
+                logger.info(f"\n📧 Email {i}/{len(messages)}: {subject}")
+
                 # Use liberal filtering to identify potential price change emails
                 if self.is_price_change_email(message):
-                    logger.info(f"📧 Processing potential price change email for {user_email}: {message.get('subject', 'No Subject')}")
-                    
+                    logger.info(f"   ✅ PRICE CHANGE DETECTED - Processing...")
+
                     # Get full message details
                     full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
-                    
+
                     # Process the message
                     await asyncio.to_thread(process_user_message, full_message, user_email)
                     processed_count += 1
-                    
+
                     # Small delay to avoid overwhelming the system
                     await asyncio.sleep(1)
                 else:
                     skipped_count += 1
-                    logger.debug(f"⏭️ Skipped non-price-related email: {message.get('subject', 'No Subject')}")
-                    
+                    logger.info(f"   ⏭️  Not a price change email - SKIPPED")
+
             except Exception as e:
-                logger.error(f"Error processing message {message.get('id')} for {user_email}: {e}")
-        
-        if processed_count > 0:
-            logger.info(f"✅ Processed {processed_count} potential price change emails for {user_email}")
-        if skipped_count > 0:
-            logger.info(f"⏭️ Skipped {skipped_count} non-relevant emails for {user_email}")
+                logger.error(f"   ❌ ERROR: {e}")
+
+        logger.info("\n" + "="*80)
+        logger.info(f"📊 BATCH PROCESSING SUMMARY:")
+        logger.info(f"   ✅ Processed: {processed_count}")
+        logger.info(f"   ⏭️  Skipped: {skipped_count}")
+        logger.info(f"   📧 Total: {len(messages)}")
+        logger.info("="*80 + "\n")
     
     async def poll_user_emails(self, user_email: str):
         """Poll emails for a specific user"""
@@ -228,62 +235,81 @@ class DeltaEmailService:
             # Load current delta token for user
             delta_tokens = await self.load_delta_tokens()
             current_token = delta_tokens.get(user_email)
-            
-            logger.info(f"🔍 Polling emails for {user_email}")
-            
+
+            logger.info("="*80)
+            logger.info(f"🔍 POLLING EMAILS FOR: {user_email}")
+            logger.info("="*80)
+
             # Get delta messages
             result = await self.get_user_delta_messages(user_email, current_token)
             messages = result.get('messages', [])
             new_delta_token = result.get('delta_token')
-            
+
             if messages:
-                logger.info(f"📬 Found {len(messages)} new/changed emails for {user_email}")
+                logger.info(f"📬 NEW EMAILS DETECTED: {len(messages)} email(s)")
+                logger.info("-"*80)
                 await self.process_user_messages(user_email, messages)
             else:
-                logger.info(f"📭 No new emails for {user_email}")
-            
+                logger.info(f"📭 No new emails")
+                logger.info("="*80 + "\n")
+
             # Update delta token
             if new_delta_token:
                 delta_tokens[user_email] = new_delta_token
                 await self.save_delta_tokens(delta_tokens)
-                
+
         except Exception as e:
-            logger.error(f"Error polling emails for {user_email}: {e}")
+            logger.error(f"❌ ERROR POLLING EMAILS: {e}")
+            logger.error("="*80 + "\n")
     
     async def poll_all_users(self):
         """Poll emails for all active users"""
         try:
             active_users = await self.load_active_users()
-            
+
             if not active_users:
-                logger.info("👥 No active users to monitor")
+                logger.info("\n" + "="*80)
+                logger.info("👥 NO ACTIVE USERS TO MONITOR")
+                logger.info("   ℹ️  Waiting for users to authenticate...")
+                logger.info("="*80 + "\n")
                 return
-            
-            logger.info(f"🔄 Starting email polling for {len(active_users)} users")
-            
+
+            logger.info("\n" + "="*80)
+            logger.info(f"🔄 AUTOMATED POLLING CYCLE STARTED")
+            logger.info(f"👥 Active users: {len(active_users)}")
+            logger.info("="*80)
+
             # Process users concurrently (but with some delay between them)
             for i, user_email in enumerate(active_users):
                 # Add small delay between users to avoid rate limiting
                 if i > 0:
                     await asyncio.sleep(2)
-                
+
                 # Check if user is still authenticated
                 if self.graph_client.is_user_authenticated(user_email):
                     await self.poll_user_emails(user_email)
                 else:
-                    logger.warning(f"⚠️ User {user_email} is not authenticated, skipping")
-                    
+                    logger.warning(f"⚠️  User {user_email} not authenticated - SKIPPED")
+
+            logger.info("="*80)
+            logger.info("✅ POLLING CYCLE COMPLETE")
+            logger.info("⏰ Next poll in 60 seconds...")
+            logger.info("="*80 + "\n")
+
         except Exception as e:
-            logger.error(f"Error in poll_all_users: {e}")
+            logger.error(f"❌ ERROR IN POLLING CYCLE: {e}")
+            logger.error("="*80 + "\n")
     
     def start_polling(self):
         """Start the background email polling"""
         if self.is_running:
-            logger.warning("⚠️ Polling is already running")
+            logger.warning("⚠️  Polling service already running")
             return
-        
-        logger.info(f"🚀 Starting email polling service (interval: {self.polling_interval} seconds)")
-        
+
+        logger.info(f"⚙️  Configuring polling service...")
+        logger.info(f"   ⏱️  Interval: {self.polling_interval} seconds")
+        logger.info(f"   🔄 Mode: Automated continuous polling")
+
         # Add the polling job
         self.scheduler.add_job(
             self.poll_all_users,
@@ -292,11 +318,11 @@ class DeltaEmailService:
             replace_existing=True,
             max_instances=1  # Prevent overlapping polls
         )
-        
+
         self.scheduler.start()
         self.is_running = True
-        
-        logger.info("✅ Email polling service started")
+
+        logger.info("✅ Polling service started successfully")
     
     def stop_polling(self):
         """Stop the background email polling"""
