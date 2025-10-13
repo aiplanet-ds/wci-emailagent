@@ -24,6 +24,8 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
 5. Pay attention to dates (effective dates, deadlines, notification dates)
 6. Extract supplier information from email signatures, letterheads, or content
 7. Identify change types: "increase", "decrease", "adjustment", "currency_change", "discount_removed"
+8. **CRITICAL**: For each product, extract "product_id" which is the Part Number used in ERP systems (e.g., "TEST-001", "PART-ABC-123")
+9. "product_id" and "product_code" may be the same value - extract the part number/SKU/item code as "product_id"
 
 **Expected JSON Schema:**
 {
@@ -49,6 +51,7 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
   "affected_products": [
     {
       "product_name": string,
+      "product_id": string,
       "product_code": string,
       "old_price": number,
       "new_price": number,

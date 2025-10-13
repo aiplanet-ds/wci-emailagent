@@ -330,7 +330,8 @@ class EpicorAPIService:
         }
         
         for product in products:
-            part_num = product.get("product_id")
+            # Try product_id first, fallback to product_code for backward compatibility
+            part_num = product.get("product_id") or product.get("product_code")
             new_price_str = product.get("new_price")
             
             # Validate data
