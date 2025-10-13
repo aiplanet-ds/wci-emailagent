@@ -1,0 +1,359 @@
+"""
+Delta Query Service for Email Intelligence System
+
+This service replaces webhook functionality with polling-based email monitoring.
+It uses Microsoft Graph delta queries to efficiently track email changes for each user.
+"""
+
+import asyncio
+import json
+import os
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+import logging
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import aiofiles
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class DeltaEmailService:
+    """
+    Delta query service for polling user emails and processing new/changed messages
+    """
+    
+    def __init__(self):
+        from auth.multi_graph import graph_client
+        self.graph_client = graph_client
+        self.scheduler = AsyncIOScheduler()
+        self.delta_tokens_file = "delta_tokens.json"
+        self.active_users_file = "active_users.json"
+        self.polling_interval = 180  # 3 minutes default
+        self.is_running = False
+        
+        # Ensure directories exist
+        os.makedirs("delta_cache", exist_ok=True)
+        
+    async def load_delta_tokens(self) -> Dict[str, str]:
+        """Load delta tokens for all users"""
+        try:
+            if os.path.exists(self.delta_tokens_file):
+                with open(self.delta_tokens_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading delta tokens: {e}")
+        return {}
+    
+    async def save_delta_tokens(self, tokens: Dict[str, str]):
+        """Save delta tokens for all users"""
+        try:
+            with open(self.delta_tokens_file, 'w') as f:
+                json.dump(tokens, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving delta tokens: {e}")
+    
+    async def load_active_users(self) -> List[str]:
+        """Load list of active users to monitor"""
+        try:
+            if os.path.exists(self.active_users_file):
+                with open(self.active_users_file, 'r') as f:
+                    data = json.load(f)
+                    return data.get('users', [])
+        except Exception as e:
+            logger.error(f"Error loading active users: {e}")
+        return []
+    
+    async def save_active_users(self, users: List[str]):
+        """Save list of active users"""
+        try:
+            data = {
+                'users': users,
+                'last_updated': datetime.now().isoformat()
+            }
+            with open(self.active_users_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving active users: {e}")
+    
+    async def add_user_to_monitoring(self, user_email: str):
+        """Add a user to email monitoring"""
+        active_users = await self.load_active_users()
+        if user_email not in active_users:
+            active_users.append(user_email)
+            await self.save_active_users(active_users)
+            logger.info(f"✅ Added {user_email} to email monitoring")
+        else:
+            logger.info(f"👤 User {user_email} already being monitored")
+    
+    async def remove_user_from_monitoring(self, user_email: str):
+        """Remove a user from email monitoring"""
+        active_users = await self.load_active_users()
+        if user_email in active_users:
+            active_users.remove(user_email)
+            await self.save_active_users(active_users)
+            
+            # Also remove their delta token
+            delta_tokens = await self.load_delta_tokens()
+            if user_email in delta_tokens:
+                del delta_tokens[user_email]
+                await self.save_delta_tokens(delta_tokens)
+            
+            logger.info(f"🗑️ Removed {user_email} from email monitoring")
+    
+    async def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
+        """Get delta messages for a user"""
+        try:
+            return self.graph_client.get_user_delta_messages(user_email, delta_token)
+        except Exception as e:
+            logger.error(f"Error getting delta messages for {user_email}: {e}")
+            return {"messages": [], "delta_token": delta_token}
+    
+    def is_price_change_email(self, message: Dict) -> bool:
+        """Determine if an email is likely about price changes using liberal filtering"""
+        subject = message.get('subject', '').lower()
+        sender_info = message.get('from', {}).get('emailAddress', {})
+        sender = sender_info.get('address', '').lower() if sender_info else ''
+        has_attachments = message.get('hasAttachments', False)
+        
+        # Priority keywords - strong indicators of price changes
+        priority_keywords = [
+            'price change', 'pricing update', 'cost adjustment', 'rate change',
+            'price increase', 'price decrease', 'new pricing', 'pricing effective',
+            'cost increase', 'rate adjustment', 'tariff change', 'fee update'
+        ]
+        
+        # General price-related keywords
+        price_keywords = [
+            'price', 'pricing', 'cost', 'rate', 'rates', 'tariff', 'fee', 'fees',
+            'quote', 'quotation', 'invoice', 'bill', 'billing', 'charge', 'charges'
+        ]
+        
+        # Change-related keywords
+        change_keywords = [
+            'change', 'update', 'revised', 'new', 'effective', 'increase', 'decrease',
+            'adjustment', 'modify', 'modified', 'amendment', 'notice', 'notification'
+        ]
+        
+        # Business/supplier keywords
+        business_keywords = [
+            'supplier', 'vendor', 'contract', 'agreement', 'terms', 'conditions',
+            'procurement', 'purchase', 'order', 'catalog', 'catalogue'
+        ]
+        
+        # Financial indicators
+        financial_indicators = ['$', '€', '£', '¥', '%', 'usd', 'eur', 'gbp']
+        
+        # High priority: Strong price change indicators in subject
+        if any(keyword in subject for keyword in priority_keywords):
+            return True
+        
+        # Medium-high priority: Has attachments + any price/change keywords
+        if has_attachments and (
+            any(keyword in subject for keyword in price_keywords) or
+            any(keyword in subject for keyword in change_keywords)
+        ):
+            return True
+        
+        # Medium priority: Price keywords + change keywords combination
+        has_price_keyword = any(keyword in subject for keyword in price_keywords)
+        has_change_keyword = any(keyword in subject for keyword in change_keywords)
+        if has_price_keyword and has_change_keyword:
+            return True
+        
+        # Medium priority: Financial indicators + business context
+        has_financial = any(indicator in subject for indicator in financial_indicators)
+        has_business = any(keyword in subject for keyword in business_keywords)
+        if has_financial and (has_business or has_change_keyword):
+            return True
+        
+        # Lower priority: Business sender with price/financial keywords
+        business_sender_domains = [
+            'supplier', 'vendor', 'corp', 'company', 'inc', 'ltd', 'llc',
+            'procurement', 'sales', 'billing', 'finance', 'accounting'
+        ]
+        is_business_sender = any(domain in sender for domain in business_sender_domains)
+        if is_business_sender and (has_price_keyword or has_financial):
+            return True
+        
+        # Catch common invoice/billing patterns
+        invoice_patterns = [
+            'invoice', 'bill', 'billing', 'payment', 'due', 'statement',
+            'account', 'balance', 'outstanding', 'remittance'
+        ]
+        if any(pattern in subject for pattern in invoice_patterns):
+            return True
+        
+        return False
+
+    async def process_user_messages(self, user_email: str, messages: List[Dict]):
+        """Process new messages for a user with liberal price change filtering"""
+        from main import process_user_message
+        
+        processed_count = 0
+        skipped_count = 0
+        
+        for message in messages:
+            try:
+                # Use liberal filtering to identify potential price change emails
+                if self.is_price_change_email(message):
+                    logger.info(f"📧 Processing potential price change email for {user_email}: {message.get('subject', 'No Subject')}")
+                    
+                    # Get full message details
+                    full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                    
+                    # Process the message
+                    await asyncio.to_thread(process_user_message, full_message, user_email)
+                    processed_count += 1
+                    
+                    # Small delay to avoid overwhelming the system
+                    await asyncio.sleep(1)
+                else:
+                    skipped_count += 1
+                    logger.debug(f"⏭️ Skipped non-price-related email: {message.get('subject', 'No Subject')}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing message {message.get('id')} for {user_email}: {e}")
+        
+        if processed_count > 0:
+            logger.info(f"✅ Processed {processed_count} potential price change emails for {user_email}")
+        if skipped_count > 0:
+            logger.info(f"⏭️ Skipped {skipped_count} non-relevant emails for {user_email}")
+    
+    async def poll_user_emails(self, user_email: str):
+        """Poll emails for a specific user"""
+        try:
+            # Load current delta token for user
+            delta_tokens = await self.load_delta_tokens()
+            current_token = delta_tokens.get(user_email)
+            
+            logger.info(f"🔍 Polling emails for {user_email}")
+            
+            # Get delta messages
+            result = await self.get_user_delta_messages(user_email, current_token)
+            messages = result.get('messages', [])
+            new_delta_token = result.get('delta_token')
+            
+            if messages:
+                logger.info(f"📬 Found {len(messages)} new/changed emails for {user_email}")
+                await self.process_user_messages(user_email, messages)
+            else:
+                logger.info(f"📭 No new emails for {user_email}")
+            
+            # Update delta token
+            if new_delta_token:
+                delta_tokens[user_email] = new_delta_token
+                await self.save_delta_tokens(delta_tokens)
+                
+        except Exception as e:
+            logger.error(f"Error polling emails for {user_email}: {e}")
+    
+    async def poll_all_users(self):
+        """Poll emails for all active users"""
+        try:
+            active_users = await self.load_active_users()
+            
+            if not active_users:
+                logger.info("👥 No active users to monitor")
+                return
+            
+            logger.info(f"🔄 Starting email polling for {len(active_users)} users")
+            
+            # Process users concurrently (but with some delay between them)
+            for i, user_email in enumerate(active_users):
+                # Add small delay between users to avoid rate limiting
+                if i > 0:
+                    await asyncio.sleep(2)
+                
+                # Check if user is still authenticated
+                if self.graph_client.is_user_authenticated(user_email):
+                    await self.poll_user_emails(user_email)
+                else:
+                    logger.warning(f"⚠️ User {user_email} is not authenticated, skipping")
+                    
+        except Exception as e:
+            logger.error(f"Error in poll_all_users: {e}")
+    
+    def start_polling(self):
+        """Start the background email polling"""
+        if self.is_running:
+            logger.warning("⚠️ Polling is already running")
+            return
+        
+        logger.info(f"🚀 Starting email polling service (interval: {self.polling_interval} seconds)")
+        
+        # Add the polling job
+        self.scheduler.add_job(
+            self.poll_all_users,
+            IntervalTrigger(seconds=self.polling_interval),
+            id='email_polling',
+            replace_existing=True,
+            max_instances=1  # Prevent overlapping polls
+        )
+        
+        self.scheduler.start()
+        self.is_running = True
+        
+        logger.info("✅ Email polling service started")
+    
+    def stop_polling(self):
+        """Stop the background email polling"""
+        if not self.is_running:
+            return
+        
+        logger.info("🛑 Stopping email polling service")
+        
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=False)
+        
+        self.is_running = False
+        logger.info("✅ Email polling service stopped")
+    
+    def get_polling_status(self) -> Dict[str, Any]:
+        """Get current polling status"""
+        return {
+            "is_running": self.is_running,
+            "polling_interval": self.polling_interval,
+            "next_run": None if not self.scheduler.running else 
+                       self.scheduler.get_job('email_polling').next_run_time.isoformat() if self.scheduler.get_job('email_polling') else None
+        }
+    
+    async def get_user_stats(self, user_email: str) -> Dict[str, Any]:
+        """Get statistics for a user"""
+        try:
+            # Check if user is being monitored
+            active_users = await self.load_active_users()
+            is_monitored = user_email in active_users
+            
+            # Check if user has delta token (has been polled before)
+            delta_tokens = await self.load_delta_tokens()
+            has_delta_token = user_email in delta_tokens
+            
+            # Count processed emails
+            safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
+            user_output_dir = f"outputs/{safe_email}"
+            processed_count = 0
+            if os.path.exists(user_output_dir):
+                processed_count = len([f for f in os.listdir(user_output_dir) if f.endswith('.json')])
+            
+            return {
+                "is_monitored": is_monitored,
+                "has_delta_token": has_delta_token,
+                "processed_emails": processed_count,
+                "monitoring_since": None  # Could add timestamp tracking
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting user stats for {user_email}: {e}")
+            return {
+                "is_monitored": False,
+                "has_delta_token": False,
+                "processed_emails": 0,
+                "monitoring_since": None
+            }
+
+
+# Global instance
+delta_service = DeltaEmailService()

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Intelligence System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        
+        .logo {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: #667eea;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 2rem;
+            font-size: 1.1rem;
+        }
+        
+        .features {
+            text-align: left;
+            margin: 2rem 0;
+            padding: 1.5rem;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .feature {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .feature:last-child {
+            margin-bottom: 0;
+        }
+        
+        .feature-icon {
+            margin-right: 1rem;
+            font-size: 1.2rem;
+        }
+        
+        .login-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            border-radius: 25px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 1rem;
+        }
+        
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .security-note {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: #e8f4fd;
+            border-left: 4px solid #2196F3;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">📧🤖</div>
+        <h1>Email Intelligence System</h1>
+        <p class="subtitle">AI-Powered Email Processing</p>
+        
+        <div class="features">
+            <div class="feature">
+                <span class="feature-icon">🔍</span>
+                <span>Intelligent email analysis</span>
+            </div>
+            <div class="feature">
+                <span class="feature-icon">📊</span>
+                <span>Supplier price change detection</span>
+            </div>
+            <div class="feature">
+                <span class="feature-icon">🔒</span>
+                <span>Secure Microsoft OAuth</span>
+            </div>
+            <div class="feature">
+                <span class="feature-icon">⚡</span>
+                <span>Real-time processing</span>
+            </div>
+        </div>
+        
+        <a href="/login" class="login-btn">
+            🚀 Sign in with Microsoft
+        </a>
+        
+        <div class="security-note">
+            <strong>Secure & Private:</strong> Your emails are processed securely using Microsoft's official APIs. We only access emails you explicitly authorize.
+        </div>
+    </div>
+</body>
+</html>

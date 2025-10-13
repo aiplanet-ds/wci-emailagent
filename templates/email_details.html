@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Details - Email Intelligence System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            min-height: 100vh;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .back-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+        
+        .back-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        
+        .email-header {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .email-subject {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        
+        .email-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            color: #666;
+        }
+        
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .meta-label {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+        
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+        
+        @media (max-width: 768px) {
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .section {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .section-header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .section-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .section-content {
+            padding: 2rem;
+        }
+        
+        .email-body {
+            line-height: 1.6;
+            color: #444;
+            overflow-wrap: break-word;
+        }
+        
+        .json-container {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border-radius: 8px;
+            padding: 1.5rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .json-key {
+            color: #9cdcfe;
+        }
+        
+        .json-string {
+            color: #ce9178;
+        }
+        
+        .json-number {
+            color: #b5cea8;
+        }
+        
+        .json-boolean {
+            color: #569cd6;
+        }
+        
+        .process-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+        
+        .process-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .process-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status-message {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        
+        .status-info {
+            background: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #bbdefb;
+        }
+        
+        .status-success {
+            background: #e8f5e8;
+            color: #2e7d32;
+            border: 1px solid #c8e6c8;
+        }
+        
+        .status-warning {
+            background: #fff3e0;
+            color: #f57c00;
+            border: 1px solid #ffcc02;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📧 Email Details</h1>
+        <a href="/dashboard" class="back-btn">← Back to Dashboard</a>
+    </div>
+    
+    <div class="container">
+        <div class="email-header">
+            <div class="email-subject">{{ message.subject or "(No Subject)" }}</div>
+            <div class="email-meta">
+                <div class="meta-item">
+                    <div class="meta-label">From</div>
+                    <div>{{ message.from.emailAddress.name or message.from.emailAddress.address }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">To</div>
+                    <div>{{ user_email }}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Received</div>
+                    <div>{{ message.receivedDateTime[:19].replace('T', ' ') }} UTC</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">Attachments</div>
+                    <div>{{ "Yes" if message.hasAttachments else "None" }}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="content-grid">
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">Email Content</div>
+                </div>
+                <div class="section-content">
+                    <div class="email-body">
+                        {% if message.body.content %}
+                            {{ message.body.content | safe }}
+                        {% else %}
+                            <em>No content available</em>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-title">AI Extraction</div>
+                    {% if not extraction_exists %}
+                    <button class="process-btn" onclick="processEmail()" id="processBtn">
+                        🤖 Extract Information
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="section-content">
+                    <div id="statusMessage"></div>
+                    
+                    {% if extraction_exists %}
+                        <div class="status-message status-success">
+                            ✅ Information has been extracted and processed
+                        </div>
+                        <div class="json-container">
+                            <pre>{{ extracted_data | tojson(indent=2) }}</pre>
+                        </div>
+                    {% else %}
+                        <div class="status-message status-info">
+                            ℹ️ Click "Extract Information" to analyze this email with AI
+                        </div>
+                        <div class="json-container" id="extractionResult" style="display: none;">
+                            <pre id="extractionJson"></pre>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function processEmail() {
+            const btn = document.getElementById('processBtn');
+            const statusDiv = document.getElementById('statusMessage');
+            const resultDiv = document.getElementById('extractionResult');
+            const jsonDiv = document.getElementById('extractionJson');
+            
+            // Disable button and show loading
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Processing...';
+            
+            statusDiv.innerHTML = '<div class="status-message status-info">🔄 Processing email with AI...</div>';
+            
+            try {
+                const response = await fetch(`/process/{{ message_id }}`, {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (result.status === 'queued') {
+                    statusDiv.innerHTML = '<div class="status-message status-success">✅ Email queued for processing. Refresh page in a few seconds to see results.</div>';
+                    
+                    // Poll for results
+                    pollForResults();
+                    
+                } else if (result.status === 'already_processed') {
+                    statusDiv.innerHTML = '<div class="status-message status-warning">⚠️ Email has already been processed. Refresh the page to see results.</div>';
+                    setTimeout(() => location.reload(), 2000);
+                    
+                } else if (result.status === 'already_processing') {
+                    statusDiv.innerHTML = '<div class="status-message status-info">🔄 Email is currently being processed. Please wait...</div>';
+                    pollForResults();
+                    
+                } else {
+                    statusDiv.innerHTML = `<div class="status-message status-warning">⚠️ ${result.message}</div>`;
+                }
+                
+            } catch (error) {
+                statusDiv.innerHTML = '<div class="status-message status-warning">❌ Error processing email. Please try again.</div>';
+                btn.disabled = false;
+                btn.innerHTML = '🤖 Extract Information';
+            }
+        }
+        
+        function pollForResults() {
+            let pollCount = 0;
+            const maxPolls = 30; // Poll for up to 30 seconds
+            
+            const pollInterval = setInterval(() => {
+                pollCount++;
+                
+                if (pollCount > maxPolls) {
+                    clearInterval(pollInterval);
+                    document.getElementById('statusMessage').innerHTML = 
+                        '<div class="status-message status-warning">⏱️ Processing is taking longer than expected. Please refresh the page in a few minutes.</div>';
+                    return;
+                }
+                
+                // Check if extraction file exists by trying to reload
+                fetch(window.location.href)
+                    .then(response => response.text())
+                    .then(html => {
+                        if (html.includes('Information has been extracted')) {
+                            clearInterval(pollInterval);
+                            location.reload();
+                        }
+                    })
+                    .catch(() => {
+                        // Continue polling on error
+                    });
+                    
+            }, 2000); // Poll every 2 seconds
+        }
+    </script>
+</body>
+</html>
