@@ -13,6 +13,7 @@ class MultiUserGraphClient:
         token = self.auth.get_user_token(user_email)
         if not token:
             raise ValueError(f"No valid token for user {user_email}")
+        print(f"🔑 Using token for {user_email}: {token[:50]}...")
         return {"Authorization": f"Bearer {token}"}
     
     def get_user_messages(self, user_email: str, top: int = 10) -> List[Dict[str, Any]]:
@@ -23,8 +24,16 @@ class MultiUserGraphClient:
             "$top": top,
             "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead"
         }
-        
+
+        print(f"📧 Fetching messages for {user_email}")
+        print(f"   URL: {url}")
+
         response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code != 200:
+            print(f"❌ Graph API error: {response.status_code}")
+            print(f"   Response: {response.text[:500]}")
+
         response.raise_for_status()
         return response.json().get("value", [])
     

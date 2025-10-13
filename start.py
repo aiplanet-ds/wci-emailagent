@@ -1,13 +1,15 @@
 from fastapi import FastAPI, Request, Response, HTTPException, Depends, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from auth.oauth import multi_auth
 from auth.multi_graph import graph_client
 from services.delta_service import delta_service
+from services.epicor_service import epicor_service
 import os
 import secrets
+import json
 
 app = FastAPI()
 
@@ -32,12 +34,12 @@ def get_current_user(request: Request) -> str:
 
 # OAuth Routes
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
+async def home(request: Request, error: str = None):
     """Home page - redirect to dashboard if logged in, otherwise show login"""
     user_email = request.session.get("user_email")
     if user_email and multi_auth.is_user_authenticated(user_email):
         return RedirectResponse(url="/dashboard", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse("login.html", {"request": request, "error": error})
 
 @app.get("/login")
 async def login(request: Request):
@@ -127,7 +129,13 @@ async def dashboard(request: Request):
             messages = graph_client.get_user_messages(user_email, top=10)
         except Exception as e:
             messages = []
-            print(f"Error fetching messages for {user_email}: {e}")
+            error_msg = str(e)
+            print(f"Error fetching messages for {user_email}: {error_msg}")
+
+            # If it's an authentication error, clear session and redirect to login
+            if "401" in error_msg or "Unauthorized" in error_msg or "No valid token" in error_msg:
+                request.session.clear()
+                return RedirectResponse(url="/?error=session_expired", status_code=302)
         
         # Get user's processed emails count
         user_output_dir = f"outputs/{user_email.replace('@', '_at_').replace('.', '_dot_')}"
@@ -255,6 +263,87 @@ async def process_email(request: Request, message_id: str):
         return {"status": "error", "message": "Not authenticated"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+# Epicor Integration Endpoints
+@app.post("/epicor/update-prices/{message_id}")
+async def update_prices_in_epicor(message_id: str, request: Request):
+    """
+    Update prices in Epicor ERP from extracted email data
+    """
+    try:
+        user_email = get_current_user(request)
+
+        # Load extracted data
+        safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
+        user_output_dir = f"outputs/{safe_email}"
+        output_filename = f"price_change_{message_id}.json"
+        output_path = os.path.join(user_output_dir, output_filename)
+
+        if not os.path.exists(output_path):
+            return {"status": "error", "message": "Extracted data not found. Please process the email first."}
+
+        # Load extracted data
+        with open(output_path, 'r', encoding='utf-8') as f:
+            extracted_data = json.load(f)
+
+        # Check if there are products to update
+        affected_products = extracted_data.get("affected_products", [])
+        if not affected_products:
+            return {"status": "error", "message": "No products found in extracted data"}
+
+        # Perform batch update
+        results = epicor_service.batch_update_prices(affected_products)
+
+        # Save update results
+        results_filename = f"epicor_update_{message_id}.json"
+        results_path = os.path.join(user_output_dir, results_filename)
+        with open(results_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+
+        return {
+            "status": "success",
+            "message": f"Updated {results['successful']} of {results['total']} products",
+            "results": results
+        }
+
+    except HTTPException:
+        return {"status": "error", "message": "Not authenticated"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/epicor/test-connection")
+async def test_epicor_connection(request: Request):
+    """
+    Test Epicor API connection
+    """
+    try:
+        user_email = get_current_user(request)
+        result = epicor_service.test_connection()
+        return result
+    except HTTPException:
+        return {"status": "error", "message": "Not authenticated"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/epicor/get-part/{part_num}")
+async def get_part_info(part_num: str, request: Request):
+    """
+    Get part information from Epicor
+    """
+    try:
+        user_email = get_current_user(request)
+        part_data = epicor_service.get_part(part_num)
+
+        if part_data:
+            return {"status": "success", "data": part_data}
+        else:
+            return {"status": "error", "message": f"Part {part_num} not found"}
+
+    except HTTPException:
+        return {"status": "error", "message": "Not authenticated"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 # Run the server when executed directly
 if __name__ == "__main__":
     import uvicorn

@@ -273,7 +273,7 @@
                 </div>
                 <div class="section-content">
                     <div id="statusMessage"></div>
-                    
+
                     {% if extraction_exists %}
                         <div class="status-message status-success">
                             ✅ Information has been extracted and processed
@@ -281,6 +281,16 @@
                         <div class="json-container">
                             <pre>{{ extracted_data | tojson(indent=2) }}</pre>
                         </div>
+
+                        <!-- Epicor Integration Section -->
+                        {% if extracted_data.get('affected_products') %}
+                        <div style="margin-top: 20px;">
+                            <button class="process-btn" onclick="updateEpicorPrices()" id="epicorBtn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                                🔄 Update Prices in Epicor ERP
+                            </button>
+                            <div id="epicorStatusMessage" style="margin-top: 10px;"></div>
+                        </div>
+                        {% endif %}
                     {% else %}
                         <div class="status-message status-info">
                             ℹ️ Click "Extract Information" to analyze this email with AI
@@ -367,6 +377,69 @@
                     });
                     
             }, 2000); // Poll every 2 seconds
+        }
+
+        // Epicor price update function
+        async function updateEpicorPrices() {
+            const btn = document.getElementById('epicorBtn');
+            const statusDiv = document.getElementById('epicorStatusMessage');
+
+            // Disable button and show loading
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Updating prices in Epicor...';
+            statusDiv.innerHTML = '<div class="status-message status-info">🔄 Sending price updates to Epicor ERP...</div>';
+
+            try {
+                const response = await fetch(`/epicor/update-prices/{{ message_id }}`, {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    const results = result.results;
+                    let detailsHtml = `
+                        <div class="status-message status-success">
+                            ✅ ${result.message}
+                        </div>
+                        <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                            <h4 style="margin: 0 0 10px 0;">Update Summary:</h4>
+                            <ul style="margin: 0; padding-left: 20px;">
+                                <li>Total Products: ${results.total}</li>
+                                <li style="color: #28a745;">✅ Successful: ${results.successful}</li>
+                                <li style="color: #dc3545;">❌ Failed: ${results.failed}</li>
+                                <li style="color: #ffc107;">⚠️ Skipped: ${results.skipped}</li>
+                            </ul>
+                    `;
+
+                    if (results.details && results.details.length > 0) {
+                        detailsHtml += '<h4 style="margin: 15px 0 10px 0;">Details:</h4><ul style="margin: 0; padding-left: 20px;">';
+                        results.details.forEach(detail => {
+                            const icon = detail.status === 'success' ? '✅' : (detail.status === 'failed' ? '❌' : '⚠️');
+                            const priceInfo = detail.old_price && detail.new_price
+                                ? ` ($${detail.old_price} → $${detail.new_price})`
+                                : '';
+                            detailsHtml += `<li>${icon} ${detail.part_num}: ${detail.message || detail.reason}${priceInfo}</li>`;
+                        });
+                        detailsHtml += '</ul>';
+                    }
+
+                    detailsHtml += '</div>';
+                    statusDiv.innerHTML = detailsHtml;
+                    btn.innerHTML = '✅ Prices Updated';
+                    btn.style.background = '#28a745';
+
+                } else {
+                    statusDiv.innerHTML = `<div class="status-message status-error">❌ Error: ${result.message}</div>`;
+                    btn.disabled = false;
+                    btn.innerHTML = '🔄 Update Prices in Epicor ERP';
+                }
+
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status-message status-error">❌ Error: ${error.message}</div>`;
+                btn.disabled = false;
+                btn.innerHTML = '🔄 Update Prices in Epicor ERP';
+            }
         }
     </script>
 </body>

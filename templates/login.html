@@ -106,7 +106,17 @@
         <div class="logo">📧🤖</div>
         <h1>Email Intelligence System</h1>
         <p class="subtitle">AI-Powered Email Processing</p>
-        
+
+        {% if error %}
+        <div style="background: #fee; border: 1px solid #fcc; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; color: #c33;">
+            {% if error == "session_expired" %}
+            ⚠️ Your session has expired. Please sign in again.
+            {% else %}
+            ⚠️ {{ error }}
+            {% endif %}
+        </div>
+        {% endif %}
+
         <div class="features">
             <div class="feature">
                 <span class="feature-icon">🔍</span>

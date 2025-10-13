@@ -8,7 +8,7 @@ This project is a comprehensive **AI-Powered Email Intelligence System** that co
 
 - **🔐 Multi-User OAuth Authentication**: Secure Microsoft login for any user
 - **🎨 Professional Web Interface**: Modern, responsive dashboard with real-time statistics
-- **🤖 AI-Powered Processing**: OpenAI-driven email analysis and data extraction
+- **🤖 AI-Powered Processing**: Azure OpenAI-driven email analysis and data extraction
 - **📊 Supplier Price Change Detection**: Specialized extraction for pricing notifications
 - **🔒 Complete Data Isolation**: Each user's data is completely separated and secure
 - **📬 Delta Query Monitoring**: Automated email polling every 3 minutes for new messages
@@ -83,8 +83,11 @@ AZ_USER_EMAIL=your-email@example.com   # only used in application mode
 # Modes: delegated | application
 GRAPH_MODE=delegated
 
-# OpenAI (or Azure OpenAI)
-OPENAI_API_KEY=sk-xxxxxx
+# Azure OpenAI Configuration
+AZURE_OPENAI_API_KEY=your-azure-openai-api-key
+AZURE_OPENAI_API_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4
+AZURE_OPENAI_API_VERSION=2024-12-01-preview
 
 # Session security (optional - will be auto-generated if not provided)
 SESSION_SECRET=your-session-secret-key
@@ -148,12 +151,15 @@ This processes emails directly using the configured account in `.env`
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `AZ_TENANT_ID` | Azure tenant ID | ✅ |
+| `AZ_TENANT_ID` | Azure tenant ID (use `common` for multi-tenant) | ✅ |
 | `AZ_CLIENT_ID` | Azure application client ID | ✅ |
 | `AZ_CLIENT_SECRET` | Azure application secret | ✅ |
 | `AZ_USER_EMAIL` | User email (CLI mode only) | CLI only |
 | `GRAPH_MODE` | `delegated` or `application` | ✅ |
-| `OPENAI_API_KEY` | OpenAI API key | ✅ |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key | ✅ |
+| `AZURE_OPENAI_API_ENDPOINT` | Azure OpenAI endpoint URL | ✅ |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | Azure OpenAI deployment name | ✅ |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version | ✅ |
 | `SESSION_SECRET` | Session encryption key | Web only |
 
 ---
@@ -193,7 +199,7 @@ This processes emails directly using the configured account in `.env`
 - **Microsoft Graph API**: Email and user data access
 - **Delta Query Service**: Background polling for email changes every 3 minutes
 - **MSAL Authentication**: Multi-user OAuth token management
-- **OpenAI Integration**: AI-powered content analysis
+- **Azure OpenAI Integration**: AI-powered content analysis
 - **Jinja2 Templates**: Server-side rendered web pages
 - **APScheduler**: Background task scheduling for automated polling
 

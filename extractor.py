@@ -1,10 +1,17 @@
-import os, json
-from openai import OpenAI
+﻿import os, json
+from openai import AzureOpenAI
 from dotenv import load_dotenv
 from typing import Dict, Any, List
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Azure OpenAI configuration
+client = AzureOpenAI(
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_API_ENDPOINT")
+)
+MODEL_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1")
 
 PRICE_CHANGE_EXTRACTION_PROMPT = """
 You are a specialized JSON extractor for supplier price change emails. Extract information from the following email content and convert it into structured JSON.
@@ -28,52 +35,38 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
   },
   "supplier_info": {
     "supplier_name": string,
-    "supplier_contact": string,
-    "supplier_id": string,
-    "account_manager": string
+    "contact_person": string,
+    "contact_email": string,
+    "contact_phone": string
   },
-  "price_change_details": {
+  "price_change_summary": {
+    "change_type": string,
     "effective_date": string,
     "notification_date": string,
-    "reason_for_change": string,
-    "change_type": string,
-    "percentage_change": string,
-    "currency": string
+    "reason": string,
+    "overall_impact": string
   },
   "affected_products": [
     {
-      "product_id": string,
       "product_name": string,
-      "old_price": string,
-      "new_price": string,
-      "price_change_amount": string,
-      "price_change_percentage": string,
-      "category": string,
-      "unit": string,
-      "effective_date": string
+      "product_code": string,
+      "old_price": number,
+      "new_price": number,
+      "price_change_amount": number,
+      "price_change_percentage": number,
+      "currency": string,
+      "unit_of_measure": string
     }
   ],
-  "terms_and_conditions": {
+  "additional_details": {
+    "terms_and_conditions": string,
     "payment_terms": string,
     "minimum_order_quantity": string,
-    "lead_time_changes": string,
-    "contract_reference": string
-  },
-  "action_required": {
-    "response_deadline": string,
-    "contact_person": string,
-    "approval_needed": boolean,
-    "next_steps": array
-  },
-  "attachments_info": {
-    "price_list_attached": boolean,
-    "contract_attached": boolean,
-    "detailed_breakdown": boolean,
-    "attachment_names": array
+    "notes": string
   }
 }
 
-**Content to Process:**
+**Email Content:**
 {{content}}
 
 **Email Metadata:**
@@ -93,36 +86,37 @@ def is_price_change_email(email_content: str, metadata: Dict[str, Any]) -> bool:
         'tariff', 'price list', 'effective date', 'price revision',
         'currency change', 'discount removed', 'pricing notification'
     ]
-    
+
     # Check subject line
     subject = metadata.get('subject', '').lower()
     email_body = email_content.lower()
-    
+
     # Check for keywords in subject or content
     for keyword in price_change_keywords:
         if keyword in subject or keyword in email_body:
             return True
-    
+
     # Check for price-related patterns
     import re
     price_patterns = [
         r'\$\d+\.?\d*',  # Dollar amounts
         r'€\d+\.?\d*',   # Euro amounts
         r'£\d+\.?\d*',   # Pound amounts
-        r'\d+\.\d+\s*(USD|EUR|GBP|INR)',  # Currency codes
-        r'\d+%\s*(increase|decrease)',     # Percentage changes
-        r'effective\s+\d+[/\-]\d+[/\-]\d+',  # Effective dates
+        r'\d+%\s*(increase|decrease)',  # Percentage changes
+        r'(old|new|current|previous)\s*price',
+        r'effective\s*(date|from)',
     ]
-    
+
     for pattern in price_patterns:
-        if re.search(pattern, email_content, re.IGNORECASE):
+        if re.search(pattern, email_body, re.IGNORECASE):
             return True
-    
+
     return False
+
 
 def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract structured data from price change email using OpenAI
+    Extract structured data from price change email using Azure OpenAI
     """
     try:
         # Check if this is actually a price change email
@@ -131,7 +125,7 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
                 "error": "Email does not appear to be a price change notification",
                 "email_type": "not_price_change"
             }
-        
+
         # Prepare metadata for the prompt
         safe_metadata = {
             "subject": metadata.get("subject", None),
@@ -140,92 +134,89 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
             "message_id": metadata.get("message_id", None),
             "attachments": metadata.get("attachments", [])
         }
-        
+
         # Substitute content and metadata in the prompt
         prompt = PRICE_CHANGE_EXTRACTION_PROMPT.replace("{{content}}", content)
         prompt = prompt.replace("{{metadata}}", json.dumps(safe_metadata, indent=2))
-        
-        # Make API call to OpenAI
+
+        # Make API call to Azure OpenAI
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=3000  # Increased for comprehensive extraction
+            max_tokens=3000
         )
-        
+
         content_response = response.choices[0].message.content.strip()
-        
+
         # Try to parse the JSON response
         try:
             extracted_data = json.loads(content_response)
-            
-            # Post-process the extracted data
             extracted_data = post_process_extraction(extracted_data, safe_metadata)
-            
             return extracted_data
-            
+
         except json.JSONDecodeError as e:
-            print(f"❌ JSON parsing error: {e}")
-            print(f"Raw response: {content_response[:500]}...")
             return {
-                "error": "Invalid JSON response from AI",
-                "raw_response": content_response
+                "error": f"Failed to parse AI response as JSON: {str(e)}",
+                "raw_response": content_response[:500]
             }
-            
+
     except Exception as e:
-        print(f"❌ Error in price change extraction: {e}")
         return {
-            "error": str(e),
-            "content_length": len(content)
+            "error": f"Extraction failed: {str(e)}",
+            "email_type": "extraction_error"
         }
 
 def post_process_extraction(data: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Post-process and validate the extracted data
+    Post-process extracted data to ensure consistency and add computed fields
     """
-    # Ensure email_metadata is populated
+    # Ensure email_metadata exists
     if "email_metadata" not in data:
         data["email_metadata"] = {}
-    
-    # Fill in metadata if missing
-    for key, value in metadata.items():
-        if key in ["subject", "sender", "date", "message_id"]:
-            if not data["email_metadata"].get(key) and value:
-                data["email_metadata"][key] = value
-    
-    # Ensure attachment info is populated
-    if "attachments_info" not in data:
-        data["attachments_info"] = {}
-    
-    if "attachment_names" not in data["attachments_info"]:
-        data["attachments_info"]["attachment_names"] = metadata.get("attachments", [])
-    
-    # Set attachment flags based on filenames
-    attachment_names = data["attachments_info"]["attachment_names"]
-    if attachment_names:
-        for filename in attachment_names:
-            filename_lower = filename.lower()
-            if any(word in filename_lower for word in ["price", "list", "pricing"]):
-                data["attachments_info"]["price_list_attached"] = True
-            if any(word in filename_lower for word in ["contract", "agreement"]):
-                data["attachments_info"]["contract_attached"] = True
-            if any(word in filename_lower for word in ["detail", "breakdown", "analysis"]):
-                data["attachments_info"]["detailed_breakdown"] = True
-    
-    # Validate and clean affected_products
+
+    # Fill in metadata from source if missing
+    data["email_metadata"]["subject"] = data["email_metadata"].get("subject") or metadata.get("subject")
+    data["email_metadata"]["sender"] = data["email_metadata"].get("sender") or metadata.get("sender")
+    data["email_metadata"]["date"] = data["email_metadata"].get("date") or metadata.get("date")
+    data["email_metadata"]["message_id"] = data["email_metadata"].get("message_id") or metadata.get("message_id")
+
+    # Calculate price changes if not present
     if "affected_products" in data and isinstance(data["affected_products"], list):
         for product in data["affected_products"]:
-            # Ensure numeric fields are properly formatted
-            for price_field in ["old_price", "new_price", "price_change_amount"]:
-                if price_field in product and product[price_field]:
-                    # Clean up price strings
-                    cleaned_price = str(product[price_field]).replace(",", "").strip()
-                    product[price_field] = cleaned_price
-    
+            if "old_price" in product and "new_price" in product:
+                old_price = product.get("old_price")
+                new_price = product.get("new_price")
+
+                if old_price and new_price and isinstance(old_price, (int, float)) and isinstance(new_price, (int, float)):
+                    # Calculate change amount
+                    if "price_change_amount" not in product or product["price_change_amount"] is None:
+                        product["price_change_amount"] = round(new_price - old_price, 2)
+
+                    # Calculate percentage change
+                    if "price_change_percentage" not in product or product["price_change_percentage"] is None:
+                        if old_price != 0:
+                            product["price_change_percentage"] = round(((new_price - old_price) / old_price) * 100, 2)
+
     return data
 
-def extract_json(text: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+def extract_from_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Main extraction function - wrapper for backward compatibility
+    Main entry point for email extraction
+
+    Args:
+        email_data: Dictionary containing email content and metadata
+
+    Returns:
+        Dictionary with extracted price change information
     """
-    return extract_price_change_json(text, metadata)
+    content = email_data.get("body", "")
+    metadata = {
+        "subject": email_data.get("subject", ""),
+        "from": email_data.get("from", ""),
+        "date": email_data.get("date", ""),
+        "message_id": email_data.get("id", ""),
+        "attachments": email_data.get("attachments", [])
+    }
+
+    return extract_price_change_json(content, metadata)
