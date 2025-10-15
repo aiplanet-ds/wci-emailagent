@@ -27,6 +27,7 @@ class EpicorAPIService:
         self.api_key = os.getenv("EPICOR_API_KEY")
         self.bearer_token = os.getenv("EPICOR_BEARER_TOKEN")
         self.company_id = os.getenv("EPICOR_COMPANY_ID")
+        self.default_price_list = os.getenv("EPICOR_DEFAULT_PRICE_LIST", "UNA1")
 
         # Validate required configuration
         if not self.base_url:
@@ -43,6 +44,7 @@ class EpicorAPIService:
         logger.info(f"✅ Epicor API Service initialized")
         logger.info(f"   Base URL: {self.base_url}")
         logger.info(f"   Company ID: {self.company_id}")
+        logger.info(f"   Default Price List: {self.default_price_list}")
         logger.info(f"   Auth Method: Bearer Token + X-api-Key")
     
     def _get_headers(self) -> Dict[str, str]:
@@ -130,6 +132,353 @@ class EpicorAPIService:
         except Exception as e:
             logger.error(f"❌ Exception retrieving part {part_num}: {e}")
             return None
+
+    def get_vendor_by_id(self, vendor_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get vendor information by external VendorID
+
+        Args:
+            vendor_id: Vendor's external ID (e.g., "FAST1", "USUI-001")
+
+        Returns:
+            Vendor data including VendorNum, Name, etc., or None if not found
+        """
+        try:
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.VendorSvc/Vendors"
+            headers = self._get_headers()
+
+            # Filter by VendorID (external ID)
+            params = {
+                "$filter": f"VendorID eq '{vendor_id}'"
+            }
+
+            logger.info(f"🔍 Looking up vendor: {vendor_id}")
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("value", [])
+
+                if results:
+                    vendor = results[0]
+                    vendor_num = vendor.get("VendorNum")
+                    vendor_name = vendor.get("Name")
+                    logger.info(f"✅ Vendor found: VendorNum={vendor_num}, Name={vendor_name}")
+                    return vendor
+                else:
+                    logger.warning(f"⚠️ Vendor not found: {vendor_id}")
+                    return None
+            else:
+                logger.error(f"❌ Error looking up vendor: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Exception looking up vendor: {e}")
+            return None
+
+    def verify_supplier_part(self, supplier_id: str, part_num: str) -> Optional[Dict[str, Any]]:
+        """
+        Verify supplier-part relationship using SupplierPartSvc (2-step process)
+
+        This uses a 2-step approach because VendorVendorID cannot be filtered directly:
+        Step 1: Lookup VendorNum from VendorSvc using VendorID (external ID)
+        Step 2: Query SupplierPartSvc using VendorNum (internal ID) and PartNum
+
+        Args:
+            supplier_id: Supplier's external ID (VendorID, e.g., "FAST1")
+            part_num: Part number to verify
+
+        Returns:
+            Supplier part data including VendorNum, VendorName, etc., or None if not found
+        """
+        try:
+            logger.info(f"🔍 Verifying supplier-part link: Supplier={supplier_id}, Part={part_num}")
+
+            # Step 1: Get VendorNum from VendorID
+            vendor = self.get_vendor_by_id(supplier_id)
+            if not vendor:
+                logger.warning(f"⚠️ Supplier {supplier_id} not found in Epicor")
+                return None
+
+            vendor_num = vendor.get("VendorNum")
+            vendor_name = vendor.get("Name")
+
+            logger.info(f"   Step 1 complete: VendorNum={vendor_num}")
+
+            # Step 2: Query SupplierPartSvc using VendorNum and PartNum
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.SupplierPartSvc/SupplierParts"
+            headers = self._get_headers()
+
+            # Filter by VendorNum (internal ID) and PartNum
+            filter_query = f"VendorNum eq {vendor_num} and PartNum eq '{part_num}'"
+            params = {
+                "$filter": filter_query
+            }
+
+            logger.info(f"   Step 2: Querying SupplierPartSvc")
+            logger.info(f"   Filter: {filter_query}")
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("value", [])
+
+                if results:
+                    supplier_part = results[0]  # Take first match
+                    # Add vendor name to the result for convenience
+                    supplier_part["VendorName"] = vendor_name
+                    supplier_part["VendorVendorID"] = supplier_id
+                    logger.info(f"✅ Supplier-part verified: VendorNum={vendor_num}, VendorName={vendor_name}")
+                    return supplier_part
+                else:
+                    logger.warning(f"⚠️ Supplier-part link not found: {supplier_id} / {part_num}")
+                    logger.warning(f"   Supplier exists but part is not set up for this supplier in Epicor")
+                    return None
+            else:
+                logger.error(f"❌ Error querying supplier-part: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Exception verifying supplier-part: {e}")
+            return None
+
+    def get_price_list_parts(self, part_num: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get all price list entries for a part
+
+        Args:
+            part_num: Part number to query
+
+        Returns:
+            List of price list entries, or None if error
+        """
+        try:
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLstParts"
+            headers = self._get_headers()
+
+            params = {
+                "$filter": f"PartNum eq '{part_num}'"
+            }
+
+            logger.info(f"🔍 Querying price lists for part: {part_num}")
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            # Debug: Log the actual URL being called
+            logger.info(f"   Request URL: {response.url}")
+
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("value", [])
+
+                if results:
+                    logger.info(f"✅ Found {len(results)} price list entries for part {part_num}")
+                    return results
+                else:
+                    logger.warning(f"⚠️ No price list entries found for part {part_num}")
+                    return []
+            else:
+                logger.error(f"❌ Error querying price lists: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Exception querying price lists: {e}")
+            return None
+
+    def get_price_list(self, list_code: str, part_num: str, uom_code: str = "EA") -> Optional[Dict[str, Any]]:
+        """
+        Get specific price list entry using filter instead of key
+
+        Args:
+            list_code: Price list code
+            part_num: Part number
+            uom_code: Unit of measure code (default: "EA")
+
+        Returns:
+            Price list entry data, or None if not found
+        """
+        try:
+            # Use filter instead of key-based access to handle special characters
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLstParts"
+            headers = self._get_headers()
+
+            # Build filter with all three key fields
+            params = {
+                "$filter": f"ListCode eq '{list_code}' and PartNum eq '{part_num}' and UOMCode eq '{uom_code}'"
+            }
+
+            logger.info(f"🔍 Getting price list: ListCode={list_code}, Part={part_num}, UOM={uom_code}")
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("value", [])
+
+                if results:
+                    price_list = results[0]  # Take first match
+                    logger.info(f"✅ Retrieved price list entry")
+                    return price_list
+                else:
+                    logger.warning(f"⚠️ Price list entry not found")
+                    return None
+            else:
+                logger.error(f"❌ Error retrieving price list: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Exception retrieving price list: {e}")
+            return None
+
+    def create_price_list_entry(
+        self,
+        part_num: str,
+        base_price: float,
+        effective_date: str,
+        uom_code: str = "EA",
+        list_code: str = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new price list entry for a part using Epicor business object methods
+
+        This uses the proper Epicor workflow:
+        1. Call GetNewPriceLstParts to get a template
+        2. Fill in the required fields
+        3. Call Update to save the new entry
+
+        Args:
+            part_num: Part number
+            base_price: Base price for the part
+            effective_date: Effective date in ISO format (e.g., "2025-10-20")
+            uom_code: Unit of measure code (default: "EA")
+            list_code: Price list code (default: "BASE")
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            # Use default price list if not specified
+            if list_code is None:
+                list_code = self.default_price_list
+
+            logger.info(f"📝 Creating price list entry:")
+            logger.info(f"   ListCode: {list_code}")
+            logger.info(f"   PartNum: {part_num}")
+            logger.info(f"   BasePrice: {base_price}")
+            logger.info(f"   EffectiveDate: {effective_date}")
+            logger.info(f"   UOMCode: {uom_code}")
+
+            # Step 1: Call GetNewPriceLstParts to get a template
+            get_new_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/GetNewPriceLstParts"
+            headers = self._get_headers()
+
+            get_new_payload = {
+                "ds": {
+                    "PriceLst": [{
+                        "Company": self.company_id,
+                        "ListCode": list_code
+                    }],
+                    "PriceLstParts": []
+                },
+                "listCode": list_code,
+                "partNum": part_num,
+                "uomCode": uom_code
+            }
+
+            logger.info(f"   Step 1: Getting new price list template...")
+            response1 = requests.post(get_new_url, headers=headers, json=get_new_payload, timeout=10)
+
+            if response1.status_code != 200:
+                error_msg = response1.text
+                logger.error(f"❌ GetNewPriceLstParts failed: {response1.status_code}")
+                logger.error(f"   Response: {error_msg[:500]}")
+                return {
+                    "status": "error",
+                    "message": f"GetNewPriceLstParts failed: HTTP {response1.status_code}: {error_msg[:200]}",
+                    "list_code": list_code,
+                    "part_num": part_num
+                }
+
+            # Step 2: Get the template and fill in the fields
+            template_data = response1.json()
+            logger.info(f"   Template response keys: {list(template_data.keys())}")
+
+            # Try different possible response structures
+            ds = template_data.get("returnObj") or template_data.get("parameters", {}).get("ds") or template_data
+
+            logger.info(f"   Dataset keys: {list(ds.keys()) if isinstance(ds, dict) else 'Not a dict'}")
+
+            if not ds.get("PriceLstParts"):
+                logger.error(f"❌ No template returned from GetNewPriceLstParts")
+                logger.error(f"   Full response: {str(template_data)[:500]}")
+                return {
+                    "status": "error",
+                    "message": "No template returned from GetNewPriceLstParts",
+                    "list_code": list_code,
+                    "part_num": part_num
+                }
+
+            # Get the template record and update it
+            new_record = ds["PriceLstParts"][0]
+
+            # Debug: Log available fields in template
+            logger.info(f"   Template fields: {list(new_record.keys())}")
+            logger.info(f"   Has EffectiveDate field: {'EffectiveDate' in new_record}")
+
+            new_record["PartNum"] = part_num
+            new_record["UOMCode"] = uom_code
+            new_record["BasePrice"] = base_price
+
+            # Only set EffectiveDate if it exists in the template
+            if "EffectiveDate" in new_record:
+                new_record["EffectiveDate"] = effective_date
+                logger.info(f"   ✅ Set EffectiveDate: {effective_date}")
+            else:
+                logger.warning(f"   ⚠️ EffectiveDate field not available in this Epicor instance")
+
+            new_record["RowMod"] = "A"  # A = Add
+
+            logger.info(f"   Step 2: Updating template with part data...")
+
+            # Step 3: Call Update to save the new entry
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
+            update_payload = {"ds": ds}
+
+            logger.info(f"   Step 3: Saving new price list entry...")
+            response2 = requests.post(update_url, headers=headers, json=update_payload, timeout=10)
+
+            if response2.status_code == 200:
+                logger.info(f"✅ Price list entry created successfully")
+                return {
+                    "status": "success",
+                    "message": "Price list entry created",
+                    "list_code": list_code,
+                    "part_num": part_num,
+                    "base_price": base_price,
+                    "effective_date": effective_date
+                }
+            else:
+                error_msg = response2.text
+                logger.error(f"❌ Update failed: {response2.status_code}")
+                logger.error(f"   Response: {error_msg[:500]}")
+
+                return {
+                    "status": "error",
+                    "message": f"Update failed: HTTP {response2.status_code}: {error_msg[:200]}",
+                    "list_code": list_code,
+                    "part_num": part_num
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Exception creating price list entry: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "list_code": list_code,
+                "part_num": part_num
+            }
 
     def create_part(
         self,
@@ -307,17 +656,254 @@ class EpicorAPIService:
                 "message": str(e),
                 "part_num": part_num
             }
-    
+
+    def update_price_list(
+        self,
+        list_code: str,
+        part_num: str,
+        new_price: float,
+        effective_date: str,
+        uom_code: str = "EA"
+    ) -> Dict[str, Any]:
+        """
+        Update part price in price list with effective date using Epicor Update workflow
+
+        Args:
+            list_code: Price list code
+            part_num: Part number to update
+            new_price: New base price
+            effective_date: Effective date in ISO format (e.g., "2025-10-20" or "2025-10-20T00:00:00")
+            uom_code: Unit of measure code (default: "EA")
+
+        Returns:
+            Dictionary with status and message
+        """
+        try:
+            # Step 1: Get the current price list entry (includes all required fields)
+            current_entry = self.get_price_list(list_code, part_num, uom_code)
+
+            if not current_entry:
+                return {
+                    "status": "error",
+                    "message": f"Price list entry not found: ListCode={list_code}, Part={part_num}, UOM={uom_code}",
+                    "part_num": part_num,
+                    "list_code": list_code
+                }
+
+            old_price = current_entry.get("BasePrice")
+
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00"
+
+            logger.info(f"🔄 Updating price list: ListCode={list_code}, Part={part_num}, Price={new_price}, EffectiveDate={effective_date}")
+
+            # Debug: Log available fields in current entry
+            logger.info(f"   Current entry fields: {list(current_entry.keys())}")
+            logger.info(f"   Has EffectiveDate field: {'EffectiveDate' in current_entry}")
+
+            # Step 2: Update the entry fields
+            current_entry["BasePrice"] = new_price
+
+            # Only set EffectiveDate if it exists in the entry
+            if "EffectiveDate" in current_entry:
+                current_entry["EffectiveDate"] = effective_date
+                logger.info(f"   ✅ Set EffectiveDate: {effective_date}")
+            else:
+                logger.warning(f"   ⚠️ EffectiveDate field not available in this Epicor instance")
+                logger.warning(f"   ⚠️ Price will be updated without effective date")
+
+            current_entry["RowMod"] = "U"  # U = Update
+
+            # Step 3: Call Update method with the modified dataset
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
+            headers = self._get_headers()
+
+            # Build the dataset structure
+            ds = {
+                "PriceLst": [],
+                "PriceLstParts": [current_entry]
+            }
+
+            payload = {"ds": ds}
+
+            logger.info(f"   Calling Update method...")
+            response = requests.post(update_url, json=payload, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                logger.info(f"✅ Successfully updated price list for part {part_num}")
+                logger.info(f"   Old Price: ${old_price} → New Price: ${new_price}")
+                logger.info(f"   Effective Date: {effective_date}")
+                return {
+                    "status": "success",
+                    "message": f"Price list updated successfully",
+                    "part_num": part_num,
+                    "list_code": list_code,
+                    "old_price": old_price,
+                    "new_price": new_price,
+                    "effective_date": effective_date
+                }
+            else:
+                logger.error(f"❌ Failed to update price list: {response.status_code} - {response.text[:500]}")
+                return {
+                    "status": "error",
+                    "message": f"HTTP {response.status_code}: {response.text[:200]}",
+                    "part_num": part_num,
+                    "list_code": list_code,
+                    "status_code": response.status_code
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Exception updating price list: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "list_code": list_code
+            }
+
+    def update_supplier_part_price(
+        self,
+        supplier_id: str,
+        part_num: str,
+        new_price: float,
+        effective_date: str,
+        uom_code: str = "EA"
+    ) -> Dict[str, Any]:
+        """
+        Complete workflow to update supplier part price with effective date
+
+        This method implements the full workflow from Epicor_Price_Update_Workflow.md:
+        1. Verify supplier-part relationship using SupplierPartSvc
+        2. Get price list code for the part
+        3. Update price with effective date using PriceLstSvc
+
+        Args:
+            supplier_id: Supplier's external ID (VendorVendorID, e.g., "FAST1")
+            part_num: Part number to update
+            new_price: New price
+            effective_date: Effective date in ISO format (e.g., "2025-10-20")
+            uom_code: Unit of measure code (default: "EA")
+
+        Returns:
+            Dictionary with status and detailed results
+        """
+        try:
+            logger.info(f"🚀 Starting supplier part price update workflow")
+            logger.info(f"   Supplier: {supplier_id}, Part: {part_num}, Price: {new_price}, Effective: {effective_date}")
+
+            # Step 1: Verify supplier-part relationship
+            logger.info(f"📋 Step 1: Verifying supplier-part relationship...")
+            supplier_part = self.verify_supplier_part(supplier_id, part_num)
+
+            if not supplier_part:
+                return {
+                    "status": "error",
+                    "message": f"Supplier-part relationship not found for Supplier={supplier_id}, Part={part_num}",
+                    "part_num": part_num,
+                    "supplier_id": supplier_id,
+                    "step_failed": "verify_supplier_part"
+                }
+
+            vendor_num = supplier_part.get("VendorNum")
+            vendor_name = supplier_part.get("VendorName")
+            logger.info(f"✅ Step 1 Complete: VendorNum={vendor_num}, VendorName={vendor_name}")
+
+            # Step 2: Get price list entries for the part
+            logger.info(f"📋 Step 2: Getting price list entries...")
+            price_lists = self.get_price_list_parts(part_num)
+
+            if not price_lists:
+                logger.warning(f"⚠️ Part {part_num} not in any price list - creating new price list entry")
+
+                # Create a new price list entry for this part
+                create_result = self.create_price_list_entry(
+                    part_num=part_num,
+                    base_price=new_price,
+                    effective_date=effective_date,
+                    uom_code=uom_code
+                )
+
+                if create_result.get("status") == "success":
+                    list_code = create_result.get("list_code")
+                    logger.info(f"✅ Price list entry created: ListCode={list_code}")
+
+                    return {
+                        "status": "success",
+                        "message": f"Price list entry created and price set",
+                        "part_num": part_num,
+                        "supplier_id": supplier_id,
+                        "vendor_num": vendor_num,
+                        "vendor_name": vendor_name,
+                        "old_price": None,
+                        "new_price": new_price,
+                        "workflow": "PriceLstSvc (created new entry)",
+                        "effective_date": effective_date,
+                        "list_code": list_code
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to create price list entry: {create_result.get('message')}",
+                        "part_num": part_num,
+                        "supplier_id": supplier_id,
+                        "vendor_num": vendor_num,
+                        "step_failed": "create_price_list_entry"
+                    }
+
+            # Use the first price list entry (or you could filter by vendor/supplier)
+            list_code = price_lists[0].get("ListCode")
+            logger.info(f"✅ Step 2 Complete: Found {len(price_lists)} price list(s), using ListCode={list_code}")
+
+            # Step 3: Update price with effective date
+            logger.info(f"📋 Step 3: Updating price list with effective date...")
+            update_result = self.update_price_list(
+                list_code=list_code,
+                part_num=part_num,
+                new_price=new_price,
+                effective_date=effective_date,
+                uom_code=uom_code
+            )
+
+            if update_result["status"] == "success":
+                logger.info(f"✅ Step 3 Complete: Price updated successfully")
+                # Enhance result with supplier info
+                update_result["supplier_id"] = supplier_id
+                update_result["vendor_num"] = vendor_num
+                update_result["vendor_name"] = vendor_name
+                return update_result
+            else:
+                logger.error(f"❌ Step 3 Failed: {update_result.get('message')}")
+                update_result["supplier_id"] = supplier_id
+                update_result["vendor_num"] = vendor_num
+                update_result["step_failed"] = "update_price_list"
+                return update_result
+
+        except Exception as e:
+            logger.error(f"❌ Exception in supplier part price update workflow: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "supplier_id": supplier_id
+            }
+
     def batch_update_prices(
-        self, 
-        products: List[Dict[str, Any]]
+        self,
+        products: List[Dict[str, Any]],
+        supplier_id: Optional[str] = None,
+        effective_date: Optional[str] = None,
+        use_new_workflow: bool = True
     ) -> Dict[str, Any]:
         """
         Update multiple part prices from extracted email data
-        
+
         Args:
             products: List of product dictionaries with product_id, new_price, etc.
-            
+            supplier_id: Supplier's external ID (VendorVendorID, e.g., "FAST1")
+            effective_date: Effective date for price changes (ISO format)
+            use_new_workflow: If True, use new PriceLstSvc workflow; if False, use legacy PartSvc
+
         Returns:
             Dictionary with batch update results
         """
@@ -326,14 +912,23 @@ class EpicorAPIService:
             "successful": 0,
             "failed": 0,
             "skipped": 0,
-            "details": []
+            "details": [],
+            "workflow_used": "PriceLstSvc (new)" if use_new_workflow else "PartSvc (legacy)"
         }
-        
+
+        # Log workflow information
+        if use_new_workflow:
+            logger.info(f"🔄 Using NEW workflow: PriceLstSvc with supplier verification and effective dates")
+            logger.info(f"   Supplier ID: {supplier_id or 'Not provided'}")
+            logger.info(f"   Effective Date: {effective_date or 'Not provided'}")
+        else:
+            logger.info(f"🔄 Using LEGACY workflow: PartSvc (direct part price update)")
+
         for product in products:
             # Try product_id first, fallback to product_code for backward compatibility
             part_num = product.get("product_id") or product.get("product_code")
             new_price_str = product.get("new_price")
-            
+
             # Validate data
             if not part_num:
                 results["skipped"] += 1
@@ -343,7 +938,7 @@ class EpicorAPIService:
                     "reason": "Missing product_id"
                 })
                 continue
-            
+
             if not new_price_str:
                 results["skipped"] += 1
                 results["details"].append({
@@ -353,7 +948,7 @@ class EpicorAPIService:
                     "reason": "Missing new_price"
                 })
                 continue
-            
+
             # Parse price (remove currency symbols, commas, etc.)
             try:
                 # Clean price string
@@ -369,26 +964,51 @@ class EpicorAPIService:
                     "reason": f"Invalid price format: {new_price_str}"
                 })
                 continue
-            
-            # Update the price
-            update_result = self.update_part_price(part_num, new_price)
-            
+
+            # Choose workflow based on parameters
+            if use_new_workflow and supplier_id and effective_date:
+                # NEW WORKFLOW: Use PriceLstSvc with supplier verification
+                update_result = self.update_supplier_part_price(
+                    supplier_id=supplier_id,
+                    part_num=part_num,
+                    new_price=new_price,
+                    effective_date=effective_date
+                )
+            else:
+                # LEGACY WORKFLOW: Use PartSvc (backward compatibility)
+                if use_new_workflow:
+                    logger.warning(f"⚠️ Missing supplier_id or effective_date for {part_num}, falling back to legacy workflow")
+                update_result = self.update_part_price(part_num, new_price)
+
             if update_result["status"] == "success":
                 results["successful"] += 1
             else:
                 results["failed"] += 1
-            
-            results["details"].append({
+
+            # Build detail entry
+            detail = {
                 "part_num": part_num,
                 "product": product.get("product_name", "Unknown"),
                 "status": update_result["status"],
                 "old_price": update_result.get("old_price"),
                 "new_price": new_price,
                 "message": update_result.get("message")
-            })
-        
+            }
+
+            # Add new workflow specific fields if available
+            if "effective_date" in update_result:
+                detail["effective_date"] = update_result["effective_date"]
+            if "supplier_id" in update_result:
+                detail["supplier_id"] = update_result["supplier_id"]
+            if "vendor_name" in update_result:
+                detail["vendor_name"] = update_result["vendor_name"]
+            if "list_code" in update_result:
+                detail["list_code"] = update_result["list_code"]
+
+            results["details"].append(detail)
+
         logger.info(f"📊 Batch update complete: {results['successful']} successful, {results['failed']} failed, {results['skipped']} skipped")
-        
+
         return results
 
 
