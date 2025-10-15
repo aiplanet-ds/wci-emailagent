@@ -24,8 +24,13 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
 5. Pay attention to dates (effective dates, deadlines, notification dates)
 6. Extract supplier information from email signatures, letterheads, or content
 7. Identify change types: "increase", "decrease", "adjustment", "currency_change", "discount_removed"
-8. **CRITICAL**: For each product, extract "product_id" which is the Part Number used in ERP systems (e.g., "TEST-001", "PART-ABC-123")
+8. **CRITICAL - PART NUMBERS**: For each product, extract "product_id" which is the EXACT Part Number used in ERP systems
+   - **PRESERVE ALL SPECIAL CHARACTERS**: Include #, -, /, spaces, and any other characters EXACTLY as they appear
+   - Examples: "#FFH06-12SAE F", "TEST-001", "PART/ABC-123", "12.345.67-A"
+   - DO NOT remove or modify any characters from the part number
+   - If you see "Part Number: #FFH06-12SAE F", extract it as "#FFH06-12SAE F" (with the # and space)
 9. "product_id" and "product_code" may be the same value - extract the part number/SKU/item code as "product_id"
+10. **SUPPLIER ID**: Extract "supplier_id" which is the supplier's external identifier/vendor code (e.g., "FAST1", "USUI-001", "SUP123"). This may appear as "Vendor ID", "Supplier Code", "Vendor Code", or similar in the email.
 
 **Expected JSON Schema:**
 {
@@ -36,6 +41,7 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
     "message_id": string
   },
   "supplier_info": {
+    "supplier_id": string,
     "supplier_name": string,
     "contact_person": string,
     "contact_email": string,
@@ -154,11 +160,22 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
 
         # Try to parse the JSON response
         try:
+            # Remove markdown code blocks if present
+            if content_response.startswith("```"):
+                # Remove ```json or ``` at start
+                content_response = content_response.split("\n", 1)[1] if "\n" in content_response else content_response[3:]
+                # Remove ``` at end
+                if content_response.endswith("```"):
+                    content_response = content_response[:-3]
+                content_response = content_response.strip()
+
             extracted_data = json.loads(content_response)
             extracted_data = post_process_extraction(extracted_data, safe_metadata)
             return extracted_data
 
         except json.JSONDecodeError as e:
+            print(f"❌ JSON Parse Error: {e}")
+            print(f"📄 Raw response (first 1000 chars):\n{content_response[:1000]}")
             return {
                 "error": f"Failed to parse AI response as JSON: {str(e)}",
                 "raw_response": content_response[:500]

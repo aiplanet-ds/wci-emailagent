@@ -117,6 +117,23 @@ def process_user_message(msg, user_email):
         try:
             from services.epicor_service import epicor_service
 
+            # Extract supplier information
+            supplier_info = result.get("supplier_info", {})
+            supplier_id = supplier_info.get("supplier_id")
+            supplier_name = supplier_info.get("supplier_name")
+
+            # Extract price change summary
+            price_change_summary = result.get("price_change_summary", {})
+            effective_date = price_change_summary.get("effective_date")
+
+            # Log supplier and effective date information
+            if supplier_id:
+                print(f"   🏢 Supplier ID: {supplier_id}")
+            if supplier_name:
+                print(f"   🏢 Supplier Name: {supplier_name}")
+            if effective_date:
+                print(f"   📅 Effective Date: {effective_date}")
+
             affected_products = result.get("affected_products", [])
             if affected_products:
                 print(f"   📦 Products to update: {len(affected_products)}")
@@ -127,9 +144,27 @@ def process_user_message(msg, user_email):
                     new_price = product.get("new_price", "N/A")
                     print(f"      {i}. Part: {product_id} → New Price: ${new_price}")
 
+                # Determine which workflow to use
+                if supplier_id and effective_date:
+                    print("\n   🔄 Using NEW workflow: PriceLstSvc with supplier verification")
+                    print(f"      ✓ Supplier ID: {supplier_id}")
+                    print(f"      ✓ Effective Date: {effective_date}")
+                else:
+                    print("\n   ⚠️  Missing supplier_id or effective_date")
+                    print("   🔄 Falling back to LEGACY workflow: PartSvc")
+                    if not supplier_id:
+                        print("      ✗ Supplier ID not found in extraction")
+                    if not effective_date:
+                        print("      ✗ Effective Date not found in extraction")
+
                 print("\n   🔄 Updating prices in Epicor...")
-                # Perform batch update
-                epicor_results = epicor_service.batch_update_prices(affected_products)
+                # Perform batch update with supplier_id and effective_date
+                epicor_results = epicor_service.batch_update_prices(
+                    products=affected_products,
+                    supplier_id=supplier_id,
+                    effective_date=effective_date,
+                    use_new_workflow=True  # Always try new workflow if data available
+                )
 
                 # Save Epicor update results
                 epicor_output_filename = f"epicor_update_{message_id}.json"
@@ -144,6 +179,7 @@ def process_user_message(msg, user_email):
                 print(f"      ✅ Successful: {epicor_results['successful']}")
                 print(f"      ❌ Failed: {epicor_results['failed']}")
                 print(f"      ⏭️  Skipped: {epicor_results['skipped']}")
+                print(f"      🔧 Workflow: {epicor_results.get('workflow_used', 'Unknown')}")
                 print(f"   💾 Results saved to: {epicor_output_filename}")
 
                 # Log individual results
@@ -155,7 +191,19 @@ def process_user_message(msg, user_email):
                         if status == 'success':
                             old_price = detail.get('old_price', 'N/A')
                             new_price = detail.get('new_price', 'N/A')
-                            print(f"      ✅ {part_num}: ${old_price} → ${new_price}")
+                            eff_date = detail.get('effective_date', '')
+                            vendor_name = detail.get('vendor_name', '')
+                            list_code = detail.get('list_code', '')
+
+                            # Build success message with available details
+                            msg = f"      ✅ {part_num}: ${old_price} → ${new_price}"
+                            if eff_date:
+                                msg += f" (Effective: {eff_date})"
+                            if vendor_name:
+                                msg += f" [Vendor: {vendor_name}]"
+                            if list_code:
+                                msg += f" [List: {list_code}]"
+                            print(msg)
                         elif status == 'failed':
                             reason = detail.get('message', 'Unknown error')
                             print(f"      ❌ {part_num}: {reason}")
@@ -246,16 +294,23 @@ def print_extraction_summary(data):
     if "error" in data:
         print(f"   ❌ Extraction error: {data['error']}")
         return
-    
+
     # Supplier info
-    supplier_name = data.get("supplier_info", {}).get("supplier_name")
+    supplier_info = data.get("supplier_info", {})
+    supplier_id = supplier_info.get("supplier_id")
+    supplier_name = supplier_info.get("supplier_name")
+
+    if supplier_id:
+        print(f"   🏢 Supplier ID: {supplier_id}")
     if supplier_name:
-        print(f"   🏢 Supplier: {supplier_name}")
-    
-    # Price change details
+        print(f"   🏢 Supplier Name: {supplier_name}")
+
+    # Price change details (check both locations for backward compatibility)
     change_details = data.get("price_change_details", {})
-    change_type = change_details.get("change_type")
-    effective_date = change_details.get("effective_date")
+    price_change_summary = data.get("price_change_summary", {})
+
+    change_type = change_details.get("change_type") or price_change_summary.get("change_type")
+    effective_date = change_details.get("effective_date") or price_change_summary.get("effective_date")
     
     if change_type:
         print(f"   📈 Change Type: {change_type}")
