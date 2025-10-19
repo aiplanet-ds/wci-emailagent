@@ -25,13 +25,14 @@ def process_user_message(msg, user_email):
     message_id = msg.get("id", "")
 
     print("\n" + "="*80)
-    print(f"📧 PROCESSING EMAIL FOR: {user_email}")
+    print(f"🚀 EMAIL INTELLIGENCE SYSTEM - 3-STAGE WORKFLOW")
     print("="*80)
+    print(f"📧 Processing email for: {user_email}")
     print(f"📌 Subject: {subject}")
     print(f"👤 From: {sender}")
     print(f"📅 Date: {date_received}")
     print(f"🆔 Message ID: {message_id[:20]}...")
-    print("-"*80)
+    print("="*80)
     
     # Prepare metadata
     email_metadata = {
@@ -44,12 +45,16 @@ def process_user_message(msg, user_email):
         "attachments": []
     }
     
+    # ========== STAGE 1: EMAIL DETECTION ==========
+    print("\n📬 STAGE 1: EMAIL DETECTION")
+    print("-"*80)
+
     # Process attachments with user-specific download directory
     attachment_paths = []
     has_attachments = msg.get("hasAttachments", False)
 
     if has_attachments:
-        print("📎 PROCESSING ATTACHMENTS...")
+        print("📎 Processing attachments...")
         # Import here to avoid circular import issues
         from auth.multi_graph import graph_client
         attachments = graph_client.get_user_message_attachments(user_email, message_id)
@@ -72,21 +77,30 @@ def process_user_message(msg, user_email):
     if body_data:
         email_body = body_data.get("content", "")
 
-    print(f"\n📊 EMAIL CONTENT SUMMARY:")
+    print(f"✅ Stage 1 Complete: Content extracted")
     print(f"   📝 Body length: {len(email_body)} characters")
     print(f"   📎 Attachments: {len(attachment_paths)}")
-    print("-"*80)
+    print("="*80)
     
     # Process all content (email body + attachments)
     combined_content = process_all_content(email_body, attachment_paths)
-    
+
     if not combined_content.strip():
         print("   ⚠️  No content to process")
+        print("="*80 + "\n")
         return
-    
-    # Extract structured data
-    print("\n🤖 AZURE OPENAI EXTRACTION:")
-    print("   🔄 Analyzing email content with AI...")
+
+    # ========== STAGE 2: AI ENTITY EXTRACTION ==========
+    print("\n🤖 STAGE 2: AI ENTITY EXTRACTION")
+    print("-"*80)
+    print("🔄 Azure OpenAI GPT-4.1 Processing...")
+    print("   Extracting parallel entities:")
+    print("   • Supplier ID")
+    print("   • Part Name & Number")
+    print("   • Effective Date")
+    print("   • New Price")
+    print("   • Reason for Change")
+
     try:
         result = extract_price_change_json(combined_content, email_metadata)
 
@@ -103,17 +117,17 @@ def process_user_message(msg, user_email):
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
 
-        print(f"   ✅ Extraction successful!")
+        print(f"✅ Stage 2 Complete: Data extracted successfully")
         print(f"   💾 Saved to: {output_filename}")
 
         # Print summary of extracted data
-        print("\n📋 EXTRACTED DATA SUMMARY:")
+        print("\n📋 Extracted Data Summary:")
         print_extraction_summary(result)
-        print("-"*80)
+        print("="*80)
 
-        # 🚀 AUTOMATIC EPICOR UPDATE
-        print("\n💼 EPICOR ERP UPDATE:")
-        print("   🔄 Initiating automatic price update...")
+        # ========== STAGE 3: EPICOR SYSTEM INTEGRATION ==========
+        # Note: Detailed 4-step workflow logging happens in epicor_service.py
+        print("\n💼 Preparing for Epicor Integration...")
         try:
             from services.epicor_service import epicor_service
 
@@ -126,7 +140,8 @@ def process_user_message(msg, user_email):
             price_change_summary = result.get("price_change_summary", {})
             effective_date = price_change_summary.get("effective_date")
 
-            # Log supplier and effective date information
+            # Prepare data for API
+            print("📦 Preparing data for API...")
             if supplier_id:
                 print(f"   🏢 Supplier ID: {supplier_id}")
             if supplier_name:
@@ -146,19 +161,19 @@ def process_user_message(msg, user_email):
 
                 # Determine which workflow to use
                 if supplier_id and effective_date:
-                    print("\n   🔄 Using NEW workflow: PriceLstSvc with supplier verification")
-                    print(f"      ✓ Supplier ID: {supplier_id}")
-                    print(f"      ✓ Effective Date: {effective_date}")
+                    print("\n✅ Data ready for 4-Step Workflow (A→B→C→D)")
+                    print(f"   ✓ Supplier ID: {supplier_id}")
+                    print(f"   ✓ Effective Date: {effective_date}")
                 else:
-                    print("\n   ⚠️  Missing supplier_id or effective_date")
-                    print("   🔄 Falling back to LEGACY workflow: PartSvc")
+                    print("\n⚠️  Missing supplier_id or effective_date")
+                    print("   Falling back to LEGACY workflow")
                     if not supplier_id:
                         print("      ✗ Supplier ID not found in extraction")
                     if not effective_date:
                         print("      ✗ Effective Date not found in extraction")
 
-                print("\n   🔄 Updating prices in Epicor...")
                 # Perform batch update with supplier_id and effective_date
+                # (4-step workflow details will be logged by epicor_service)
                 epicor_results = epicor_service.batch_update_prices(
                     products=affected_products,
                     supplier_id=supplier_id,
@@ -174,13 +189,14 @@ def process_user_message(msg, user_email):
                     json.dump(epicor_results, f, indent=2, ensure_ascii=False)
 
                 # Log detailed results
-                print(f"\n   ✅ EPICOR UPDATE COMPLETE!")
-                print(f"   📊 Results:")
-                print(f"      ✅ Successful: {epicor_results['successful']}")
-                print(f"      ❌ Failed: {epicor_results['failed']}")
-                print(f"      ⏭️  Skipped: {epicor_results['skipped']}")
-                print(f"      🔧 Workflow: {epicor_results.get('workflow_used', 'Unknown')}")
-                print(f"   💾 Results saved to: {epicor_output_filename}")
+                print("\n" + "="*80)
+                print(f"📊 FINAL RESULTS")
+                print("="*80)
+                print(f"✅ Successful updates: {epicor_results['successful']}")
+                print(f"❌ Failed updates: {epicor_results['failed']}")
+                print(f"⏭️  Skipped: {epicor_results['skipped']}")
+                print(f"🔧 Workflow: {epicor_results.get('workflow_used', 'Unknown')}")
+                print(f"💾 Results saved to: {epicor_output_filename}")
 
                 # Log individual results
                 if epicor_results.get('details'):

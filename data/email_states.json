@@ -1,0 +1,20 @@
+{
+  "emails": {
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCV0AAAA=": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCV0AAAA=",
+      "processed": true,
+      "is_price_change": false,
+      "needs_info": true,
+      "selected_missing_fields": [
+        "contact_email",
+        "contact_phone",
+        "contact_person",
+        "reason"
+      ],
+      "followup_draft": "Dear Adithyavardhan,\n\nThank you for your recent price change notification regarding Faster Inc. (Indiana), received on October 15, 2025. We appreciate your prompt communication and have noted the following details: supplier ID (FAST1), supplier name, change type (decrease), effective date (October 20, 2025), and notification date.\n\nTo proceed with updating our ERP system, we kindly request the following additional information:\n\n- Contact Email  \n- Contact Phone  \n- Contact Person  \n- Reason for Change\n\nThis information is essential for us to accurately process and implement the price change in our records. We would appreciate it if you could provide the missing details within the next 3-5 business days.\n\nThank you for your attention to this matter. Please let us know if you have any questions or require further clarification.\n\nBest regards,",
+      "last_updated": "2025-10-19T10:52:10.343227",
+      "processed_at": "2025-10-19T10:52:10.343227",
+      "processed_by": "adithyatest1617@outlook.com"
+    }
+  }
+}

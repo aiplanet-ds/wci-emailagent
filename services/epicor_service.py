@@ -332,6 +332,35 @@ class EpicorAPIService:
             logger.error(f"❌ Exception retrieving price list: {e}")
             return None
 
+    def check_price_list_exists(self, list_code: str, part_num: str, uom_code: str = "EA") -> bool:
+        """
+        Check if a price list entry exists for a specific part (Step B decision point)
+
+        Args:
+            list_code: Price list code
+            part_num: Part number
+            uom_code: Unit of measure code (default: "EA")
+
+        Returns:
+            True if price list exists, False otherwise
+        """
+        try:
+            logger.info(f"📋 Step B: Checking if price list exists...")
+            logger.info(f"   ListCode={list_code}, Part={part_num}, UOM={uom_code}")
+
+            price_list = self.get_price_list(list_code, part_num, uom_code)
+
+            if price_list:
+                logger.info(f"   ✅ Price list EXISTS - will update existing entry")
+                return True
+            else:
+                logger.info(f"   ℹ️  Price list DOES NOT EXIST - will create new entry")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Exception checking price list existence: {e}")
+            return False
+
     def create_price_list_entry(
         self,
         part_num: str,
@@ -341,19 +370,19 @@ class EpicorAPIService:
         list_code: str = None
     ) -> Dict[str, Any]:
         """
-        Create a new price list entry for a part using Epicor business object methods
+        Create a new price list entry (Step B: Price List Creation - NO path)
 
-        This uses the proper Epicor workflow:
-        1. Call GetNewPriceLstParts to get a template
-        2. Fill in the required fields
-        3. Call Update to save the new entry
+        This follows the diagram workflow:
+        1. GET PriceListSvc: Retrieve Price List Template
+        2. Complete Template with Details
+        3. POST PriceListSvc: Save New Price List
 
         Args:
             part_num: Part number
             base_price: Base price for the part
             effective_date: Effective date in ISO format (e.g., "2025-10-20")
             uom_code: Unit of measure code (default: "EA")
-            list_code: Price list code (default: "BASE")
+            list_code: Price list code (uses default if not specified)
 
         Returns:
             Dictionary with status and details
@@ -363,14 +392,14 @@ class EpicorAPIService:
             if list_code is None:
                 list_code = self.default_price_list
 
-            logger.info(f"📝 Creating price list entry:")
-            logger.info(f"   ListCode: {list_code}")
-            logger.info(f"   PartNum: {part_num}")
-            logger.info(f"   BasePrice: {base_price}")
-            logger.info(f"   EffectiveDate: {effective_date}")
-            logger.info(f"   UOMCode: {uom_code}")
+            logger.info(f"   📝 Step B (NO path): Creating new price list entry")
+            logger.info(f"      ListCode: {list_code}")
+            logger.info(f"      PartNum: {part_num}")
+            logger.info(f"      BasePrice: ${base_price}")
+            logger.info(f"      UOMCode: {uom_code}")
 
-            # Step 1: Call GetNewPriceLstParts to get a template
+            # === Step 1: GET PriceListSvc: Retrieve Price List Template ===
+            logger.info(f"      1️⃣  GET PriceListSvc: Retrieving price list template...")
             get_new_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/GetNewPriceLstParts"
             headers = self._get_headers()
 
@@ -387,13 +416,12 @@ class EpicorAPIService:
                 "uomCode": uom_code
             }
 
-            logger.info(f"   Step 1: Getting new price list template...")
             response1 = requests.post(get_new_url, headers=headers, json=get_new_payload, timeout=10)
 
             if response1.status_code != 200:
                 error_msg = response1.text
-                logger.error(f"❌ GetNewPriceLstParts failed: {response1.status_code}")
-                logger.error(f"   Response: {error_msg[:500]}")
+                logger.error(f"      ❌ Failed to retrieve template: {response1.status_code}")
+                logger.error(f"         Response: {error_msg[:300]}")
                 return {
                     "status": "error",
                     "message": f"GetNewPriceLstParts failed: HTTP {response1.status_code}: {error_msg[:200]}",
@@ -401,18 +429,15 @@ class EpicorAPIService:
                     "part_num": part_num
                 }
 
-            # Step 2: Get the template and fill in the fields
+            # === Step 2: Complete Template with Details ===
+            logger.info(f"      2️⃣  Complete Template with Details...")
             template_data = response1.json()
-            logger.info(f"   Template response keys: {list(template_data.keys())}")
 
             # Try different possible response structures
             ds = template_data.get("returnObj") or template_data.get("parameters", {}).get("ds") or template_data
 
-            logger.info(f"   Dataset keys: {list(ds.keys()) if isinstance(ds, dict) else 'Not a dict'}")
-
             if not ds.get("PriceLstParts"):
-                logger.error(f"❌ No template returned from GetNewPriceLstParts")
-                logger.error(f"   Full response: {str(template_data)[:500]}")
+                logger.error(f"      ❌ No template returned from API")
                 return {
                     "status": "error",
                     "message": "No template returned from GetNewPriceLstParts",
@@ -420,37 +445,32 @@ class EpicorAPIService:
                     "part_num": part_num
                 }
 
-            # Get the template record and update it
+            # Get the template record and fill in the details
             new_record = ds["PriceLstParts"][0]
-
-            # Debug: Log available fields in template
-            logger.info(f"   Template fields: {list(new_record.keys())}")
-            logger.info(f"   Has EffectiveDate field: {'EffectiveDate' in new_record}")
 
             new_record["PartNum"] = part_num
             new_record["UOMCode"] = uom_code
             new_record["BasePrice"] = base_price
 
-            # Only set EffectiveDate if it exists in the template
+            # Note: Effective dates are managed at header level (Step C)
+            # Some Epicor versions may have EffectiveDate field at part level (deprecated)
             if "EffectiveDate" in new_record:
                 new_record["EffectiveDate"] = effective_date
-                logger.info(f"   ✅ Set EffectiveDate: {effective_date}")
-            else:
-                logger.warning(f"   ⚠️ EffectiveDate field not available in this Epicor instance")
+                logger.info(f"         ℹ️  Set EffectiveDate in template (legacy field)")
 
             new_record["RowMod"] = "A"  # A = Add
 
-            logger.info(f"   Step 2: Updating template with part data...")
+            logger.info(f"         ✅ Template completed with part details")
 
-            # Step 3: Call Update to save the new entry
+            # === Step 3: POST PriceListSvc: Save New Price List ===
+            logger.info(f"      3️⃣  POST PriceListSvc: Saving new price list entry...")
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
             update_payload = {"ds": ds}
 
-            logger.info(f"   Step 3: Saving new price list entry...")
             response2 = requests.post(update_url, headers=headers, json=update_payload, timeout=10)
 
             if response2.status_code == 200:
-                logger.info(f"✅ Price list entry created successfully")
+                logger.info(f"         ✅ Price list entry saved successfully")
                 return {
                     "status": "success",
                     "message": "Price list entry created",
@@ -461,8 +481,8 @@ class EpicorAPIService:
                 }
             else:
                 error_msg = response2.text
-                logger.error(f"❌ Update failed: {response2.status_code}")
-                logger.error(f"   Response: {error_msg[:500]}")
+                logger.error(f"      ❌ Failed to save entry: {response2.status_code}")
+                logger.error(f"         Response: {error_msg[:300]}")
 
                 return {
                     "status": "error",
@@ -472,7 +492,7 @@ class EpicorAPIService:
                 }
 
         except Exception as e:
-            logger.error(f"❌ Exception creating price list entry: {e}")
+            logger.error(f"      ❌ Exception creating price list entry: {e}")
             return {
                 "status": "error",
                 "message": str(e),
@@ -657,6 +677,118 @@ class EpicorAPIService:
                 "part_num": part_num
             }
 
+    def update_price_list_header_dates(
+        self,
+        list_code: str,
+        start_date: str,
+        end_date: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update price list header with effective dates (Step C: Effective Date Management)
+
+        Important: Effective dates are managed at the HEADER level only in Epicor.
+        Individual parts/breaks inherit the dates from the header.
+
+        Args:
+            list_code: Price list code
+            start_date: Start date in ISO format (e.g., "2025-10-20" or "2025-10-20T00:00:00")
+            end_date: Optional end date in ISO format
+
+        Returns:
+            Dictionary with status and message
+        """
+        try:
+            logger.info(f"📋 Step C: Updating price list header with effective dates...")
+            logger.info(f"   ListCode: {list_code}")
+            logger.info(f"   StartDate: {start_date}")
+            if end_date:
+                logger.info(f"   EndDate: {end_date}")
+
+            # Ensure dates have time component
+            if start_date and 'T' not in start_date:
+                start_date = f"{start_date}T00:00:00"
+            if end_date and 'T' not in end_date:
+                end_date = f"{end_date}T00:00:00"
+
+            # Step 1: Get the current price list header
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLists"
+            headers = self._get_headers()
+
+            params = {
+                "$filter": f"ListCode eq '{list_code}'"
+            }
+
+            logger.info(f"   Fetching price list header...")
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code != 200:
+                logger.error(f"❌ Failed to fetch price list header: {response.status_code}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to fetch price list header: HTTP {response.status_code}",
+                    "list_code": list_code
+                }
+
+            data = response.json()
+            results = data.get("value", [])
+
+            if not results:
+                logger.error(f"❌ Price list header not found: {list_code}")
+                return {
+                    "status": "error",
+                    "message": f"Price list header not found: {list_code}",
+                    "list_code": list_code
+                }
+
+            # Step 2: Update the header with new dates
+            price_list_header = results[0]
+            price_list_header["StartDate"] = start_date
+            if end_date:
+                price_list_header["EndDate"] = end_date
+            price_list_header["RowMod"] = "U"  # U = Update
+
+            # Step 3: Call Update method
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
+
+            ds = {
+                "PriceLst": [price_list_header]
+            }
+
+            payload = {"ds": ds}
+
+            logger.info(f"   Updating price list header...")
+            response = requests.post(update_url, json=payload, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                logger.info(f"✅ Step C Complete: Price list header dates updated")
+                logger.info(f"   StartDate: {start_date}")
+                if end_date:
+                    logger.info(f"   EndDate: {end_date}")
+                return {
+                    "status": "success",
+                    "message": "Price list header dates updated successfully",
+                    "list_code": list_code,
+                    "start_date": start_date,
+                    "end_date": end_date
+                }
+            else:
+                logger.error(f"❌ Failed to update price list header: {response.status_code}")
+                logger.error(f"   Response: {response.text[:500]}")
+                return {
+                    "status": "error",
+                    "message": f"HTTP {response.status_code}: {response.text[:200]}",
+                    "list_code": list_code,
+                    "status_code": response.status_code
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Exception updating price list header: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "list_code": list_code
+            }
+
     def update_price_list(
         self,
         list_code: str,
@@ -771,12 +903,13 @@ class EpicorAPIService:
         uom_code: str = "EA"
     ) -> Dict[str, Any]:
         """
-        Complete workflow to update supplier part price with effective date
+        Complete 4-step workflow to update supplier part price with effective date
 
-        This method implements the full workflow from Epicor_Price_Update_Workflow.md:
-        1. Verify supplier-part relationship using SupplierPartSvc
-        2. Get price list code for the part
-        3. Update price with effective date using PriceLstSvc
+        This method implements the workflow from the diagram:
+        Step A: Supplier Verification - Verify supplier-part relationship
+        Step B: Price List Creation - Check if price list exists, create if needed
+        Step C: Effective Date Management - Update header-level effective dates
+        Step D: Price Update - Update part price (inherits dates from header)
 
         Args:
             supplier_id: Supplier's external ID (VendorVendorID, e.g., "FAST1")
@@ -789,98 +922,155 @@ class EpicorAPIService:
             Dictionary with status and detailed results
         """
         try:
-            logger.info(f"🚀 Starting supplier part price update workflow")
-            logger.info(f"   Supplier: {supplier_id}, Part: {part_num}, Price: {new_price}, Effective: {effective_date}")
+            logger.info("="*80)
+            logger.info(f"🚀 STAGE 3: EPICOR SYSTEM INTEGRATION - 4-STEP WORKFLOW")
+            logger.info("="*80)
+            logger.info(f"   Supplier: {supplier_id}")
+            logger.info(f"   Part: {part_num}")
+            logger.info(f"   New Price: ${new_price}")
+            logger.info(f"   Effective Date: {effective_date}")
+            logger.info("-"*80)
 
-            # Step 1: Verify supplier-part relationship
-            logger.info(f"📋 Step 1: Verifying supplier-part relationship...")
+            # ========== STEP A: SUPPLIER VERIFICATION ==========
+            logger.info(f"📋 STEP A: SUPPLIER VERIFICATION")
+            logger.info(f"   🔄 Retrieving vendor number...")
             supplier_part = self.verify_supplier_part(supplier_id, part_num)
 
             if not supplier_part:
+                logger.error(f"❌ Step A Failed: Supplier-part relationship not found")
                 return {
                     "status": "error",
                     "message": f"Supplier-part relationship not found for Supplier={supplier_id}, Part={part_num}",
                     "part_num": part_num,
                     "supplier_id": supplier_id,
-                    "step_failed": "verify_supplier_part"
+                    "step_failed": "Step A: Supplier Verification"
                 }
 
             vendor_num = supplier_part.get("VendorNum")
             vendor_name = supplier_part.get("VendorName")
-            logger.info(f"✅ Step 1 Complete: VendorNum={vendor_num}, VendorName={vendor_name}")
+            logger.info(f"✅ STEP A COMPLETE")
+            logger.info(f"   VendorNum: {vendor_num}")
+            logger.info(f"   VendorName: {vendor_name}")
+            logger.info("-"*80)
 
-            # Step 2: Get price list entries for the part
-            logger.info(f"📋 Step 2: Getting price list entries...")
+            # ========== STEP B: PRICE LIST CREATION ==========
+            logger.info(f"📋 STEP B: PRICE LIST CREATION")
+
+            # First, determine which price list to use
             price_lists = self.get_price_list_parts(part_num)
 
-            if not price_lists:
-                logger.warning(f"⚠️ Part {part_num} not in any price list - creating new price list entry")
+            if price_lists and len(price_lists) > 0:
+                list_code = price_lists[0].get("ListCode")
+                logger.info(f"   ℹ️  Found existing price list: {list_code}")
+            else:
+                list_code = self.default_price_list
+                logger.info(f"   ℹ️  Using default price list: {list_code}")
 
-                # Create a new price list entry for this part
+            # Check if price list entry exists (Step B decision point)
+            price_list_exists = self.check_price_list_exists(list_code, part_num, uom_code)
+
+            if not price_list_exists:
+                logger.info(f"   🔄 Creating new price list entry...")
+                # Create new price list entry following template workflow
                 create_result = self.create_price_list_entry(
                     part_num=part_num,
                     base_price=new_price,
                     effective_date=effective_date,
-                    uom_code=uom_code
+                    uom_code=uom_code,
+                    list_code=list_code
                 )
 
-                if create_result.get("status") == "success":
-                    list_code = create_result.get("list_code")
-                    logger.info(f"✅ Price list entry created: ListCode={list_code}")
-
-                    return {
-                        "status": "success",
-                        "message": f"Price list entry created and price set",
-                        "part_num": part_num,
-                        "supplier_id": supplier_id,
-                        "vendor_num": vendor_num,
-                        "vendor_name": vendor_name,
-                        "old_price": None,
-                        "new_price": new_price,
-                        "workflow": "PriceLstSvc (created new entry)",
-                        "effective_date": effective_date,
-                        "list_code": list_code
-                    }
-                else:
+                if create_result.get("status") != "success":
+                    logger.error(f"❌ Step B Failed: Could not create price list entry")
                     return {
                         "status": "error",
                         "message": f"Failed to create price list entry: {create_result.get('message')}",
                         "part_num": part_num,
                         "supplier_id": supplier_id,
                         "vendor_num": vendor_num,
-                        "step_failed": "create_price_list_entry"
+                        "step_failed": "Step B: Price List Creation"
                     }
 
-            # Use the first price list entry (or you could filter by vendor/supplier)
-            list_code = price_lists[0].get("ListCode")
-            logger.info(f"✅ Step 2 Complete: Found {len(price_lists)} price list(s), using ListCode={list_code}")
+                logger.info(f"✅ STEP B COMPLETE: Price list entry created")
+                logger.info(f"   ListCode: {list_code}")
+                logger.info("-"*80)
 
-            # Step 3: Update price with effective date
-            logger.info(f"📋 Step 3: Updating price list with effective date...")
+                # For newly created entries, return success
+                # (effective date and price already set during creation)
+                return {
+                    "status": "success",
+                    "message": f"Price list entry created with price and effective date",
+                    "part_num": part_num,
+                    "supplier_id": supplier_id,
+                    "vendor_num": vendor_num,
+                    "vendor_name": vendor_name,
+                    "old_price": None,
+                    "new_price": new_price,
+                    "workflow": "4-Step Workflow (Created New Entry)",
+                    "effective_date": effective_date,
+                    "list_code": list_code
+                }
+
+            logger.info(f"✅ STEP B COMPLETE: Price list entry exists")
+            logger.info(f"   ListCode: {list_code}")
+            logger.info("-"*80)
+
+            # ========== STEP C: EFFECTIVE DATE MANAGEMENT ==========
+            logger.info(f"📋 STEP C: EFFECTIVE DATE MANAGEMENT")
+            logger.info(f"   🔄 Updating header-level effective dates...")
+
+            # Update the price list header with effective dates
+            header_result = self.update_price_list_header_dates(
+                list_code=list_code,
+                start_date=effective_date
+            )
+
+            if header_result.get("status") != "success":
+                logger.warning(f"⚠️  Step C Warning: Could not update header dates")
+                logger.warning(f"   {header_result.get('message')}")
+                logger.warning(f"   Continuing with price update...")
+            else:
+                logger.info(f"✅ STEP C COMPLETE: Header dates updated")
+                logger.info(f"   StartDate: {effective_date}")
+
+            logger.info("-"*80)
+
+            # ========== STEP D: PRICE UPDATE ==========
+            logger.info(f"📋 STEP D: PRICE UPDATE")
+            logger.info(f"   🔄 Updating part price (inherits dates from header)...")
+
+            # Update the part price (which inherits effective dates from header)
             update_result = self.update_price_list(
                 list_code=list_code,
                 part_num=part_num,
                 new_price=new_price,
-                effective_date=effective_date,
+                effective_date=effective_date,  # For backward compatibility
                 uom_code=uom_code
             )
 
             if update_result["status"] == "success":
-                logger.info(f"✅ Step 3 Complete: Price updated successfully")
-                # Enhance result with supplier info
+                logger.info(f"✅ STEP D COMPLETE: Price updated successfully")
+                logger.info("="*80)
+                logger.info(f"✅ 4-STEP WORKFLOW COMPLETE")
+                logger.info("="*80)
+
+                # Enhance result with supplier info and workflow details
                 update_result["supplier_id"] = supplier_id
                 update_result["vendor_num"] = vendor_num
                 update_result["vendor_name"] = vendor_name
+                update_result["workflow"] = "4-Step Workflow (A→B→C→D)"
                 return update_result
             else:
-                logger.error(f"❌ Step 3 Failed: {update_result.get('message')}")
+                logger.error(f"❌ Step D Failed: {update_result.get('message')}")
+                logger.error("="*80)
                 update_result["supplier_id"] = supplier_id
                 update_result["vendor_num"] = vendor_num
-                update_result["step_failed"] = "update_price_list"
+                update_result["step_failed"] = "Step D: Price Update"
                 return update_result
 
         except Exception as e:
-            logger.error(f"❌ Exception in supplier part price update workflow: {e}")
+            logger.error(f"❌ Exception in 4-step workflow: {e}")
+            logger.error("="*80)
             return {
                 "status": "error",
                 "message": str(e),
