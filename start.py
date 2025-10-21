@@ -8,7 +8,7 @@ from auth.oauth import multi_auth
 from auth.multi_graph import graph_client
 from services.delta_service import delta_service
 from services.epicor_service import epicor_service
-from routers import emails
+from routers import emails, dashboard
 import os
 import secrets
 import json
@@ -37,6 +37,7 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(emails.router)
+app.include_router(dashboard.router)
 
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")

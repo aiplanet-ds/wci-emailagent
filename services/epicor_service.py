@@ -451,14 +451,11 @@ class EpicorAPIService:
             new_record["PartNum"] = part_num
             new_record["UOMCode"] = uom_code
             new_record["BasePrice"] = base_price
-
-            # Note: Effective dates are managed at header level (Step C)
-            # Some Epicor versions may have EffectiveDate field at part level (deprecated)
-            if "EffectiveDate" in new_record:
-                new_record["EffectiveDate"] = effective_date
-                logger.info(f"         ℹ️  Set EffectiveDate in template (legacy field)")
-
             new_record["RowMod"] = "A"  # A = Add
+
+            # Note: Effective dates are managed at header level only (Step C)
+            # Parts inherit the StartDate from the price list header
+            logger.info(f"         ℹ️  Effective date will be managed at header level")
 
             logger.info(f"         ✅ Template completed with part details")
 
@@ -711,7 +708,7 @@ class EpicorAPIService:
                 end_date = f"{end_date}T00:00:00"
 
             # Step 1: Get the current price list header
-            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLists"
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLsts"
             headers = self._get_headers()
 
             params = {
@@ -830,22 +827,12 @@ class EpicorAPIService:
 
             logger.info(f"🔄 Updating price list: ListCode={list_code}, Part={part_num}, Price={new_price}, EffectiveDate={effective_date}")
 
-            # Debug: Log available fields in current entry
-            logger.info(f"   Current entry fields: {list(current_entry.keys())}")
-            logger.info(f"   Has EffectiveDate field: {'EffectiveDate' in current_entry}")
-
             # Step 2: Update the entry fields
             current_entry["BasePrice"] = new_price
-
-            # Only set EffectiveDate if it exists in the entry
-            if "EffectiveDate" in current_entry:
-                current_entry["EffectiveDate"] = effective_date
-                logger.info(f"   ✅ Set EffectiveDate: {effective_date}")
-            else:
-                logger.warning(f"   ⚠️ EffectiveDate field not available in this Epicor instance")
-                logger.warning(f"   ⚠️ Price will be updated without effective date")
-
             current_entry["RowMod"] = "U"  # U = Update
+
+            logger.info(f"   ℹ️  Effective date ({effective_date}) managed at header level (Step C)")
+            logger.info(f"   ℹ️  This part will inherit the StartDate from price list header")
 
             # Step 3: Call Update method with the modified dataset
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"

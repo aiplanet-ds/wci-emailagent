@@ -50,13 +50,15 @@ class EmailStateService:
         return state.get("emails", {}).get(message_id, {
             "message_id": message_id,
             "processed": False,
+            "epicor_synced": False,
             "is_price_change": False,
             "needs_info": False,
             "selected_missing_fields": [],
             "followup_draft": None,
             "last_updated": None,
             "processed_at": None,
-            "processed_by": None
+            "processed_by": None,
+            "epicor_synced_at": None
         })
 
     def update_email_state(
@@ -74,11 +76,13 @@ class EmailStateService:
         email_state = state["emails"].get(message_id, {
             "message_id": message_id,
             "processed": False,
+            "epicor_synced": False,
             "is_price_change": False,
             "needs_info": False,
             "selected_missing_fields": [],
             "followup_draft": None,
-            "last_updated": None
+            "last_updated": None,
+            "epicor_synced_at": None
         })
 
         # Update with new values
@@ -109,6 +113,13 @@ class EmailStateService:
             "processed": False,
             "processed_at": None,
             "processed_by": None
+        })
+
+    def mark_as_epicor_synced(self, message_id: str) -> Dict[str, Any]:
+        """Mark email as synced to Epicor"""
+        return self.update_email_state(message_id, {
+            "epicor_synced": True,
+            "epicor_synced_at": datetime.utcnow().isoformat()
         })
 
     def set_missing_fields(

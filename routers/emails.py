@@ -286,8 +286,9 @@ async def update_email_state(
             with open(epicor_file, 'w') as f:
                 json.dump(epicor_result, f, indent=2)
 
-            # Mark as processed
+            # Mark as processed and epicor synced
             state = email_state_service.mark_as_processed(message_id, user_email)
+            email_state_service.mark_as_epicor_synced(message_id)
 
             return {
                 "success": True,

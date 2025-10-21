@@ -7,6 +7,7 @@ import type {
   UserInfo,
   EmailFilter
 } from '../types/email';
+import type { DashboardStats } from '../types/dashboard';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -58,6 +59,16 @@ export const emailApi = {
   // Generate follow-up email
   async generateFollowup(messageId: string, request: FollowupRequest): Promise<FollowupResponse> {
     const { data } = await api.post<FollowupResponse>(`/api/emails/${messageId}/followup`, request);
+    return data;
+  },
+
+  // Get dashboard statistics
+  async getDashboardStats(startDate?: string, endDate?: string): Promise<DashboardStats> {
+    const params = new URLSearchParams();
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+
+    const { data } = await api.get<DashboardStats>('/api/dashboard/stats', { params });
     return data;
   },
 };

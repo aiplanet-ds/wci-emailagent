@@ -15,6 +15,77 @@
       "last_updated": "2025-10-19T10:52:10.343227",
       "processed_at": "2025-10-19T10:52:10.343227",
       "processed_by": "adithyatest1617@outlook.com"
+    },
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVwAAAA=": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVwAAAA=",
+      "processed": true,
+      "is_price_change": false,
+      "needs_info": false,
+      "selected_missing_fields": [],
+      "followup_draft": null,
+      "last_updated": "2025-10-19T10:58:53.943653",
+      "processed_at": "2025-10-19T10:58:53.943653",
+      "processed_by": "adithyatest1617@outlook.com"
+    },
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVoAAAA=": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVoAAAA=",
+      "processed": true,
+      "is_price_change": false,
+      "needs_info": false,
+      "selected_missing_fields": [],
+      "followup_draft": null,
+      "last_updated": "2025-10-19T11:50:53.504809",
+      "processed_at": "2025-10-19T11:50:53.504809",
+      "processed_by": "adithyatest1617@outlook.com"
+    },
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVkAAAA=": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVkAAAA=",
+      "processed": true,
+      "is_price_change": false,
+      "needs_info": false,
+      "selected_missing_fields": [],
+      "followup_draft": null,
+      "last_updated": "2025-10-19T11:23:46.981703",
+      "processed_at": "2025-10-19T11:23:46.980687",
+      "processed_by": "adithyatest1617@outlook.com"
+    },
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVsAAAA=": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAACCVsAAAA=",
+      "processed": true,
+      "is_price_change": false,
+      "needs_info": false,
+      "selected_missing_fields": [],
+      "followup_draft": null,
+      "last_updated": "2025-10-19T11:24:36.279792",
+      "processed_at": "2025-10-19T11:24:36.278792",
+      "processed_by": "adithyatest1617@outlook.com"
+    },
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAAAA9oE8gAAAA==": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAAAA9oE8gAAAA==",
+      "processed": false,
+      "is_price_change": false,
+      "needs_info": true,
+      "selected_missing_fields": [
+        "contact_email",
+        "contact_phone"
+      ],
+      "followup_draft": "Dear Adithyavardhan,\n\nThank you for your recent price change notification for Faster Inc. (Indiana), effective October 20, 2045. We appreciate your timely communication and have noted the details of the price increase, including the effective date and product information.\n\nTo ensure we can promptly update our ERP system, we kindly request the following missing information:\n- Supplier contact email address\n- Supplier contact phone number\n\nThese details are required for our records and system compliance. Could you please provide the above information by [3-5 business days from today]? Your assistance will help us process the update without delay.\n\nThank you for your cooperation. If you have any questions, please let us know.\n\nBest regards,",
+      "last_updated": "2025-10-21T08:17:07.852217",
+      "processed_at": null,
+      "processed_by": null
+    },
+    "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAAABJbmewAAAA==": {
+      "message_id": "AQMkADAwATMwMAExLTlmNDEtYWEBYy0wMAItMDAKAEYAAANuIdclAvD5TrXxEUUjOvHuBwAGHUYhsEL3So2jkQ5Fh3yEAAACAQwAAAAGHUYhsEL3So2jkQ5Fh3yEAAAABJbmewAAAA==",
+      "processed": true,
+      "epicor_synced": true,
+      "is_price_change": false,
+      "needs_info": false,
+      "selected_missing_fields": [],
+      "followup_draft": null,
+      "last_updated": "2025-10-21T08:30:14.828658",
+      "epicor_synced_at": "2025-10-21T08:30:14.819042",
+      "processed_at": "2025-10-21T08:30:14.818059",
+      "processed_by": "adithyatest1617@outlook.com"
     }
   }
 }
