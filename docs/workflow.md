@@ -65,18 +65,23 @@ The WCI Email Agent is an automated system that monitors email inboxes for suppl
 │                    EPICOR ERP INTEGRATION                       │
 │              (Epicor REST API v2 - OData)                       │
 │                                                                 │
-│  Step 1: Supplier Verification                                  │
+│  Step A: Supplier Verification                                  │
 │    ├─ VendorSvc: Lookup VendorNum from VendorID               │
 │    └─ SupplierPartSvc: Verify supplier-part relationship       │
 │                                                                 │
-│  Step 2: Price List Management                                  │
-│    ├─ PriceLstSvc: Query existing price list entries          │
-│    └─ Create entry if not found (GetNewPriceLstParts)         │
+│  Step B: Price List Management (SUPPLIER-SPECIFIC)              │
+│    ├─ Get or create supplier price list (SUPPLIER_{id})       │
+│    ├─ Check if part exists in supplier's price list           │
+│    └─ Create part entry if needed (direct POST, RowMod="A")   │
 │                                                                 │
-│  Step 3: Price Update                                           │
-│    ├─ Get current entry with all fields                        │
-│    ├─ Update BasePrice and EffectiveDate                       │
-│    └─ Call Update method with RowMod="U"                       │
+│  Step C: Effective Date Management                              │
+│    ├─ Update price list header StartDate                      │
+│    └─ All parts in list inherit header effective date         │
+│                                                                 │
+│  Step D: Price Update                                           │
+│    ├─ Get current part entry with all fields                  │
+│    ├─ Update BasePrice                                         │
+│    └─ POST to Update with RowMod="U"                           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -133,23 +138,40 @@ Step 2: Verify Supplier-Part Link
     ❌ Failed: Skip this product (log warning)
 ```
 
-### 4️⃣ **Price List Management Phase**
+### 4️⃣ **Price List Management Phase (Supplier-Specific)**
 
 ```
-Query PriceLstSvc for part: "#FFH06-12SAE F"
+Step 1: Get or create supplier price list
+    Check for SUPPLIER_{supplier_id} (e.g., SUPPLIER_FAST1)
                          ↓
     ┌─────────────────┴─────────────────┐
     │                                   │
-✅ Entry Found                    ❌ Entry Not Found
+✅ List Exists                    ❌ List Not Found
     │                                   │
-    │                          Create New Entry:
-    │                          1. GetNewPriceLstParts
-    │                          2. Fill template
-    │                          3. Call Update (RowMod="A")
+    │                          Create Price List Header:
+    │                          - ListCode: SUPPLIER_FAST1
+    │                          - Description: "Price List for..."
+    │                          - StartDate: effective_date
+    │                          - RowMod: "A"
     │                                   │
     └─────────────────┬─────────────────┘
                       ↓
-            Price list entry ready
+Step 2: Check if part exists in supplier's price list
+                         ↓
+    ┌─────────────────┴─────────────────┐
+    │                                   │
+✅ Part Entry Found              ❌ Part Entry Not Found
+    │                                   │
+    │                          Create Part Entry (Direct):
+    │                          - Company, ListCode, PartNum
+    │                          - UOMCode, BasePrice
+    │                          - RowMod: "A" (No template needed)
+    │                                   │
+    └─────────────────┬─────────────────┘
+                      ↓
+Step 3: Update header effective date (all parts inherit)
+                      ↓
+            Price list ready for update
 ```
 
 ### 5️⃣ **Price Update Phase**
@@ -239,56 +261,79 @@ GET /Erp.BO.SupplierPartSvc/SupplierParts?$filter=VendorNum eq 204 and PartNum e
 Response: {"VendorNum": 204, "PartNum": "#FFH06-12SAE F", ...}
 ```
 
-#### **Price List Entry Creation**
+#### **Supplier-Specific Price List Creation**
 
 ```python
-# Step 1: Get template
-POST /Erp.BO.PriceLstSvc/GetNewPriceLstParts
+# Step 1: Check if supplier price list exists
+GET /Erp.BO.PriceLstSvc/PriceLsts?$filter=ListCode eq 'SUPPLIER_FAST1'
+Response: {"value": []} or {"value": [price_list_header]}
+
+# Step 2: Create price list header if needed
+POST /Erp.BO.PriceLstSvc/Update
 Body: {
     "ds": {
-        "PriceLst": [{"Company": "165122", "ListCode": "UNA1"}],
-        "PriceLstParts": []
-    },
-    "listCode": "UNA1",
-    "partNum": "#FFH06-12SAE F",
-    "uomCode": "EA"
+        "PriceLst": [{
+            "Company": "165122",
+            "ListCode": "SUPPLIER_FAST1",
+            "ListDescription": "Price List for Faster Inc.",
+            "StartDate": "2025-10-20T00:00:00",
+            "Active": true,
+            "CurrencyCode": "USD",
+            "RowMod": "A"  // A = Add (create)
+        }]
+    }
 }
-Response: {"parameters": {"ds": {"PriceLstParts": [template]}}}
 
-# Step 2: Fill template and save
+# Step 3: Create part entry (Direct POST - No template needed)
 POST /Erp.BO.PriceLstSvc/Update
 Body: {
     "ds": {
         "PriceLstParts": [{
-            ...template_fields,
+            "Company": "165122",
+            "ListCode": "SUPPLIER_FAST1",
             "PartNum": "#FFH06-12SAE F",
+            "UOMCode": "EA",
             "BasePrice": 130.0,
-            "EffectiveDate": "2025-10-20T00:00:00",
-            "RowMod": "A"  // A = Add
+            "RowMod": "A"  // A = Add (create)
         }]
     }
 }
+// Note: Effective date inherited from header StartDate
 ```
 
-#### **Price Update**
+#### **Effective Date and Price Update**
 
 ```python
-# Step 1: Get current entry
-GET /Erp.BO.PriceLstSvc/PriceLstParts?$filter=ListCode eq 'UNA1' and PartNum eq '#FFH06-12SAE F' and UOMCode eq 'EA'
+# Step 1: Update price list header with effective date (affects all parts)
+GET /Erp.BO.PriceLstSvc/PriceLsts?$filter=ListCode eq 'SUPPLIER_FAST1'
+Response: {price_list_header}
+
+POST /Erp.BO.PriceLstSvc/Update
+Body: {
+    "ds": {
+        "PriceLst": [{
+            ...price_list_header,
+            "StartDate": "2025-10-20T00:00:00",
+            "RowMod": "U"  // U = Update
+        }]
+    }
+}
+
+# Step 2: Update part price (inherits effective date from header)
+GET /Erp.BO.PriceLstSvc/PriceLstParts?$filter=ListCode eq 'SUPPLIER_FAST1' and PartNum eq '#FFH06-12SAE F' and UOMCode eq 'EA'
 Response: {current_entry with all fields}
 
-# Step 2: Update entry
 POST /Erp.BO.PriceLstSvc/Update
 Body: {
     "ds": {
         "PriceLstParts": [{
             ...current_entry,
             "BasePrice": 130.0,
-            "EffectiveDate": "2025-10-20T00:00:00",
             "RowMod": "U"  // U = Update
         }]
     }
 }
+// Note: Effective date managed at header level, not part level
 ```
 
 ---
@@ -307,8 +352,9 @@ Body: {
 
 | Error | Cause | Action |
 |-------|-------|--------|
-| Price list not found | Invalid ListCode | Use default list (UNA1) |
-| Template creation failed | Missing parameters | Log error, skip product |
+| Price list creation failed | Missing Company ID or invalid data | Log error, skip product |
+| Part entry creation failed | Missing required fields | Log error, skip product |
+| Header update failed | Invalid date format | Log warning, continue with price update |
 | Update failed | Validation error | Log detailed error, continue |
 
 ### AI Extraction Errors

@@ -361,6 +361,130 @@ class EpicorAPIService:
             logger.error(f"❌ Exception checking price list existence: {e}")
             return False
 
+    def get_or_create_supplier_price_list(
+        self,
+        supplier_id: str,
+        supplier_name: str = None,
+        effective_date: str = None
+    ) -> Dict[str, Any]:
+        """
+        Get or create a supplier-specific price list
+
+        Uses naming convention: SUPPLIER_{supplier_id}
+        Example: SUPPLIER_FAST1, SUPPLIER_USUI-001
+
+        Args:
+            supplier_id: External supplier identifier (e.g., "FAST1")
+            supplier_name: Supplier name for description (optional)
+            effective_date: Effective start date if creating new list (optional)
+
+        Returns:
+            Dictionary with status, list_code, and created flag
+        """
+        try:
+            # Generate supplier-specific list code
+            list_code = f"SUPPLIER_{supplier_id}"
+
+            logger.info(f"🔍 Checking for supplier price list: {list_code}")
+
+            # Check if price list header exists
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLsts"
+            headers = self._get_headers()
+
+            params = {
+                "$filter": f"ListCode eq '{list_code}'"
+            }
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code != 200:
+                logger.error(f"❌ Failed to check price list: {response.status_code}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to check price list: HTTP {response.status_code}",
+                    "list_code": list_code
+                }
+
+            data = response.json()
+            results = data.get("value", [])
+
+            # If price list exists, return it
+            if results and len(results) > 0:
+                logger.info(f"✅ Supplier price list found: {list_code}")
+                return {
+                    "status": "success",
+                    "message": "Supplier price list exists",
+                    "list_code": list_code,
+                    "created": False,
+                    "price_list": results[0]
+                }
+
+            # Price list doesn't exist - create it
+            logger.info(f"📝 Creating new supplier price list: {list_code}")
+
+            # Prepare description
+            description = f"Price List for {supplier_name or supplier_id}"
+
+            # Prepare start date
+            start_date = effective_date
+            if start_date and 'T' not in start_date:
+                start_date = f"{start_date}T00:00:00"
+
+            # Construct new price list header
+            new_price_list = {
+                "Company": self.company_id,
+                "ListCode": list_code,
+                "ListDescription": description,
+                "StartDate": start_date,
+                "EndDate": None,
+                "Active": True,
+                "CurrencyCode": "USD",  # Default currency
+                "RowMod": "A"  # A = Add (create)
+            }
+
+            # POST to Update endpoint
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
+
+            ds = {
+                "PriceLst": [new_price_list]
+            }
+
+            payload = {"ds": ds}
+
+            logger.info(f"   Creating price list: {list_code}")
+            logger.info(f"   Description: {description}")
+            if start_date:
+                logger.info(f"   StartDate: {start_date}")
+
+            response = requests.post(update_url, json=payload, headers=headers, timeout=10)
+
+            if response.status_code == 200:
+                logger.info(f"✅ Supplier price list created successfully: {list_code}")
+                return {
+                    "status": "success",
+                    "message": "Supplier price list created",
+                    "list_code": list_code,
+                    "created": True,
+                    "start_date": start_date
+                }
+            else:
+                logger.error(f"❌ Failed to create price list: {response.status_code}")
+                logger.error(f"   Response: {response.text[:500]}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to create price list: HTTP {response.status_code}: {response.text[:200]}",
+                    "list_code": list_code,
+                    "status_code": response.status_code
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Exception in get_or_create_supplier_price_list: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "list_code": f"SUPPLIER_{supplier_id}"
+            }
+
     def create_price_list_entry(
         self,
         part_num: str,
@@ -370,17 +494,15 @@ class EpicorAPIService:
         list_code: str = None
     ) -> Dict[str, Any]:
         """
-        Create a new price list entry (Step B: Price List Creation - NO path)
+        Create a new price list entry using direct POST (Step B: Price List Creation - NO path)
 
-        This follows the diagram workflow:
-        1. GET PriceListSvc: Retrieve Price List Template
-        2. Complete Template with Details
-        3. POST PriceListSvc: Save New Price List
+        Uses Epicor's direct insert workflow with RowMod="A" instead of template-based creation.
+        The GetNewPriceLstParts endpoint does not exist in Epicor REST API.
 
         Args:
             part_num: Part number
             base_price: Base price for the part
-            effective_date: Effective date in ISO format (e.g., "2025-10-20")
+            effective_date: Effective date (managed at header level, not used here)
             uom_code: Unit of measure code (default: "EA")
             list_code: Price list code (uses default if not specified)
 
@@ -398,76 +520,38 @@ class EpicorAPIService:
             logger.info(f"      BasePrice: ${base_price}")
             logger.info(f"      UOMCode: {uom_code}")
 
-            # === Step 1: GET PriceListSvc: Retrieve Price List Template ===
-            logger.info(f"      1️⃣  GET PriceListSvc: Retrieving price list template...")
-            get_new_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/GetNewPriceLstParts"
-            headers = self._get_headers()
+            # Construct new price list part entry directly
+            # No template needed - Epicor REST API supports direct POST with RowMod="A"
+            logger.info(f"      Constructing new price list entry...")
 
-            get_new_payload = {
-                "ds": {
-                    "PriceLst": [{
-                        "Company": self.company_id,
-                        "ListCode": list_code
-                    }],
-                    "PriceLstParts": []
-                },
-                "listCode": list_code,
-                "partNum": part_num,
-                "uomCode": uom_code
+            new_entry = {
+                "Company": self.company_id,
+                "ListCode": list_code,
+                "PartNum": part_num,
+                "UOMCode": uom_code,
+                "BasePrice": base_price,
+                "RowMod": "A"  # A = Add (create new entry)
             }
-
-            response1 = requests.post(get_new_url, headers=headers, json=get_new_payload, timeout=10)
-
-            if response1.status_code != 200:
-                error_msg = response1.text
-                logger.error(f"      ❌ Failed to retrieve template: {response1.status_code}")
-                logger.error(f"         Response: {error_msg[:300]}")
-                return {
-                    "status": "error",
-                    "message": f"GetNewPriceLstParts failed: HTTP {response1.status_code}: {error_msg[:200]}",
-                    "list_code": list_code,
-                    "part_num": part_num
-                }
-
-            # === Step 2: Complete Template with Details ===
-            logger.info(f"      2️⃣  Complete Template with Details...")
-            template_data = response1.json()
-
-            # Try different possible response structures
-            ds = template_data.get("returnObj") or template_data.get("parameters", {}).get("ds") or template_data
-
-            if not ds.get("PriceLstParts"):
-                logger.error(f"      ❌ No template returned from API")
-                return {
-                    "status": "error",
-                    "message": "No template returned from GetNewPriceLstParts",
-                    "list_code": list_code,
-                    "part_num": part_num
-                }
-
-            # Get the template record and fill in the details
-            new_record = ds["PriceLstParts"][0]
-
-            new_record["PartNum"] = part_num
-            new_record["UOMCode"] = uom_code
-            new_record["BasePrice"] = base_price
-            new_record["RowMod"] = "A"  # A = Add
 
             # Note: Effective dates are managed at header level only (Step C)
             # Parts inherit the StartDate from the price list header
-            logger.info(f"         ℹ️  Effective date will be managed at header level")
+            logger.info(f"      ℹ️  Effective date will be managed at header level")
 
-            logger.info(f"         ✅ Template completed with part details")
-
-            # === Step 3: POST PriceListSvc: Save New Price List ===
-            logger.info(f"      3️⃣  POST PriceListSvc: Saving new price list entry...")
+            # POST to Update endpoint
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
-            update_payload = {"ds": ds}
+            headers = self._get_headers()
 
-            response2 = requests.post(update_url, headers=headers, json=update_payload, timeout=10)
+            ds = {
+                "PriceLstParts": [new_entry]
+            }
 
-            if response2.status_code == 200:
-                logger.info(f"         ✅ Price list entry saved successfully")
+            payload = {"ds": ds}
+
+            logger.info(f"      Saving new price list entry...")
+            response = requests.post(update_url, headers=headers, json=payload, timeout=10)
+
+            if response.status_code == 200:
+                logger.info(f"      ✅ Price list entry created successfully")
                 return {
                     "status": "success",
                     "message": "Price list entry created",
@@ -477,13 +561,13 @@ class EpicorAPIService:
                     "effective_date": effective_date
                 }
             else:
-                error_msg = response2.text
-                logger.error(f"      ❌ Failed to save entry: {response2.status_code}")
+                error_msg = response.text
+                logger.error(f"      ❌ Failed to create entry: {response.status_code}")
                 logger.error(f"         Response: {error_msg[:300]}")
 
                 return {
                     "status": "error",
-                    "message": f"Update failed: HTTP {response2.status_code}: {error_msg[:200]}",
+                    "message": f"Create failed: HTTP {response.status_code}: {error_msg[:200]}",
                     "list_code": list_code,
                     "part_num": part_num
                 }
@@ -493,7 +577,7 @@ class EpicorAPIService:
             return {
                 "status": "error",
                 "message": str(e),
-                "list_code": list_code,
+                "list_code": list_code if list_code else "unknown",
                 "part_num": part_num
             }
 
@@ -943,17 +1027,34 @@ class EpicorAPIService:
             # ========== STEP B: PRICE LIST CREATION ==========
             logger.info(f"📋 STEP B: PRICE LIST CREATION")
 
-            # First, determine which price list to use
-            price_lists = self.get_price_list_parts(part_num)
+            # Get or create supplier-specific price list (SUPPLIER_{supplier_id})
+            logger.info(f"   🔄 Getting or creating supplier-specific price list...")
+            price_list_result = self.get_or_create_supplier_price_list(
+                supplier_id=supplier_id,
+                supplier_name=vendor_name,
+                effective_date=effective_date
+            )
 
-            if price_lists and len(price_lists) > 0:
-                list_code = price_lists[0].get("ListCode")
-                logger.info(f"   ℹ️  Found existing price list: {list_code}")
+            if price_list_result.get("status") != "success":
+                logger.error(f"❌ Step B Failed: Could not get/create supplier price list")
+                return {
+                    "status": "error",
+                    "message": f"Failed to get/create supplier price list: {price_list_result.get('message')}",
+                    "part_num": part_num,
+                    "supplier_id": supplier_id,
+                    "vendor_num": vendor_num,
+                    "step_failed": "Step B: Price List Creation (Header)"
+                }
+
+            list_code = price_list_result.get("list_code")
+            price_list_created = price_list_result.get("created", False)
+
+            if price_list_created:
+                logger.info(f"   ✅ Created new supplier price list: {list_code}")
             else:
-                list_code = self.default_price_list
-                logger.info(f"   ℹ️  Using default price list: {list_code}")
+                logger.info(f"   ✅ Using existing supplier price list: {list_code}")
 
-            # Check if price list entry exists (Step B decision point)
+            # Check if price list entry exists for this part (Step B decision point)
             price_list_exists = self.check_price_list_exists(list_code, part_num, uom_code)
 
             if not price_list_exists:
