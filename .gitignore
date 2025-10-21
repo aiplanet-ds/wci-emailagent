@@ -211,6 +211,11 @@ active_users.json
 delta_cache/
 delta_state/
 
+# Application state files (contains runtime state and processed data)
+data/email_states.json
+data/*.json
+!data/.gitkeep
+
 # Session secrets and security keys
 session_secret.key
 
@@ -246,11 +251,17 @@ config.backup
 test_emails/
 test_outputs/
 
-# Node.js (if using any frontend tools)
+# Node.js and Frontend
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+frontend/.env.local
 
 # Package files
 *.zip
@@ -259,14 +270,15 @@ yarn-error.log*
 *.7z
 
 # Office files that might be downloaded as attachments
-*.docx
-*.xlsx
-*.pptx
-*.pdf
-# Note: You might want to keep some sample files for testing
-# In that case, create a samples/ folder and add specific exceptions like:
-# !samples/*.pdf
-# !samples/*.xlsx
+# Only ignore them in downloads and outputs folders
+downloads/*.docx
+downloads/*.xlsx
+downloads/*.pptx
+downloads/*.pdf
+outputs/*.docx
+outputs/*.xlsx
+outputs/*.pptx
+outputs/*.pdf
 
 # Email-specific temporary files
 mail_temp/
