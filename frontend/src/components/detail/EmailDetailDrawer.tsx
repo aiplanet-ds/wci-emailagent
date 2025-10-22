@@ -1,6 +1,7 @@
-import { X, Mail, CheckCircle2, Circle } from 'lucide-react';
+import { X, Mail, CheckCircle2, Circle, Shield } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/Badge';
+import { VerificationBadge } from '../ui/VerificationBadge';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { formatDate } from '../../lib/utils';
@@ -164,6 +165,51 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
             <div className="px-6 py-6 space-y-6">
               {/* Workflow Stepper - Shows 3-Stage Workflow */}
               <WorkflowStepper hasEpicorSync={!!data.epicor_status} />
+
+              {/* Vendor Verification Status */}
+              {data.state.verification_status && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                  <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-blue-600" />
+                    Vendor Verification
+                  </h4>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Status:</span>
+                      <VerificationBadge
+                        status={data.state.verification_status}
+                        method={data.state.verification_method}
+                        showMethod
+                      />
+                    </div>
+
+                    {data.state.vendor_info && (
+                      <div className="text-sm">
+                        <span className="text-gray-600">Vendor:</span>{' '}
+                        <span className="font-medium text-gray-900">
+                          {data.state.vendor_info.vendor_name} ({data.state.vendor_info.vendor_id})
+                        </span>
+                      </div>
+                    )}
+
+                    {data.state.manually_approved_by && (
+                      <div className="text-xs text-gray-500 pt-2 border-t border-gray-200">
+                        Manually approved by {data.state.manually_approved_by}
+                        {data.state.manually_approved_at && (
+                          <> on {formatDate(data.state.manually_approved_at)}</>
+                        )}
+                      </div>
+                    )}
+
+                    {data.state.flagged_reason && (
+                      <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                        {data.state.flagged_reason}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Supplier Info */}
               <SupplierInfo supplier={data.email_data.supplier_info} />

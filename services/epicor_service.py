@@ -177,6 +177,56 @@ class EpicorAPIService:
             logger.error(f"❌ Exception looking up vendor: {e}")
             return None
 
+    def get_all_vendor_emails(self) -> List[Dict[str, Any]]:
+        """
+        Fetch all vendor emails from Epicor VendorSvc
+        Used for vendor verification to prevent AI token waste on random emails
+
+        Returns:
+            List of dicts: [
+                {"vendor_id": "ACME1", "name": "Acme Corp", "email": "contact@acme.com"},
+                ...
+            ]
+        """
+        try:
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.VendorSvc/Vendors"
+            headers = self._get_headers()
+
+            params = {
+                "$select": "VendorID,Name,EMailAddress",
+                "$filter": "EMailAddress ne null and EMailAddress ne ''"
+            }
+
+            logger.info("🔍 Fetching vendor emails from Epicor VendorSvc...")
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                vendors = data.get("value", [])
+
+                result = []
+                for v in vendors:
+                    email = v.get("EMailAddress")
+                    vendor_id = v.get("VendorID")
+                    name = v.get("Name")
+
+                    if email and vendor_id:
+                        result.append({
+                            "vendor_id": vendor_id,
+                            "name": name,
+                            "email": email.lower().strip() if email else None
+                        })
+
+                logger.info(f"✅ Fetched {len(result)} vendors with email addresses")
+                return result
+            else:
+                logger.error(f"❌ Failed to fetch vendors: {response.status_code} - {response.text[:200]}")
+                return []
+
+        except Exception as e:
+            logger.error(f"❌ Exception fetching vendor emails: {e}")
+            return []
+
     def verify_supplier_part(self, supplier_id: str, part_num: str) -> Optional[Dict[str, Any]]:
         """
         Verify supplier-part relationship using SupplierPartSvc (2-step process)

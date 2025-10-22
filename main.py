@@ -8,8 +8,14 @@ DOWNLOADS_DIR = "downloads"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
-def process_user_message(msg, user_email):
-    """Process a single email message for a specific user with data isolation"""
+def process_user_message(msg, user_email, skip_verification=False):
+    """Process a single email message for a specific user with data isolation
+
+    Args:
+        msg: Email message dict from Microsoft Graph API
+        user_email: Email address of the user
+        skip_verification: If True, bypass vendor verification check (for manually approved emails)
+    """
     # Create user-specific output directory
     safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
     user_output_dir = os.path.join(OUTPUT_DIR, safe_email)
@@ -89,6 +95,21 @@ def process_user_message(msg, user_email):
         print("   ⚠️  No content to process")
         print("="*80 + "\n")
         return
+
+    # ========== PRE-STAGE 2: VENDOR VERIFICATION CHECK ==========
+    if not skip_verification:
+        from services.email_state_service import email_state_service
+        state = email_state_service.get_email_state(message_id)
+
+        if state.get('verification_status') == 'pending_review':
+            print("\n⚠️  EMAIL FLAGGED FOR VERIFICATION")
+            print("-"*80)
+            print("   This email is from an unverified sender")
+            print("   AI extraction skipped to save tokens")
+            print("   📋 Review this email in the dashboard 'Pending Verification' tab")
+            print("   ✅ Approve to trigger AI extraction")
+            print("="*80 + "\n")
+            return
 
     # ========== STAGE 2: AI ENTITY EXTRACTION ==========
     print("\n🤖 STAGE 2: AI ENTITY EXTRACTION")

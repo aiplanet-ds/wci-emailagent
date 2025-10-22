@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { Inbox } from './pages/Inbox';
 import { Dashboard } from './pages/Dashboard';
+import { PendingVerification } from './pages/PendingVerification';
+import { Settings } from './pages/Settings';
 import { useCurrentUser } from './hooks/useEmails';
 
 function App() {
@@ -47,6 +49,8 @@ function App() {
           <Route path="/" element={<Navigate to="/inbox" replace />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/pending-verification" element={<PendingVerification />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </DashboardLayout>
     </BrowserRouter>

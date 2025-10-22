@@ -126,7 +126,12 @@ def get_all_price_change_emails(user_email: str) -> List[Dict[str, Any]]:
                         "products_count": len(email_data.get("affected_products", [])),
                         "has_epicor_sync": epicor_status is not None,
                         "epicor_success_count": epicor_status.get("successful", 0) if epicor_status else 0,
-                        "file_path": file_path
+                        "file_path": file_path,
+                        "verification_status": state.get("verification_status", "pending_review"),
+                        "vendor_verified": state.get("vendor_verified", False),
+                        "verification_method": state.get("verification_method"),
+                        "flagged_reason": state.get("flagged_reason"),
+                        "received_time": email_metadata.get("date", None)
                     })
                 except Exception as e:
                     print(f"Error loading email {filename}: {str(e)}")
@@ -163,6 +168,8 @@ async def list_emails(
         emails = [e for e in emails if e.get("processed")]
     elif filter == "unprocessed":
         emails = [e for e in emails if not e.get("processed")]
+    elif filter == "pending_verification":
+        emails = [e for e in emails if e.get("verification_status") == "pending_review"]
 
     # Apply search
     if search:
@@ -360,4 +367,140 @@ async def generate_followup(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate follow-up email: {str(e)}"
+        )
+
+
+@router.get("/pending-verification", response_model=EmailListResponse)
+async def list_pending_verification_emails(request: Request):
+    """Get all emails pending vendor verification"""
+    user_email = get_user_from_session(request)
+    all_emails = get_all_price_change_emails(user_email)
+
+    # Filter for pending verification
+    pending_emails = []
+    for email in all_emails:
+        # Get state to check verification status
+        message_id = email.get("message_id")
+        state = email_state_service.get_email_state(message_id)
+
+        if state.get("verification_status") == "pending_review":
+            # Add verification fields to email info
+            email["verification_status"] = state.get("verification_status")
+            email["flagged_reason"] = state.get("flagged_reason")
+            email["vendor_verified"] = state.get("vendor_verified", False)
+            pending_emails.append(email)
+
+    return EmailListResponse(emails=pending_emails, total=len(pending_emails))
+
+
+@router.post("/{message_id}/approve-and-process")
+async def approve_and_process_email(message_id: str, request: Request):
+    """Manually approve unverified email and trigger AI extraction"""
+    user_email = get_user_from_session(request)
+    outputs_dir = get_user_outputs_directory(user_email)
+
+    # Load flagged email metadata
+    email_file = os.path.join(outputs_dir, f"price_change_{message_id}.json")
+    if not os.path.exists(email_file):
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    # Check if already processed
+    state = email_state_service.get_email_state(message_id)
+    if state.get("verification_status") != "pending_review":
+        raise HTTPException(
+            status_code=400,
+            detail="Email is not pending verification"
+        )
+
+    # Mark as manually approved
+    email_state_service.mark_as_manually_approved(message_id, user_email)
+
+    # Trigger AI extraction with skip_verification=True
+    try:
+        # Get original message from Graph API
+        graph_client = MultiUserGraphClient()
+        msg = graph_client.get_user_message_by_id(user_email, message_id)
+
+        # Process with AI extraction
+        from main import process_user_message
+        process_user_message(msg, user_email, skip_verification=True)
+
+        # Reload processed email data
+        email_data = load_email_json(email_file)
+        state = email_state_service.get_email_state(message_id)
+        validation = validation_service.validate_email_data(email_data)
+
+        return {
+            "success": True,
+            "message": "Email approved and processed successfully",
+            "email_data": email_data,
+            "state": state,
+            "validation": validation
+        }
+
+    except Exception as e:
+        # Revert approval if processing failed
+        email_state_service.update_email_state(message_id, {
+            "verification_status": "pending_review",
+            "vendor_verified": False,
+            "manually_approved_by": None,
+            "manually_approved_at": None
+        })
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process approved email: {str(e)}"
+        )
+
+
+@router.post("/{message_id}/reject")
+async def reject_email(message_id: str, request: Request):
+    """Reject/ignore unverified email"""
+    user_email = get_user_from_session(request)
+
+    # Check if email exists and is pending verification
+    state = email_state_service.get_email_state(message_id)
+    if state.get("verification_status") != "pending_review":
+        raise HTTPException(
+            status_code=400,
+            detail="Email is not pending verification"
+        )
+
+    # Mark as rejected
+    email_state_service.mark_as_rejected(message_id)
+
+    return {
+        "success": True,
+        "message": "Email rejected successfully"
+    }
+
+
+@router.get("/vendors/cache-status")
+async def get_vendor_cache_status(request: Request):
+    """Get vendor cache information"""
+    get_user_from_session(request)  # Verify authentication
+
+    from services.vendor_verification_service import vendor_verification_service
+
+    status = vendor_verification_service.get_cache_status()
+    return status
+
+
+@router.post("/vendors/refresh-cache")
+async def refresh_vendor_cache(request: Request):
+    """Manually refresh vendor cache from Epicor"""
+    get_user_from_session(request)  # Verify authentication
+
+    from services.vendor_verification_service import vendor_verification_service
+
+    try:
+        result = vendor_verification_service.refresh_cache()
+        return {
+            "success": True,
+            "message": "Vendor cache refreshed successfully",
+            "cache_status": vendor_verification_service.get_cache_status()
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to refresh vendor cache: {str(e)}"
         )

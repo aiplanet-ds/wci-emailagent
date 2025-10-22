@@ -15,6 +15,7 @@ const filters: { value: EmailFilter; label: string }[] = [
   { value: 'non_price_change', label: 'Not Price Change' },
   { value: 'processed', label: 'Processed' },
   { value: 'unprocessed', label: 'Unprocessed' },
+  { value: 'pending_verification', label: 'Pending Verification' },
 ];
 
 export function InboxFilters({ filter, onFilterChange, search, onSearchChange }: InboxFiltersProps) {

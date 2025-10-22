@@ -68,6 +68,11 @@ export interface ValidationResult {
   is_price_change: boolean;
 }
 
+export interface VendorInfo {
+  vendor_id: string;
+  vendor_name: string;
+}
+
 export interface EmailState {
   message_id: string;
   processed: boolean;
@@ -78,6 +83,13 @@ export interface EmailState {
   last_updated: string | null;
   processed_at: string | null;
   processed_by: string | null;
+  vendor_verified: boolean;
+  verification_status: 'verified' | 'unverified' | 'manually_approved' | 'pending_review' | 'rejected';
+  verification_method: 'exact_email' | 'domain_match' | 'manual_approval' | null;
+  vendor_info: VendorInfo | null;
+  manually_approved_by: string | null;
+  manually_approved_at: string | null;
+  flagged_reason: string | null;
 }
 
 export interface EpicorUpdateDetail {
@@ -126,6 +138,11 @@ export interface EmailListItem {
   has_epicor_sync: boolean;
   epicor_success_count: number;
   file_path: string;
+  verification_status: string;
+  vendor_verified: boolean;
+  verification_method?: string | null;
+  flagged_reason?: string | null;
+  received_time?: string;
 }
 
 export interface EmailListResponse {
@@ -156,5 +173,16 @@ export interface UserInfo {
   name: string | null;
 }
 
+export interface VendorCacheStatus {
+  last_updated: string | null;
+  vendor_count: number;
+  email_count: number;
+  domain_count: number;
+  is_stale: boolean;
+  ttl_hours: number;
+  next_refresh: string | null;
+  domain_matching_enabled: boolean;
+}
+
 // Filter types
-export type EmailFilter = 'all' | 'price_change' | 'non_price_change' | 'processed' | 'unprocessed';
+export type EmailFilter = 'all' | 'price_change' | 'non_price_change' | 'processed' | 'unprocessed' | 'pending_verification';

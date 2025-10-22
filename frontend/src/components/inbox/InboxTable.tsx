@@ -1,5 +1,6 @@
 import { Mail, AlertCircle, CheckCircle2, Package } from 'lucide-react';
 import { Badge } from '../ui/Badge';
+import { VerificationBadge } from '../ui/VerificationBadge';
 import { formatDate } from '../../lib/utils';
 import type { EmailListItem } from '../../types/email';
 
@@ -65,7 +66,10 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
                 {formatDate(email.date)}
               </td>
               <td className="px-6 py-4">
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
+                  {email.verification_status && (
+                    <VerificationBadge status={email.verification_status} />
+                  )}
                   {email.is_price_change && (
                     <Badge variant="info">Price Change</Badge>
                   )}

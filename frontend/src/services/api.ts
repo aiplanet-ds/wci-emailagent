@@ -5,7 +5,8 @@ import type {
   FollowupRequest,
   FollowupResponse,
   UserInfo,
-  EmailFilter
+  EmailFilter,
+  VendorCacheStatus
 } from '../types/email';
 import type { DashboardStats } from '../types/dashboard';
 
@@ -69,6 +70,38 @@ export const emailApi = {
     if (endDate) params.append('end_date', endDate);
 
     const { data } = await api.get<DashboardStats>('/api/dashboard/stats', { params });
+    return data;
+  },
+
+  // Get pending verification emails
+  async getPendingVerificationEmails(): Promise<EmailListResponse> {
+    const { data } = await api.get<EmailListResponse>('/api/emails', {
+      params: { filter: 'pending_verification' }
+    });
+    return data;
+  },
+
+  // Approve and process flagged email
+  async approveAndProcessEmail(messageId: string): Promise<any> {
+    const { data } = await api.post(`/api/emails/${messageId}/approve-and-process`);
+    return data;
+  },
+
+  // Reject flagged email
+  async rejectEmail(messageId: string): Promise<any> {
+    const { data } = await api.post(`/api/emails/${messageId}/reject`);
+    return data;
+  },
+
+  // Get vendor cache status
+  async getVendorCacheStatus(): Promise<VendorCacheStatus> {
+    const { data } = await api.get<VendorCacheStatus>('/api/emails/vendors/cache-status');
+    return data;
+  },
+
+  // Refresh vendor cache
+  async refreshVendorCache(): Promise<any> {
+    const { data } = await api.post('/api/emails/vendors/refresh-cache');
     return data;
   },
 };
