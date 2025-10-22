@@ -25,13 +25,14 @@ def process_user_message(msg, user_email):
     message_id = msg.get("id", "")
 
     print("\n" + "="*80)
-    print(f"📧 PROCESSING EMAIL FOR: {user_email}")
+    print(f"🚀 EMAIL INTELLIGENCE SYSTEM - 3-STAGE WORKFLOW")
     print("="*80)
+    print(f"📧 Processing email for: {user_email}")
     print(f"📌 Subject: {subject}")
     print(f"👤 From: {sender}")
     print(f"📅 Date: {date_received}")
     print(f"🆔 Message ID: {message_id[:20]}...")
-    print("-"*80)
+    print("="*80)
     
     # Prepare metadata
     email_metadata = {
@@ -44,12 +45,16 @@ def process_user_message(msg, user_email):
         "attachments": []
     }
     
+    # ========== STAGE 1: EMAIL DETECTION ==========
+    print("\n📬 STAGE 1: EMAIL DETECTION")
+    print("-"*80)
+
     # Process attachments with user-specific download directory
     attachment_paths = []
     has_attachments = msg.get("hasAttachments", False)
 
     if has_attachments:
-        print("📎 PROCESSING ATTACHMENTS...")
+        print("📎 Processing attachments...")
         # Import here to avoid circular import issues
         from auth.multi_graph import graph_client
         attachments = graph_client.get_user_message_attachments(user_email, message_id)
@@ -72,21 +77,30 @@ def process_user_message(msg, user_email):
     if body_data:
         email_body = body_data.get("content", "")
 
-    print(f"\n📊 EMAIL CONTENT SUMMARY:")
+    print(f"✅ Stage 1 Complete: Content extracted")
     print(f"   📝 Body length: {len(email_body)} characters")
     print(f"   📎 Attachments: {len(attachment_paths)}")
-    print("-"*80)
+    print("="*80)
     
     # Process all content (email body + attachments)
     combined_content = process_all_content(email_body, attachment_paths)
-    
+
     if not combined_content.strip():
         print("   ⚠️  No content to process")
+        print("="*80 + "\n")
         return
-    
-    # Extract structured data
-    print("\n🤖 AZURE OPENAI EXTRACTION:")
-    print("   🔄 Analyzing email content with AI...")
+
+    # ========== STAGE 2: AI ENTITY EXTRACTION ==========
+    print("\n🤖 STAGE 2: AI ENTITY EXTRACTION")
+    print("-"*80)
+    print("🔄 Azure OpenAI GPT-4.1 Processing...")
+    print("   Extracting parallel entities:")
+    print("   • Supplier ID")
+    print("   • Part Name & Number")
+    print("   • Effective Date")
+    print("   • New Price")
+    print("   • Reason for Change")
+
     try:
         result = extract_price_change_json(combined_content, email_metadata)
 
@@ -103,83 +117,17 @@ def process_user_message(msg, user_email):
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
 
-        print(f"   ✅ Extraction successful!")
+        print(f"✅ Stage 2 Complete: Data extracted successfully")
         print(f"   💾 Saved to: {output_filename}")
 
         # Print summary of extracted data
-        print("\n📋 EXTRACTED DATA SUMMARY:")
+        print("\n📋 Extracted Data Summary:")
         print_extraction_summary(result)
-        print("-"*80)
+        print("="*80)
 
-        # 🚀 AUTOMATIC EPICOR UPDATE
-        print("\n💼 EPICOR ERP UPDATE:")
-        print("   🔄 Initiating automatic price update...")
-        try:
-            from services.epicor_service import epicor_service
-
-            affected_products = result.get("affected_products", [])
-            if affected_products:
-                print(f"   📦 Products to update: {len(affected_products)}")
-
-                # Log each product
-                for i, product in enumerate(affected_products, 1):
-                    product_id = product.get("product_id") or product.get("product_code", "Unknown")
-                    new_price = product.get("new_price", "N/A")
-                    print(f"      {i}. Part: {product_id} → New Price: ${new_price}")
-
-                print("\n   🔄 Updating prices in Epicor...")
-                # Perform batch update
-                epicor_results = epicor_service.batch_update_prices(affected_products)
-
-                # Save Epicor update results
-                epicor_output_filename = f"epicor_update_{message_id}.json"
-                epicor_output_path = os.path.join(user_output_dir, epicor_output_filename)
-
-                with open(epicor_output_path, "w", encoding="utf-8") as f:
-                    json.dump(epicor_results, f, indent=2, ensure_ascii=False)
-
-                # Log detailed results
-                print(f"\n   ✅ EPICOR UPDATE COMPLETE!")
-                print(f"   📊 Results:")
-                print(f"      ✅ Successful: {epicor_results['successful']}")
-                print(f"      ❌ Failed: {epicor_results['failed']}")
-                print(f"      ⏭️  Skipped: {epicor_results['skipped']}")
-                print(f"   💾 Results saved to: {epicor_output_filename}")
-
-                # Log individual results
-                if epicor_results.get('details'):
-                    print("\n   📋 Detailed Results:")
-                    for detail in epicor_results['details']:
-                        part_num = detail.get('part_num', 'Unknown')
-                        status = detail.get('status', 'unknown')
-                        if status == 'success':
-                            old_price = detail.get('old_price', 'N/A')
-                            new_price = detail.get('new_price', 'N/A')
-                            print(f"      ✅ {part_num}: ${old_price} → ${new_price}")
-                        elif status == 'failed':
-                            reason = detail.get('message', 'Unknown error')
-                            print(f"      ❌ {part_num}: {reason}")
-                        elif status == 'skipped':
-                            reason = detail.get('reason', 'Unknown')
-                            print(f"      ⏭️  {part_num}: {reason}")
-            else:
-                print("   ⚠️  No products found in extraction")
-                print("   ⏭️  Skipping Epicor update")
-
-        except Exception as epicor_error:
-            print(f"\n   ❌ EPICOR UPDATE FAILED!")
-            print(f"   ⚠️  Error: {epicor_error}")
-            # Save error log
-            error_log = {
-                "error": str(epicor_error),
-                "message_id": message_id,
-                "timestamp": email_metadata.get("date")
-            }
-            error_path = os.path.join(user_output_dir, f"epicor_error_{message_id}.json")
-            with open(error_path, "w", encoding="utf-8") as f:
-                json.dump(error_log, f, indent=2, ensure_ascii=False)
-            print(f"   💾 Error log saved to: epicor_error_{message_id}.json")
-
+        # Note: Epicor sync will happen when user clicks "Process" button in the UI
+        print("\n💼 Email extracted and ready for processing")
+        print("   ℹ️  Epicor sync will occur when you click 'Mark as Processed' in the dashboard")
         print("="*80)
         print("✅ EMAIL PROCESSING COMPLETE")
         print("="*80 + "\n")
@@ -246,16 +194,23 @@ def print_extraction_summary(data):
     if "error" in data:
         print(f"   ❌ Extraction error: {data['error']}")
         return
-    
+
     # Supplier info
-    supplier_name = data.get("supplier_info", {}).get("supplier_name")
+    supplier_info = data.get("supplier_info", {})
+    supplier_id = supplier_info.get("supplier_id")
+    supplier_name = supplier_info.get("supplier_name")
+
+    if supplier_id:
+        print(f"   🏢 Supplier ID: {supplier_id}")
     if supplier_name:
-        print(f"   🏢 Supplier: {supplier_name}")
-    
-    # Price change details
+        print(f"   🏢 Supplier Name: {supplier_name}")
+
+    # Price change details (check both locations for backward compatibility)
     change_details = data.get("price_change_details", {})
-    change_type = change_details.get("change_type")
-    effective_date = change_details.get("effective_date")
+    price_change_summary = data.get("price_change_summary", {})
+
+    change_type = change_details.get("change_type") or price_change_summary.get("change_type")
+    effective_date = change_details.get("effective_date") or price_change_summary.get("effective_date")
     
     if change_type:
         print(f"   📈 Change Type: {change_type}")

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create vite@latest frontend -- --template react-ts)",
+      "Bash(npm install)",
+      "Bash(npm install @tanstack/react-query axios react-router-dom lucide-react tailwindcss postcss autoprefixer class-variance-authority clsx tailwind-merge)",
+      "Bash(npx tailwindcss init -p)",
+      "Bash(npm run build)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
