@@ -58,7 +58,14 @@ class EmailStateService:
             "last_updated": None,
             "processed_at": None,
             "processed_by": None,
-            "epicor_synced_at": None
+            "epicor_synced_at": None,
+            "vendor_verified": False,
+            "verification_status": "pending_review",
+            "verification_method": None,
+            "vendor_info": None,
+            "manually_approved_by": None,
+            "manually_approved_at": None,
+            "flagged_reason": None
         })
 
     def update_email_state(
@@ -82,7 +89,14 @@ class EmailStateService:
             "selected_missing_fields": [],
             "followup_draft": None,
             "last_updated": None,
-            "epicor_synced_at": None
+            "epicor_synced_at": None,
+            "vendor_verified": False,
+            "verification_status": "pending_review",
+            "verification_method": None,
+            "vendor_info": None,
+            "manually_approved_by": None,
+            "manually_approved_at": None,
+            "flagged_reason": None
         })
 
         # Update with new values
@@ -169,6 +183,42 @@ class EmailStateService:
             return True
 
         return False
+
+    def mark_as_vendor_verified(
+        self,
+        message_id: str,
+        method: str,
+        vendor_info: Optional[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """Mark email as verified vendor"""
+        return self.update_email_state(message_id, {
+            "vendor_verified": True,
+            "verification_status": "verified",
+            "verification_method": method,
+            "vendor_info": vendor_info
+        })
+
+    def mark_as_manually_approved(
+        self,
+        message_id: str,
+        user_email: str
+    ) -> Dict[str, Any]:
+        """Mark email as manually approved by user"""
+        return self.update_email_state(message_id, {
+            "vendor_verified": True,
+            "verification_status": "manually_approved",
+            "verification_method": "manual_approval",
+            "manually_approved_by": user_email,
+            "manually_approved_at": datetime.utcnow().isoformat()
+        })
+
+    def mark_as_rejected(self, message_id: str) -> Dict[str, Any]:
+        """Mark email as rejected/ignored"""
+        return self.update_email_state(message_id, {
+            "verification_status": "rejected",
+            "processed": True,
+            "processed_at": datetime.utcnow().isoformat()
+        })
 
 
 # Global instance

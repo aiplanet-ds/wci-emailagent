@@ -191,27 +191,84 @@ class DeltaEmailService:
         return False
 
     async def process_user_messages(self, user_email: str, messages: List[Dict]):
-        """Process new messages for a user with liberal price change filtering"""
+        """Process new messages for a user with vendor verification and liberal price change filtering"""
         from main import process_user_message
+        from services.vendor_verification_service import vendor_verification_service
+        from services.email_state_service import email_state_service
 
         processed_count = 0
         skipped_count = 0
+        flagged_count = 0
 
         for i, message in enumerate(messages, 1):
             try:
                 subject = message.get('subject', 'No Subject')
+                message_id = message.get('id', '')
+                sender_info = message.get('from', {}).get('emailAddress', {})
+                sender_email = sender_info.get('address', '').lower() if sender_info else ''
+
                 logger.info(f"\n📧 Email {i}/{len(messages)}: {subject}")
+                logger.info(f"   From: {sender_email}")
 
                 # Use liberal filtering to identify potential price change emails
                 if self.is_price_change_email(message):
-                    logger.info(f"   ✅ PRICE CHANGE DETECTED - Processing...")
+                    logger.info(f"   ✅ PRICE CHANGE DETECTED")
 
-                    # Get full message details
-                    full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                    # VENDOR VERIFICATION CHECK (before AI extraction)
+                    verification_enabled = os.getenv("VENDOR_VERIFICATION_ENABLED", "true").lower() == "true"
 
-                    # Process the message
-                    await asyncio.to_thread(process_user_message, full_message, user_email)
-                    processed_count += 1
+                    if verification_enabled:
+                        verification_result = vendor_verification_service.verify_sender(sender_email)
+
+                        if verification_result['is_verified']:
+                            # VERIFIED VENDOR - Proceed with AI extraction
+                            method = verification_result['method']
+                            logger.info(f"   ✅ VERIFIED VENDOR ({method})")
+
+                            # Get full message details
+                            full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+
+                            # Process the message
+                            await asyncio.to_thread(process_user_message, full_message, user_email)
+
+                            # Mark as vendor verified
+                            email_state_service.mark_as_vendor_verified(
+                                message_id,
+                                verification_result['method'],
+                                verification_result['vendor_info']
+                            )
+
+                            processed_count += 1
+                        else:
+                            # UNVERIFIED SENDER - Flag for manual review (save AI tokens)
+                            logger.warning(f"   ⚠️  FLAGGED - Unverified sender")
+                            logger.info(f"   💾 Saving metadata without AI extraction (token savings)")
+
+                            # Get full message for metadata
+                            full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+
+                            # Save minimal email metadata WITHOUT AI extraction
+                            await self._save_flagged_email_metadata(full_message, user_email)
+
+                            # Mark as pending verification
+                            email_state_service.update_email_state(message_id, {
+                                "vendor_verified": False,
+                                "verification_status": "pending_review",
+                                "flagged_reason": f"Email from unverified sender: {sender_email}",
+                                "is_price_change": True
+                            })
+
+                            flagged_count += 1
+                    else:
+                        # Verification disabled - process normally
+                        logger.info(f"   ℹ️  Vendor verification disabled - processing")
+
+                        # Get full message details
+                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+
+                        # Process the message
+                        await asyncio.to_thread(process_user_message, full_message, user_email)
+                        processed_count += 1
 
                     # Small delay to avoid overwhelming the system
                     await asyncio.sleep(1)
@@ -225,10 +282,67 @@ class DeltaEmailService:
         logger.info("\n" + "="*80)
         logger.info(f"📊 BATCH PROCESSING SUMMARY:")
         logger.info(f"   ✅ Processed: {processed_count}")
+        logger.info(f"   ⚠️  Flagged: {flagged_count}")
         logger.info(f"   ⏭️  Skipped: {skipped_count}")
         logger.info(f"   📧 Total: {len(messages)}")
         logger.info("="*80 + "\n")
-    
+
+    async def _save_flagged_email_metadata(self, msg: Dict, user_email: str):
+        """Save basic email metadata for flagged emails without AI extraction"""
+        import json
+        import os
+
+        safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
+        user_output_dir = os.path.join("outputs", safe_email)
+        os.makedirs(user_output_dir, exist_ok=True)
+
+        message_id = msg.get('id', '')
+        subject = msg.get('subject', '(no subject)')
+        sender_info = msg.get('from', {}).get('emailAddress', {})
+        sender = sender_info.get('address', '(no sender)')
+        date_received = msg.get('receivedDateTime', '(no date)')
+
+        # Save minimal metadata (no AI extraction)
+        flagged_data = {
+            "email_metadata": {
+                "subject": subject,
+                "sender": sender,
+                "date": date_received,
+                "message_id": message_id
+            },
+            "flagged": True,
+            "flagged_reason": "Unverified vendor email - pending manual approval",
+            "supplier_info": {
+                "supplier_id": None,
+                "supplier_name": None,
+                "contact_person": None,
+                "contact_email": sender,
+                "contact_phone": None
+            },
+            "price_change_summary": {
+                "change_type": None,
+                "effective_date": None,
+                "notification_date": None,
+                "reason": "Awaiting verification",
+                "overall_impact": None
+            },
+            "affected_products": [],
+            "additional_details": {
+                "terms_and_conditions": None,
+                "payment_terms": None,
+                "minimum_order_quantity": None,
+                "notes": "This email requires manual verification before AI extraction"
+            }
+        }
+
+        output_filename = f"price_change_{message_id}.json"
+        output_path = os.path.join(user_output_dir, output_filename)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(flagged_data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"   💾 Saved flagged email metadata: {output_filename}")
+
     async def poll_user_emails(self, user_email: str):
         """Poll emails for a specific user"""
         try:
