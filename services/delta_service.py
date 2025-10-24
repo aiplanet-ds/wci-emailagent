@@ -113,92 +113,55 @@ class DeltaEmailService:
             logger.error(f"Error getting delta messages for {user_email}: {e}")
             return {"messages": [], "delta_token": delta_token}
     
-    def is_price_change_email(self, message: Dict) -> bool:
-        """Determine if an email is likely about price changes using liberal filtering"""
-        subject = message.get('subject', '').lower()
-        sender_info = message.get('from', {}).get('emailAddress', {})
-        sender = sender_info.get('address', '').lower() if sender_info else ''
-        has_attachments = message.get('hasAttachments', False)
-        
-        # Priority keywords - strong indicators of price changes
-        priority_keywords = [
-            'price change', 'pricing update', 'cost adjustment', 'rate change',
-            'price increase', 'price decrease', 'new pricing', 'pricing effective',
-            'cost increase', 'rate adjustment', 'tariff change', 'fee update'
-        ]
-        
-        # General price-related keywords
-        price_keywords = [
-            'price', 'pricing', 'cost', 'rate', 'rates', 'tariff', 'fee', 'fees',
-            'quote', 'quotation', 'invoice', 'bill', 'billing', 'charge', 'charges'
-        ]
-        
-        # Change-related keywords
-        change_keywords = [
-            'change', 'update', 'revised', 'new', 'effective', 'increase', 'decrease',
-            'adjustment', 'modify', 'modified', 'amendment', 'notice', 'notification'
-        ]
-        
-        # Business/supplier keywords
-        business_keywords = [
-            'supplier', 'vendor', 'contract', 'agreement', 'terms', 'conditions',
-            'procurement', 'purchase', 'order', 'catalog', 'catalogue'
-        ]
-        
-        # Financial indicators
-        financial_indicators = ['$', '€', '£', '¥', '%', 'usd', 'eur', 'gbp']
-        
-        # High priority: Strong price change indicators in subject
-        if any(keyword in subject for keyword in priority_keywords):
-            return True
-        
-        # Medium-high priority: Has attachments + any price/change keywords
-        if has_attachments and (
-            any(keyword in subject for keyword in price_keywords) or
-            any(keyword in subject for keyword in change_keywords)
-        ):
-            return True
-        
-        # Medium priority: Price keywords + change keywords combination
-        has_price_keyword = any(keyword in subject for keyword in price_keywords)
-        has_change_keyword = any(keyword in subject for keyword in change_keywords)
-        if has_price_keyword and has_change_keyword:
-            return True
-        
-        # Medium priority: Financial indicators + business context
-        has_financial = any(indicator in subject for indicator in financial_indicators)
-        has_business = any(keyword in subject for keyword in business_keywords)
-        if has_financial and (has_business or has_change_keyword):
-            return True
-        
-        # Lower priority: Business sender with price/financial keywords
-        business_sender_domains = [
-            'supplier', 'vendor', 'corp', 'company', 'inc', 'ltd', 'llc',
-            'procurement', 'sales', 'billing', 'finance', 'accounting'
-        ]
-        is_business_sender = any(domain in sender for domain in business_sender_domains)
-        if is_business_sender and (has_price_keyword or has_financial):
-            return True
-        
-        # Catch common invoice/billing patterns
-        invoice_patterns = [
-            'invoice', 'bill', 'billing', 'payment', 'due', 'statement',
-            'account', 'balance', 'outstanding', 'remittance'
-        ]
-        if any(pattern in subject for pattern in invoice_patterns):
-            return True
-        
-        return False
+    def check_if_price_change_email(self, message: Dict) -> bool:
+        """
+        Check if an email is about price changes using LLM-based classification.
+
+        This method prepares the message data and calls the LLM classifier from extractor.py
+
+        Args:
+            message: Email message dict from Microsoft Graph API
+
+        Returns:
+            bool: True if classified as price change email, False otherwise
+        """
+        from extractor import is_price_change_email
+
+        # Extract email body content
+        email_body = ""
+        body_data = message.get("body", {})
+        if body_data:
+            email_body = body_data.get("content", "")
+
+        # Prepare metadata
+        metadata = {
+            "subject": message.get("subject", ""),
+            "from": message.get("from", {}).get("emailAddress", {}).get("address", ""),
+            "date": message.get("receivedDateTime", ""),
+            "message_id": message.get("id", "")
+        }
+
+        # Call the LLM-based classifier
+        return is_price_change_email(email_body, metadata)
 
     async def process_user_messages(self, user_email: str, messages: List[Dict]):
-        """Process new messages for a user with vendor verification and liberal price change filtering"""
+        """
+        Process new messages for a user with optimized workflow:
+        1. Vendor verification FIRST (cached lookup - free)
+        2. LLM classification ONLY for verified vendors (or flagged unverified)
+        3. AI extraction for verified price change emails
+        """
         from main import process_user_message
         from services.vendor_verification_service import vendor_verification_service
         from services.email_state_service import email_state_service
 
-        processed_count = 0
-        skipped_count = 0
-        flagged_count = 0
+        # Counters for new workflow
+        verified_processed = 0      # Verified + price change + extraction done
+        verified_skipped = 0        # Verified but NOT price change
+        unverified_flagged = 0      # Unverified + price change → manual review
+        unverified_skipped = 0      # Unverified + NOT price change → skip
+
+        verification_enabled = os.getenv("VENDOR_VERIFICATION_ENABLED", "true").lower() == "true"
 
         for i, message in enumerate(messages, 1):
             try:
@@ -210,25 +173,24 @@ class DeltaEmailService:
                 logger.info(f"\n📧 Email {i}/{len(messages)}: {subject}")
                 logger.info(f"   From: {sender_email}")
 
-                # Use liberal filtering to identify potential price change emails
-                if self.is_price_change_email(message):
-                    logger.info(f"   ✅ PRICE CHANGE DETECTED")
+                # ========== STEP 1: VENDOR VERIFICATION FIRST (if enabled) ==========
+                if verification_enabled:
+                    logger.info(f"   🔍 Step 1: Vendor Verification...")
+                    verification_result = vendor_verification_service.verify_sender(sender_email)
 
-                    # VENDOR VERIFICATION CHECK (before AI extraction)
-                    verification_enabled = os.getenv("VENDOR_VERIFICATION_ENABLED", "true").lower() == "true"
+                    if verification_result['is_verified']:
+                        # ========== VERIFIED VENDOR PATH ==========
+                        method = verification_result['method']
+                        logger.info(f"   ✅ VERIFIED VENDOR ({method})")
 
-                    if verification_enabled:
-                        verification_result = vendor_verification_service.verify_sender(sender_email)
+                        # Step 2: LLM Classification (only for verified vendors)
+                        logger.info(f"   🔍 Step 2: LLM Classification...")
+                        if self.check_if_price_change_email(message):
+                            logger.info(f"   ✅ PRICE CHANGE DETECTED")
 
-                        if verification_result['is_verified']:
-                            # VERIFIED VENDOR - Proceed with AI extraction
-                            method = verification_result['method']
-                            logger.info(f"   ✅ VERIFIED VENDOR ({method})")
-
-                            # Get full message details
+                            # Step 3: AI Extraction
+                            logger.info(f"   🔍 Step 3: AI Extraction...")
                             full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
-
-                            # Process the message
                             await asyncio.to_thread(process_user_message, full_message, user_email)
 
                             # Mark as vendor verified
@@ -238,10 +200,22 @@ class DeltaEmailService:
                                 verification_result['vendor_info']
                             )
 
-                            processed_count += 1
+                            verified_processed += 1
+                            logger.info(f"   ✅ PROCESSED (verified vendor + price change)")
                         else:
-                            # UNVERIFIED SENDER - Flag for manual review (save AI tokens)
-                            logger.warning(f"   ⚠️  FLAGGED - Unverified sender")
+                            # Verified vendor but NOT a price change email
+                            verified_skipped += 1
+                            logger.info(f"   ⏭️  SKIPPED (verified vendor but not a price change)")
+
+                    else:
+                        # ========== UNVERIFIED VENDOR PATH ==========
+                        logger.warning(f"   ⚠️  UNVERIFIED VENDOR")
+
+                        # Step 2: LLM Classification (to decide if worth flagging)
+                        logger.info(f"   🔍 Step 2: LLM Classification (checking if price change)...")
+                        if self.check_if_price_change_email(message):
+                            logger.info(f"   ✅ PRICE CHANGE DETECTED")
+                            logger.warning(f"   ⚠️  FLAGGING for manual review (unverified + price change)")
                             logger.info(f"   💾 Saving metadata without AI extraction (token savings)")
 
                             # Get full message for metadata
@@ -258,32 +232,50 @@ class DeltaEmailService:
                                 "is_price_change": True
                             })
 
-                            flagged_count += 1
-                    else:
-                        # Verification disabled - process normally
-                        logger.info(f"   ℹ️  Vendor verification disabled - processing")
+                            unverified_flagged += 1
+                            logger.info(f"   ⚠️  FLAGGED (unverified vendor + price change)")
+                        else:
+                            # Unverified AND not a price change - skip entirely
+                            unverified_skipped += 1
+                            logger.info(f"   ⏭️  SKIPPED (unverified vendor + not a price change)")
 
-                        # Get full message details
-                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
-
-                        # Process the message
-                        await asyncio.to_thread(process_user_message, full_message, user_email)
-                        processed_count += 1
-
-                    # Small delay to avoid overwhelming the system
-                    await asyncio.sleep(1)
                 else:
-                    skipped_count += 1
-                    logger.info(f"   ⏭️  Not a price change email - SKIPPED")
+                    # ========== VERIFICATION DISABLED PATH ==========
+                    logger.info(f"   ℹ️  Vendor verification disabled")
+
+                    # Step 1: LLM Classification only
+                    logger.info(f"   🔍 Step 1: LLM Classification...")
+                    if self.check_if_price_change_email(message):
+                        logger.info(f"   ✅ PRICE CHANGE DETECTED")
+
+                        # Step 2: AI Extraction
+                        logger.info(f"   🔍 Step 2: AI Extraction...")
+                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                        await asyncio.to_thread(process_user_message, full_message, user_email)
+
+                        verified_processed += 1
+                        logger.info(f"   ✅ PROCESSED (verification disabled)")
+                    else:
+                        verified_skipped += 1
+                        logger.info(f"   ⏭️  SKIPPED (not a price change)")
+
+                # Small delay to avoid overwhelming the system
+                await asyncio.sleep(1)
 
             except Exception as e:
                 logger.error(f"   ❌ ERROR: {e}")
 
+        # ========== SUMMARY ==========
         logger.info("\n" + "="*80)
         logger.info(f"📊 BATCH PROCESSING SUMMARY:")
-        logger.info(f"   ✅ Processed: {processed_count}")
-        logger.info(f"   ⚠️  Flagged: {flagged_count}")
-        logger.info(f"   ⏭️  Skipped: {skipped_count}")
+        if verification_enabled:
+            logger.info(f"   ✅ Verified & Processed: {verified_processed}")
+            logger.info(f"   ⏭️  Verified & Skipped: {verified_skipped}")
+            logger.info(f"   ⚠️  Unverified & Flagged: {unverified_flagged}")
+            logger.info(f"   ⏭️  Unverified & Skipped: {unverified_skipped}")
+        else:
+            logger.info(f"   ✅ Processed: {verified_processed}")
+            logger.info(f"   ⏭️  Skipped: {verified_skipped}")
         logger.info(f"   📧 Total: {len(messages)}")
         logger.info("="*80 + "\n")
 

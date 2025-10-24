@@ -125,11 +125,8 @@ def process_user_message(msg, user_email, skip_verification=False):
     try:
         result = extract_price_change_json(combined_content, email_metadata)
 
-        # Check if email was identified as price change
-        if result.get("error") == "Email does not appear to be a price change notification":
-            print("   ℹ️  Not a price change email - SKIPPED")
-            print("="*80 + "\n")
-            return
+        # Note: Classification check removed - delta service already verified this is a price change email
+        # If extraction returns an error, it's a genuine extraction failure, not a classification issue
 
         # Save results to user-specific directory
         output_filename = f"price_change_{message_id}.json"
