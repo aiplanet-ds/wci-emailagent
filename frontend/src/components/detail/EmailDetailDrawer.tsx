@@ -8,11 +8,9 @@ import { formatDate } from '../../lib/utils';
 import { SupplierInfo } from './SupplierInfo';
 import { PriceChangeSummary } from './PriceChangeSummary';
 import { ProductsTable } from './ProductsTable';
-import { AdditionalDetails } from './AdditionalDetails';
 import { MissingFieldsChecklist } from './MissingFieldsChecklist';
 import { FollowupModal } from './FollowupModal';
 import { WorkflowStepper } from './WorkflowStepper';
-import { EpicorWorkflowDetails } from './EpicorWorkflowDetails';
 import { useEmailDetail, useUpdateEmailProcessed, useGenerateFollowup } from '../../hooks/useEmails';
 import type { MissingField } from '../../types/email';
 
@@ -220,9 +218,6 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
               {/* Products Table */}
               <ProductsTable products={data.email_data.affected_products} />
 
-              {/* Additional Details */}
-              <AdditionalDetails details={data.email_data.additional_details} />
-
               {/* Missing Fields Checklist */}
               {data.validation.all_missing_fields.length > 0 && (
                 <MissingFieldsChecklist
@@ -235,12 +230,6 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
               {/* Epicor Integration Results */}
               {data.epicor_status && (
                 <div className="space-y-4">
-                  {/* Epicor 4-Step Workflow Details */}
-                  <EpicorWorkflowDetails
-                    workflowUsed={data.epicor_status.workflow_used}
-                    workflowSteps={data.epicor_status.workflow_steps}
-                  />
-
                   {/* Results Summary */}
                   <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-4">
                     <h4 className="text-sm font-semibold text-green-900 mb-3 flex items-center gap-2">

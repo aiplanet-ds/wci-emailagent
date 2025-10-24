@@ -72,13 +72,6 @@ export function Settings() {
               <Badge variant="info">{config.cacheTTL} hours</Badge>
             </div>
           </div>
-
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-md">
-            <p className="text-sm text-blue-800">
-              💡 <strong>Note:</strong> To modify these settings, update the <code className="bg-blue-100 px-1 rounded">.env</code> file
-              and restart the application.
-            </p>
-          </div>
         </Card>
 
         {/* Vendor Cache Status */}
@@ -89,31 +82,6 @@ export function Settings() {
 
         <VendorCacheStatus />
       </div>
-
-      {/* Token Savings Info */}
-      <Card className="p-6 bg-gradient-to-r from-green-50 to-blue-50 border-green-200">
-        <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-          💰 Token Savings Impact
-        </h4>
-        <p className="text-sm text-gray-700 mb-3">
-          Vendor verification helps reduce AI costs by preventing extraction on emails from
-          unverified senders.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="bg-white bg-opacity-70 rounded-lg p-3">
-            <p className="text-gray-600 mb-1">Scenario</p>
-            <p className="font-semibold text-gray-900">1,000 emails/month</p>
-          </div>
-          <div className="bg-white bg-opacity-70 rounded-lg p-3">
-            <p className="text-gray-600 mb-1">If 30% unverified</p>
-            <p className="font-semibold text-green-700">300 emails saved</p>
-          </div>
-          <div className="bg-white bg-opacity-70 rounded-lg p-3">
-            <p className="text-gray-600 mb-1">Estimated savings</p>
-            <p className="font-semibold text-green-700">$6/month</p>
-          </div>
-        </div>
-      </Card>
     </div>
   );
 }

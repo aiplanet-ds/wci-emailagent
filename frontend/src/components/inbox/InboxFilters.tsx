@@ -1,4 +1,4 @@
-import { Search } from 'lucide-react';
+import { Search, Filter } from 'lucide-react';
 import { Input } from '../ui/Input';
 import type { EmailFilter } from '../../types/email';
 
@@ -16,26 +16,28 @@ const filters: { value: EmailFilter; label: string }[] = [
   { value: 'processed', label: 'Processed' },
   { value: 'unprocessed', label: 'Unprocessed' },
   { value: 'pending_verification', label: 'Pending Verification' },
+  { value: 'rejected', label: 'Rejected' },
 ];
 
 export function InboxFilters({ filter, onFilterChange, search, onSearchChange }: InboxFiltersProps) {
+  const currentFilterLabel = filters.find((f) => f.value === filter)?.label || 'All';
+
   return (
     <div className="flex flex-col sm:flex-row gap-4">
-      {/* Filter Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-2">
-        {filters.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => onFilterChange(f.value)}
-            className={`px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
-              filter === f.value
-                ? 'bg-blue-600 text-white'
-                : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+      {/* Filter Dropdown */}
+      <div className="relative">
+        <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+        <select
+          value={filter}
+          onChange={(e) => onFilterChange(e.target.value as EmailFilter)}
+          className="pl-10 pr-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none cursor-pointer min-w-[200px]"
+        >
+          {filters.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Search Bar */}

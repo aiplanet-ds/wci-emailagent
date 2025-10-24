@@ -9,6 +9,7 @@ export function usePendingEmails() {
     queryKey: ['pending-emails'],
     queryFn: () => emailApi.getPendingVerificationEmails(),
     refetchInterval: 30000, // Refetch every 30 seconds
+    staleTime: 10000, // Consider data fresh for 10 seconds
   });
 }
 
@@ -21,8 +22,8 @@ export function useApproveEmail() {
   return useMutation({
     mutationFn: (messageId: string) => emailApi.approveAndProcessEmail(messageId),
     onSuccess: (_, messageId) => {
-      // Invalidate all related queries
-      queryClient.invalidateQueries({ queryKey: ['pending-emails'] });
+      // Invalidate all related queries with exact matching
+      queryClient.invalidateQueries({ queryKey: ['pending-emails'], exact: true });
       queryClient.invalidateQueries({ queryKey: ['emails'] });
       queryClient.invalidateQueries({ queryKey: ['email', messageId] });
     },
@@ -38,8 +39,8 @@ export function useRejectEmail() {
   return useMutation({
     mutationFn: (messageId: string) => emailApi.rejectEmail(messageId),
     onSuccess: () => {
-      // Invalidate pending emails list
-      queryClient.invalidateQueries({ queryKey: ['pending-emails'] });
+      // Invalidate pending emails list with exact matching
+      queryClient.invalidateQueries({ queryKey: ['pending-emails'], exact: true });
       queryClient.invalidateQueries({ queryKey: ['emails'] });
     },
   });
