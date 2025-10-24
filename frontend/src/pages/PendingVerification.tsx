@@ -8,8 +8,12 @@ export function PendingVerification() {
   const [search, setSearch] = useState('');
   const { data, isLoading, error } = usePendingEmails();
 
-  // Filter emails by search
+  // Filter emails by verification status and search
   const filteredEmails = data?.emails.filter((email) => {
+    // First, ensure email is truly pending verification
+    if (email.verification_status !== 'pending_review') return false;
+
+    // Then apply search filter
     if (!search) return true;
     const searchLower = search.toLowerCase();
     return (

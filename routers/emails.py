@@ -127,7 +127,7 @@ def get_all_price_change_emails(user_email: str) -> List[Dict[str, Any]]:
                         "has_epicor_sync": epicor_status is not None,
                         "epicor_success_count": epicor_status.get("successful", 0) if epicor_status else 0,
                         "file_path": file_path,
-                        "verification_status": state.get("verification_status", "pending_review"),
+                        "verification_status": state.get("verification_status"),
                         "vendor_verified": state.get("vendor_verified", False),
                         "verification_method": state.get("verification_method"),
                         "flagged_reason": state.get("flagged_reason"),
@@ -146,14 +146,14 @@ def get_all_price_change_emails(user_email: str) -> List[Dict[str, Any]]:
 @router.get("", response_model=EmailListResponse)
 async def list_emails(
     request: Request,
-    filter: Optional[str] = None,  # all, price_change, non_price_change, processed, unprocessed
+    filter: Optional[str] = None,  # all, price_change, non_price_change, processed, unprocessed, pending_verification, rejected
     search: Optional[str] = None
 ):
     """
     Get list of all emails for the authenticated user
 
     Query params:
-    - filter: all, price_change, non_price_change, processed, unprocessed
+    - filter: all, price_change, non_price_change, processed, unprocessed, pending_verification, rejected
     - search: search by subject or sender
     """
     user_email = get_user_from_session(request)
@@ -165,11 +165,13 @@ async def list_emails(
     elif filter == "non_price_change":
         emails = [e for e in emails if not e.get("is_price_change")]
     elif filter == "processed":
-        emails = [e for e in emails if e.get("processed")]
+        emails = [e for e in emails if e.get("processed") and e.get("verification_status") != "rejected"]
     elif filter == "unprocessed":
         emails = [e for e in emails if not e.get("processed")]
     elif filter == "pending_verification":
         emails = [e for e in emails if e.get("verification_status") == "pending_review"]
+    elif filter == "rejected":
+        emails = [e for e in emails if e.get("verification_status") == "rejected"]
 
     # Apply search
     if search:

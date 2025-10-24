@@ -185,4 +185,4 @@ export interface VendorCacheStatus {
 }
 
 // Filter types
-export type EmailFilter = 'all' | 'price_change' | 'non_price_change' | 'processed' | 'unprocessed' | 'pending_verification';
+export type EmailFilter = 'all' | 'price_change' | 'non_price_change' | 'processed' | 'unprocessed' | 'pending_verification' | 'rejected';
