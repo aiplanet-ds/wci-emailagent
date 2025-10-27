@@ -382,6 +382,89 @@ class EpicorAPIService:
             logger.error(f"❌ Exception retrieving price list: {e}")
             return None
 
+    def get_all_price_lists(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get all price lists for the company
+
+        Returns:
+            List of price list headers, or None if error
+        """
+        try:
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLsts"
+            headers = self._get_headers()
+
+            params = {
+                "$filter": f"Company eq '{self.company_id}'"
+            }
+
+            logger.info(f"🔍 Fetching all price lists for company {self.company_id}")
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("value", [])
+                logger.info(f"✅ Found {len(results)} price lists")
+                return results
+            else:
+                logger.error(f"❌ Error fetching price lists: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Exception fetching price lists: {e}")
+            return None
+
+    def find_supplier_price_list(self, supplier_id: str, supplier_name: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Find existing price list for a supplier by searching all price lists
+
+        Searches by:
+        1. ListCode containing supplier_id (e.g., "FAST1" in code)
+        2. ListDescription containing supplier_name or supplier_id
+
+        Args:
+            supplier_id: External supplier identifier (e.g., "FAST1")
+            supplier_name: Supplier name (optional, for better matching)
+
+        Returns:
+            Price list header dict if found, None otherwise
+        """
+        try:
+            logger.info(f"🔍 Searching for existing price list for supplier: {supplier_id}")
+
+            # Get all price lists
+            all_lists = self.get_all_price_lists()
+
+            if not all_lists:
+                logger.info(f"   No price lists found in system")
+                return None
+
+            # Search for matching price list
+            for price_list in all_lists:
+                list_code = price_list.get("ListCode", "")
+                description = price_list.get("ListDescription", "")
+
+                # Match by code containing supplier_id
+                if supplier_id.upper() in list_code.upper():
+                    logger.info(f"✅ Found matching price list by code: {list_code}")
+                    return price_list
+
+                # Match by description containing supplier_id or supplier_name
+                if supplier_id.upper() in description.upper():
+                    logger.info(f"✅ Found matching price list by description: {list_code}")
+                    return price_list
+
+                if supplier_name and supplier_name.upper() in description.upper():
+                    logger.info(f"✅ Found matching price list by supplier name: {list_code}")
+                    return price_list
+
+            logger.info(f"   No existing price list found for supplier {supplier_id}")
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ Exception searching for supplier price list: {e}")
+            return None
+
     def check_price_list_exists(self, list_code: str, part_num: str, uom_code: str = "EA") -> bool:
         """
         Check if a price list entry exists for a specific part (Step B decision point)
@@ -420,8 +503,9 @@ class EpicorAPIService:
         """
         Get or create a supplier-specific price list
 
-        Uses naming convention: SUPPLIER_{supplier_id}
-        Example: SUPPLIER_FAST1, SUPPLIER_USUI-001
+        Uses naming convention with 10-char limit:
+        - If supplier_id <= 10 chars: use supplier_id directly (e.g., "FAST1", "USUI-001")
+        - If supplier_id > 10 chars: truncate to 10 chars
 
         Args:
             supplier_id: External supplier identifier (e.g., "FAST1")
@@ -432,48 +516,43 @@ class EpicorAPIService:
             Dictionary with status, list_code, and created flag
         """
         try:
-            # Generate supplier-specific list code
-            list_code = f"SUPPLIER_{supplier_id}"
+            # Step 1: Search for existing price list for this supplier
+            logger.info(f"🔍 Step 1: Searching for existing price list for supplier: {supplier_id}")
+            existing_list = self.find_supplier_price_list(supplier_id, supplier_name)
 
-            logger.info(f"🔍 Checking for supplier price list: {list_code}")
-
-            # Check if price list header exists
-            url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLsts"
-            headers = self._get_headers()
-
-            params = {
-                "$filter": f"ListCode eq '{list_code}'"
-            }
-
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-
-            if response.status_code != 200:
-                logger.error(f"❌ Failed to check price list: {response.status_code}")
-                return {
-                    "status": "error",
-                    "message": f"Failed to check price list: HTTP {response.status_code}",
-                    "list_code": list_code
-                }
-
-            data = response.json()
-            results = data.get("value", [])
-
-            # If price list exists, return it
-            if results and len(results) > 0:
-                logger.info(f"✅ Supplier price list found: {list_code}")
+            if existing_list:
+                list_code = existing_list.get("ListCode")
+                logger.info(f"✅ Using existing supplier price list: {list_code}")
                 return {
                     "status": "success",
                     "message": "Supplier price list exists",
                     "list_code": list_code,
                     "created": False,
-                    "price_list": results[0]
+                    "price_list": existing_list
                 }
 
-            # Price list doesn't exist - create it
-            logger.info(f"📝 Creating new supplier price list: {list_code}")
+            # Step 2: No existing list found - create new one
+            # Generate list code with 10-char limit
+            # Strategy: Use supplier_id directly if <= 10 chars, otherwise truncate
+            if len(supplier_id) <= 10:
+                list_code = supplier_id
+            else:
+                list_code = supplier_id[:10]
+                logger.warning(f"⚠️  Supplier ID '{supplier_id}' exceeds 10 chars, truncating to '{list_code}'")
 
-            # Prepare description
-            description = f"Price List for {supplier_name or supplier_id}"
+            logger.info(f"📝 Step 2: Creating new supplier price list: {list_code}")
+
+            # Prepare description with 30-char limit
+            if supplier_name:
+                # Format: "PL: {name}" to keep it short
+                description = f"PL: {supplier_name}"
+            else:
+                description = f"Supplier {supplier_id}"
+
+            # Truncate to 30 chars if needed
+            if len(description) > 30:
+                description = description[:30]
+                logger.info(f"   Description truncated to 30 chars: {description}")
 
             # Prepare start date
             start_date = effective_date
@@ -485,6 +564,7 @@ class EpicorAPIService:
                 "Company": self.company_id,
                 "ListCode": list_code,
                 "ListDescription": description,
+                "ListType": "B",  # B = Base/Buy price list (discovered from existing lists)
                 "StartDate": start_date,
                 "EndDate": None,
                 "Active": True,
@@ -494,6 +574,7 @@ class EpicorAPIService:
 
             # POST to Update endpoint
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
+            headers = self._get_headers()
 
             ds = {
                 "PriceLst": [new_price_list]
@@ -529,10 +610,12 @@ class EpicorAPIService:
 
         except Exception as e:
             logger.error(f"❌ Exception in get_or_create_supplier_price_list: {e}")
+            # Generate safe list code for error response
+            safe_list_code = supplier_id[:10] if len(supplier_id) <= 10 else supplier_id[:10]
             return {
                 "status": "error",
                 "message": str(e),
-                "list_code": f"SUPPLIER_{supplier_id}"
+                "list_code": safe_list_code
             }
 
     def create_price_list_entry(
