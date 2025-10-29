@@ -212,14 +212,6 @@ class EmailStateService:
             "manually_approved_at": datetime.utcnow().isoformat()
         })
 
-    def mark_as_rejected(self, message_id: str) -> Dict[str, Any]:
-        """Mark email as rejected/ignored"""
-        return self.update_email_state(message_id, {
-            "verification_status": "rejected",
-            "processed": True,
-            "processed_at": datetime.utcnow().isoformat()
-        })
-
 
 # Global instance
 email_state_service = EmailStateService()
