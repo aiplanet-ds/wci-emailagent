@@ -123,13 +123,9 @@ def process_user_message(msg, user_email, skip_verification=False):
     print("   • Reason for Change")
 
     try:
+        # Note: Email has already been validated as price change by LLM detector in delta_service
+        # This extraction focuses solely on extracting structured data
         result = extract_price_change_json(combined_content, email_metadata)
-
-        # Check if email was identified as price change
-        if result.get("error") == "Email does not appear to be a price change notification":
-            print("   ℹ️  Not a price change email - SKIPPED")
-            print("="*80 + "\n")
-            return
 
         # Save results to user-specific directory
         output_filename = f"price_change_{message_id}.json"

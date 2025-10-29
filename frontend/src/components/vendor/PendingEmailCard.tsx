@@ -1,27 +1,44 @@
-import { useState } from 'react';
-import { Mail, User, Calendar, AlertTriangle, Check, X, Loader2 } from 'lucide-react';
+import { Mail, User, Calendar, AlertTriangle, Check, X, Loader2, FileText, ChevronDown, ChevronUp } from 'lucide-react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
+import { EmailBodyViewer } from '../email/EmailBodyViewer';
+import { AttachmentList } from '../email/AttachmentList';
 import { useApproveEmail, useRejectEmail } from '../../hooks/useVendorVerification';
+import { useRawEmailContent } from '../../hooks/useEmails';
 import { formatDate } from '../../lib/utils';
 import type { EmailListItem } from '../../types/email';
 
 interface PendingEmailCardProps {
   email: EmailListItem;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
 }
 
-export function PendingEmailCard({ email }: PendingEmailCardProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+export function PendingEmailCard({ email, isExpanded, onToggleExpand }: PendingEmailCardProps) {
   const approveMutation = useApproveEmail();
   const rejectMutation = useRejectEmail();
+  const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(
+    isExpanded ? email.message_id : null
+  );
 
-  const handleApprove = () => {
+  const handleApprove = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click when clicking approve
     approveMutation.mutate(email.message_id);
   };
 
-  const handleReject = () => {
+  const handleReject = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click when clicking reject
     rejectMutation.mutate(email.message_id);
+  };
+
+  const handleCardClick = () => {
+    onToggleExpand();
+  };
+
+  const handleCloseClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggleExpand();
   };
 
   const isProcessing = approveMutation.isPending || rejectMutation.isPending;
@@ -44,7 +61,12 @@ export function PendingEmailCard({ email }: PendingEmailCardProps) {
   }
 
   return (
-    <Card className="p-6 hover:shadow-md transition-shadow">
+    <Card
+      className={`p-6 hover:shadow-md transition-all duration-200 cursor-pointer ${
+        isExpanded ? 'shadow-lg ring-2 ring-blue-200' : ''
+      }`}
+      onClick={handleCardClick}
+    >
       {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-4">
         <div className="flex-1">
@@ -65,9 +87,25 @@ export function PendingEmailCard({ email }: PendingEmailCardProps) {
           </div>
         </div>
 
-        <Badge variant="warning" className="flex-shrink-0">
-          ⚠️ Pending Review
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="warning" className="flex-shrink-0">
+            ⚠️ Pending Review
+          </Badge>
+
+          {isExpanded && (
+            <button
+              onClick={handleCloseClick}
+              className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
+              title="Collapse"
+            >
+              <ChevronUp className="h-5 w-5" />
+            </button>
+          )}
+
+          {!isExpanded && (
+            <ChevronDown className="h-5 w-5 text-gray-400" />
+          )}
+        </div>
       </div>
 
       {/* Flagged Reason */}
@@ -81,28 +119,44 @@ export function PendingEmailCard({ email }: PendingEmailCardProps) {
         </div>
       )}
 
-      {/* Additional Info (Expandable) */}
-      {email.supplier_name && email.supplier_name !== 'Unknown' && (
-        <div className="mb-4">
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-          >
-            {isExpanded ? 'Hide' : 'Show'} Details
-          </button>
-
-          {isExpanded && (
-            <div className="mt-2 p-3 bg-gray-50 rounded-md text-sm space-y-1">
+      {/* Email Content (Expanded) */}
+      {isExpanded && (
+        <div className="mb-4 space-y-4 animate-fadeIn">
+          {isLoadingRaw ? (
+            <div className="flex items-center justify-center p-8 bg-gray-50 rounded-lg">
+              <Loader2 className="h-6 w-6 animate-spin text-gray-400 mr-2" />
+              <span className="text-sm text-gray-600">Loading email content...</span>
+            </div>
+          ) : rawEmail ? (
+            <>
+              {/* Email Body */}
               <div>
-                <span className="font-medium text-gray-700">Supplier:</span>{' '}
-                <span className="text-gray-900">{email.supplier_name}</span>
+                <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                  <FileText className="h-4 w-4" />
+                  Email Body
+                </h4>
+                <EmailBodyViewer
+                  body={rawEmail.body}
+                  bodyType={rawEmail.bodyType}
+                />
               </div>
-              {email.products_count > 0 && (
+
+              {/* Attachments */}
+              {rawEmail.attachments && rawEmail.attachments.length > 0 && (
                 <div>
-                  <span className="font-medium text-gray-700">Products:</span>{' '}
-                  <span className="text-gray-900">{email.products_count}</span>
+                  <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                    Attachments ({rawEmail.attachments.length})
+                  </h4>
+                  <AttachmentList
+                    attachments={rawEmail.attachments}
+                    messageId={email.message_id}
+                  />
                 </div>
               )}
+            </>
+          ) : (
+            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+              Failed to load email content
             </div>
           )}
         </div>
@@ -134,17 +188,8 @@ export function PendingEmailCard({ email }: PendingEmailCardProps) {
           variant="outline"
           className="flex-1 border-red-300 text-red-700 hover:bg-red-50"
         >
-          {rejectMutation.isPending ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Rejecting...
-            </>
-          ) : (
-            <>
-              <X className="h-4 w-4 mr-2" />
-              Reject
-            </>
-          )}
+          <X className="h-4 w-4 mr-2" />
+          Reject
         </Button>
       </div>
 

@@ -20,8 +20,6 @@ const filters: { value: EmailFilter; label: string }[] = [
 ];
 
 export function InboxFilters({ filter, onFilterChange, search, onSearchChange }: InboxFiltersProps) {
-  const currentFilterLabel = filters.find((f) => f.value === filter)?.label || 'All';
-
   return (
     <div className="flex flex-col sm:flex-row gap-4">
       {/* Filter Dropdown */}

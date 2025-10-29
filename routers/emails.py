@@ -3,13 +3,14 @@ Email API Router
 Handles all email-related API endpoints for the Price-Change Inbox Dashboard
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import json
 import os
 from pathlib import Path
 from datetime import datetime
+import base64
 
 from services.email_state_service import email_state_service
 from services.validation_service import validation_service
@@ -223,6 +224,115 @@ async def get_email_detail(message_id: str, request: Request):
     )
 
 
+@router.get("/{message_id}/raw")
+async def get_raw_email_content(message_id: str, request: Request):
+    """
+    Get raw email body content and attachment metadata
+
+    Returns:
+    - body: Full HTML or text email body
+    - bodyType: 'html' or 'text'
+    - attachments: List of attachment metadata (name, size, contentType, id)
+    """
+    user_email = get_user_from_session(request)
+
+    try:
+        # Fetch full email from Microsoft Graph API
+        graph_client = MultiUserGraphClient()
+        msg = graph_client.get_user_message_by_id(user_email, message_id)
+
+        # Extract email body
+        body_data = msg.get("body", {})
+        body_content = body_data.get("content", "")
+        body_type = body_data.get("contentType", "text").lower()
+
+        # Get attachment metadata if email has attachments
+        attachments_meta = []
+        if msg.get("hasAttachments", False):
+            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+
+            for att in attachments:
+                if att.get("@odata.type", "").endswith("fileAttachment"):
+                    attachments_meta.append({
+                        "id": att.get("id", ""),
+                        "name": att.get("name", "unknown"),
+                        "contentType": att.get("contentType", "application/octet-stream"),
+                        "size": att.get("size", 0)
+                    })
+
+        return {
+            "body": body_content,
+            "bodyType": body_type,
+            "attachments": attachments_meta,
+            "subject": msg.get("subject", "No Subject"),
+            "from": msg.get("from", {}).get("emailAddress", {}),
+            "receivedDateTime": msg.get("receivedDateTime", "")
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch raw email content: {str(e)}"
+        )
+
+
+@router.get("/{message_id}/attachments/{attachment_id}")
+async def download_attachment(message_id: str, attachment_id: str, request: Request):
+    """
+    Download a specific attachment by ID
+
+    Returns the attachment file as a downloadable response
+    """
+    user_email = get_user_from_session(request)
+
+    try:
+        # Get attachment from Microsoft Graph API
+        graph_client = MultiUserGraphClient()
+        attachments = graph_client.get_user_message_attachments(user_email, message_id)
+
+        # Find the specific attachment
+        target_attachment = None
+        for att in attachments:
+            if att.get("id") == attachment_id:
+                target_attachment = att
+                break
+
+        if not target_attachment:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        # Decode attachment content
+        content_bytes_b64 = target_attachment.get("contentBytes")
+        if not content_bytes_b64:
+            raise HTTPException(status_code=404, detail="Attachment has no content")
+
+        # Decode base64 content
+        if isinstance(content_bytes_b64, str):
+            content = base64.b64decode(content_bytes_b64)
+        else:
+            content = content_bytes_b64
+
+        # Get attachment metadata
+        filename = target_attachment.get("name", "attachment")
+        content_type = target_attachment.get("contentType", "application/octet-stream")
+
+        # Return as downloadable file
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to download attachment: {str(e)}"
+        )
+
+
 @router.patch("/{message_id}")
 async def update_email_state(
     message_id: str,
@@ -397,7 +507,15 @@ async def list_pending_verification_emails(request: Request):
 
 @router.post("/{message_id}/approve-and-process")
 async def approve_and_process_email(message_id: str, request: Request):
-    """Manually approve unverified email and trigger AI extraction"""
+    """
+    Manually approve unverified email and trigger LLM detection + AI extraction.
+
+    New Workflow:
+    1. Mark as manually approved
+    2. Run LLM price change detection
+    3. If detected as price change → run AI extraction
+    4. If NOT detected as price change → save result, skip extraction
+    """
     user_email = get_user_from_session(request)
     outputs_dir = get_user_outputs_directory(user_email)
 
@@ -417,28 +535,130 @@ async def approve_and_process_email(message_id: str, request: Request):
     # Mark as manually approved
     email_state_service.mark_as_manually_approved(message_id, user_email)
 
-    # Trigger AI extraction with skip_verification=True
     try:
         # Get original message from Graph API
         graph_client = MultiUserGraphClient()
         msg = graph_client.get_user_message_by_id(user_email, message_id)
 
-        # Process with AI extraction
-        from main import process_user_message
-        process_user_message(msg, user_email, skip_verification=True)
+        # STEP 1: Run LLM Price Change Detection
+        from services.llm_detector import llm_is_price_change_email
+        from utils.processors import process_all_content
+        import base64
 
-        # Reload processed email data
-        email_data = load_email_json(email_file)
-        state = email_state_service.get_email_state(message_id)
-        validation = validation_service.validate_email_data(email_data)
+        # Extract email body
+        email_body = ""
+        body_data = msg.get("body", {})
+        if body_data:
+            email_body = body_data.get("content", "")
 
-        return {
-            "success": True,
-            "message": "Email approved and processed successfully",
-            "email_data": email_data,
-            "state": state,
-            "validation": validation
+        # Process attachments (if any)
+        attachment_paths = []
+        if msg.get("hasAttachments", False):
+            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+
+            # Create user-specific downloads directory
+            safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
+            user_downloads_dir = os.path.join("downloads", safe_email)
+            os.makedirs(user_downloads_dir, exist_ok=True)
+
+            for att in attachments:
+                if att.get("@odata.type", "").endswith("fileAttachment"):
+                    filename = att.get("name", "unknown")
+                    content_bytes = att.get("contentBytes")
+
+                    if content_bytes:
+                        try:
+                            if isinstance(content_bytes, str):
+                                decoded_content = base64.b64decode(content_bytes)
+                            else:
+                                decoded_content = content_bytes
+
+                            path = os.path.join(user_downloads_dir, filename)
+                            with open(path, "wb") as f:
+                                f.write(decoded_content)
+
+                            attachment_paths.append(path)
+                        except Exception as e:
+                            print(f"Warning: Could not save attachment {filename}: {e}")
+
+        # Process all content
+        combined_content = process_all_content(email_body, attachment_paths)
+
+        # Prepare metadata
+        subject = msg.get('subject', 'No Subject')
+        sender_info = msg.get('from', {}).get('emailAddress', {})
+        sender = sender_info.get('address', '') if sender_info else ''
+        date_received = msg.get('receivedDateTime', '')
+
+        metadata = {
+            'subject': subject,
+            'sender': sender,
+            'date': date_received,
+            'message_id': message_id,
+            'has_attachments': msg.get('hasAttachments', False)
         }
+
+        # Run LLM detection
+        print(f"🤖 Running LLM price change detection for approved email...")
+        detection_result = llm_is_price_change_email(combined_content, metadata)
+
+        # Update email state with detection result
+        email_state_service.update_email_state(message_id, {
+            "llm_detection_performed": True,
+            "llm_detection_result": detection_result,
+            "awaiting_llm_detection": False
+        })
+
+        # STEP 2: Process based on detection result
+        if detection_result.get("meets_threshold", False):
+            # Detected as price change - proceed with AI extraction
+            confidence = detection_result.get("confidence", 0.0)
+            reasoning = detection_result.get("reasoning", "N/A")
+            print(f"✅ PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
+            print(f"💡 Reasoning: {reasoning}")
+
+            # Run AI extraction
+            from main import process_user_message
+            process_user_message(msg, user_email, skip_verification=True)
+
+            # Reload processed email data
+            email_data = load_email_json(email_file)
+            state = email_state_service.get_email_state(message_id)
+            validation = validation_service.validate_email_data(email_data)
+
+            return {
+                "success": True,
+                "message": "Email approved and processed successfully",
+                "is_price_change": True,
+                "detection_confidence": confidence,
+                "detection_reasoning": reasoning,
+                "email_data": email_data,
+                "state": state,
+                "validation": validation
+            }
+
+        else:
+            # NOT detected as price change - skip extraction
+            confidence = detection_result.get("confidence", 0.0)
+            reasoning = detection_result.get("reasoning", "N/A")
+            print(f"⏭️ NOT A PRICE CHANGE (Confidence: {confidence:.2f})")
+            print(f"💡 Reasoning: {reasoning}")
+
+            # Update email state to reflect it's not a price change
+            email_state_service.update_email_state(message_id, {
+                "verification_status": "rejected",
+                "rejected_reason": f"LLM detected this is not a price change (Confidence: {confidence:.2f})",
+                "is_price_change": False
+            })
+
+            return {
+                "success": True,
+                "message": "Email approved but LLM detected it is not a price change notification",
+                "is_price_change": False,
+                "detection_confidence": confidence,
+                "detection_reasoning": reasoning,
+                "action": "skipped_extraction"
+            }
 
     except Exception as e:
         # Revert approval if processing failed
@@ -446,7 +666,8 @@ async def approve_and_process_email(message_id: str, request: Request):
             "verification_status": "pending_review",
             "vendor_verified": False,
             "manually_approved_by": None,
-            "manually_approved_at": None
+            "manually_approved_at": None,
+            "awaiting_llm_detection": True
         })
         raise HTTPException(
             status_code=500,
@@ -467,8 +688,12 @@ async def reject_email(message_id: str, request: Request):
             detail="Email is not pending verification"
         )
 
-    # Mark as rejected
-    email_state_service.mark_as_rejected(message_id)
+    # Mark as rejected (simple, no detailed tracking)
+    email_state_service.update_email_state(message_id, {
+        "verification_status": "rejected",
+        "awaiting_llm_detection": False,
+        "llm_detection_performed": False
+    })
 
     return {
         "success": True,

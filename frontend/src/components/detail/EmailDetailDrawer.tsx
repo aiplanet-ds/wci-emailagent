@@ -1,4 +1,4 @@
-import { X, Mail, CheckCircle2, Circle, Shield } from 'lucide-react';
+import { X, Mail, CheckCircle2, Circle, Shield, FileText } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/Badge';
 import { VerificationBadge } from '../ui/VerificationBadge';
@@ -11,7 +11,9 @@ import { ProductsTable } from './ProductsTable';
 import { MissingFieldsChecklist } from './MissingFieldsChecklist';
 import { FollowupModal } from './FollowupModal';
 import { WorkflowStepper } from './WorkflowStepper';
-import { useEmailDetail, useUpdateEmailProcessed, useGenerateFollowup } from '../../hooks/useEmails';
+import { EmailBodyViewer } from '../email/EmailBodyViewer';
+import { AttachmentList } from '../email/AttachmentList';
+import { useEmailDetail, useUpdateEmailProcessed, useGenerateFollowup, useRawEmailContent } from '../../hooks/useEmails';
 import type { MissingField } from '../../types/email';
 
 interface EmailDetailDrawerProps {
@@ -26,6 +28,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
   const [pendingWarnings, setPendingWarnings] = useState<string[]>([]);
 
   const { data, isLoading } = useEmailDetail(messageId);
+  const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(messageId);
   const updateProcessed = useUpdateEmailProcessed();
   const generateFollowup = useGenerateFollowup();
 
@@ -161,6 +164,47 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
             {/* Content */}
             <div className="px-6 py-6 space-y-6">
+              {/* Original Email Content */}
+              {rawEmail && !isLoadingRaw && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <h4 className="text-sm font-semibold text-blue-900 mb-3 flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Original Email
+                  </h4>
+
+                  {/* Email Body */}
+                  <div className="mb-4">
+                    <EmailBodyViewer
+                      body={rawEmail.body}
+                      bodyType={rawEmail.bodyType}
+                    />
+                  </div>
+
+                  {/* Attachments */}
+                  {rawEmail.attachments && rawEmail.attachments.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Attachments ({rawEmail.attachments.length})
+                      </h5>
+                      <AttachmentList
+                        attachments={rawEmail.attachments}
+                        messageId={messageId}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {isLoadingRaw && (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                  <div className="text-sm text-gray-500">Loading email content...</div>
+                </div>
+              )}
+
+              <div className="border-t border-gray-300 pt-6">
+                <h4 className="text-sm font-semibold text-gray-700 mb-4">Extracted Data</h4>
+              </div>
+
               {/* Workflow Stepper - Shows 3-Stage Workflow */}
               <WorkflowStepper hasEpicorSync={!!data.epicor_status} />
 
