@@ -144,17 +144,17 @@ async def auth_callback(request: Request, code: str = None, state: str = None, e
         # Add user to delta monitoring for automated email processing
         try:
             print("\n" + "="*80)
-            print(f"🔐 USER AUTHENTICATED: {user_email}")
+            print(f"[AUTH] USER AUTHENTICATED: {user_email}")
             print("="*80)
             await delta_service.add_user_to_monitoring(user_email)
-            print(f"✅ User added to automated monitoring")
-            print(f"🤖 Automated workflow ACTIVATED:")
-            print(f"   1️⃣  Email detection (every 60 seconds)")
-            print(f"   2️⃣  Azure OpenAI extraction")
-            print(f"   3️⃣  Epicor ERP price update")
+            print(f"[OK] User added to automated monitoring")
+            print(f"[ACTIVE] Automated workflow ACTIVATED:")
+            print(f"   [1] Email detection (every 60 seconds)")
+            print(f"   [2] Azure OpenAI extraction")
+            print(f"   [3] Epicor ERP price update")
             print("="*80 + "\n")
         except Exception as e:
-            print(f"⚠️  WARNING: Could not add user to monitoring: {e}")
+            print(f"[WARN] WARNING: Could not add user to monitoring: {e}")
 
         return RedirectResponse(url="/success", status_code=302)
         
@@ -187,14 +187,14 @@ async def logout(request: Request):
     if user_email:
         try:
             print("\n" + "="*80)
-            print(f"👋 USER LOGOUT: {user_email}")
+            print(f"[LOGOUT] USER LOGOUT: {user_email}")
             print("="*80)
             await delta_service.remove_user_from_monitoring(user_email)
-            print(f"✅ User removed from automated monitoring")
-            print(f"🛑 Automated workflow DEACTIVATED for this user")
+            print(f"[OK] User removed from automated monitoring")
+            print(f"[STOP] Automated workflow DEACTIVATED for this user")
             print("="*80 + "\n")
         except Exception as e:
-            print(f"⚠️  ERROR removing user from monitoring: {e}")
+            print(f"[ERROR] ERROR removing user from monitoring: {e}")
 
     # Clear session
     request.session.clear()
@@ -206,37 +206,37 @@ async def logout(request: Request):
 async def startup_event():
     """Start the delta service when the application starts"""
     print("\n" + "="*80)
-    print("🚀 EMAIL INTELLIGENCE SYSTEM - AUTOMATED MODE")
+    print("[STARTUP] EMAIL INTELLIGENCE SYSTEM - AUTOMATED MODE")
     print("="*80)
-    print("📋 Configuration:")
-    print("   🔄 Polling Interval: 60 seconds (1 minute)")
-    print("   🤖 AI Engine: Azure OpenAI")
-    print("   💼 ERP Integration: Epicor REST API v2")
-    print("   🔐 Authentication: Microsoft OAuth 2.0")
+    print("[CONFIG] Configuration:")
+    print("   [POLL] Polling Interval: 60 seconds (1 minute)")
+    print("   [AI] AI Engine: Azure OpenAI")
+    print("   [ERP] ERP Integration: Epicor REST API v2")
+    print("   [AUTH] Authentication: Microsoft OAuth 2.0")
     print("-"*80)
-    print("🚀 Starting automated email monitoring service...")
+    print("[START] Starting automated email monitoring service...")
     delta_service.start_polling()
-    print("✅ Automated monitoring service ACTIVE")
+    print("[OK] Automated monitoring service ACTIVE")
     print("="*80)
-    print("📱 Web Interface: http://localhost:8000")
-    print("ℹ️  Users must login to enable automated processing")
+    print("[WEB] Web Interface: http://localhost:8000")
+    print("[INFO] Users must login to enable automated processing")
     print("="*80 + "\n")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Stop the delta service when the application shuts down"""
     print("\n" + "="*80)
-    print("⏹️  SHUTTING DOWN EMAIL INTELLIGENCE SYSTEM")
+    print("[SHUTDOWN] SHUTTING DOWN EMAIL INTELLIGENCE SYSTEM")
     print("="*80)
     delta_service.stop_polling()
-    print("✅ Automated monitoring service stopped")
+    print("[OK] Automated monitoring service stopped")
     print("="*80 + "\n")
 
 # Run the server when executed directly
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting Email Intelligence System...")
-    print("📱 Access the web interface at: http://localhost:8000")
-    print("🔒 OAuth authentication required")
-    print("📬 Delta query polling for email monitoring")
+    print("[START] Starting Email Intelligence System...")
+    print("[WEB] Access the web interface at: http://localhost:8000")
+    print("[AUTH] OAuth authentication required")
+    print("[POLL] Delta query polling for email monitoring")
     uvicorn.run("start:app", host="0.0.0.0", port=8000, reload=True)

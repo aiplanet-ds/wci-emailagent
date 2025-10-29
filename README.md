@@ -30,10 +30,16 @@ email-intelligence-system/
 │   │── dashboard.html      # User dashboard interface
 │   │── error.html          # Error handling pages
 │── static/                 # CSS, JS, and static assets
-│── processors.py           # Attachment processing (PDF, Excel, Word, TXT)
-│── extractor.py            # OpenAI-powered JSON extraction
-│── main.py                 # Legacy CLI processing (use web interface instead)
-│── webhook.py              # FastAPI web application with OAuth routes
+│── utils/                  # Utility modules
+│   │── processors.py       # Attachment processing (PDF, Excel, Word, TXT)
+│── scripts/                # CLI utility scripts
+│   │── get_part_classes.py
+│   │── get_product_groups.py
+│   │── refresh_epicor_token.py
+│   │── discover_price_lists.py
+│   │── discover_list_types.py
+│── main.py                 # Core email processing logic
+│── start.py                # FastAPI web application with OAuth routes
 │── requirements.txt        # Python dependencies
 │── .env.template           # Environment configuration template
 │── README.md

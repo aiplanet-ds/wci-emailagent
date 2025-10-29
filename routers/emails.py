@@ -15,7 +15,7 @@ from services.email_state_service import email_state_service
 from services.validation_service import validation_service
 from services.epicor_service import EpicorAPIService
 from auth.multi_graph import MultiUserGraphClient
-from extractor import generate_followup_email
+from services.extractor import generate_followup_email
 
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])

@@ -174,7 +174,7 @@ def test_extraction_schema():
     
     # Read extractor.py to verify schema
     try:
-        with open('extractor.py', 'r', encoding='utf-8') as f:
+        with open('services/extractor.py', 'r', encoding='utf-8') as f:
             content = f.read()
             
         checks = {
@@ -199,7 +199,7 @@ def test_extraction_schema():
             return False
             
     except Exception as e:
-        print(f"\n❌ ERROR: Could not read extractor.py: {e}")
+        print(f"\n❌ ERROR: Could not read services/extractor.py: {e}")
         return False
 
 def main():

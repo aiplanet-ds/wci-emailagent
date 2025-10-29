@@ -2,6 +2,11 @@
 Get available Part Classes from Epicor
 """
 
+import sys
+from pathlib import Path
+# Add parent directory to path to allow imports from project root
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import requests
 from services.epicor_service import epicor_service
 

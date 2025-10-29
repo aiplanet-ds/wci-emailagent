@@ -65,7 +65,7 @@ class TestVendorVerificationWorkflow:
                 # mock_flag.assert_called()
 
     @pytest.mark.asyncio
-    @patch('extractor.process_user_message')
+    @patch('main.process_user_message')
     async def test_workflow_verified_email_processed(self, mock_process):
         """Test: Verified email should proceed with AI extraction"""
         from services.vendor_verification_service import vendor_verification_service
@@ -100,7 +100,7 @@ class TestVendorVerificationWorkflow:
             # In real flow, process_user_message would be called
 
     @pytest.mark.asyncio
-    @patch('extractor.process_user_message')
+    @patch('main.process_user_message')
     async def test_workflow_manual_approval_triggers_ai(self, mock_process):
         """Test: Manual approval should trigger AI extraction"""
         from services.email_state_service import email_state_service

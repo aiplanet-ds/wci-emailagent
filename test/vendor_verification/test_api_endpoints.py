@@ -82,7 +82,7 @@ class TestVendorVerificationAPI:
 
     @patch('services.email_state_service.email_state_service.get_state')
     @patch('services.email_state_service.email_state_service.mark_as_manually_approved')
-    @patch('extractor.process_user_message')
+    @patch('main.process_user_message')
     def test_approve_and_process_email(
         self, mock_process, mock_mark_approved, mock_get_state, client
     ):
@@ -245,7 +245,7 @@ class TestVendorVerificationAPI:
         assert response.status_code == 500
 
     @patch('services.email_state_service.email_state_service.get_state')
-    @patch('extractor.process_user_message')
+    @patch('main.process_user_message')
     def test_approve_triggers_ai_extraction(self, mock_process, mock_get_state, client):
         """Test that approving email triggers AI extraction"""
         mock_get_state.return_value = {
