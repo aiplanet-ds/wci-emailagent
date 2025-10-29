@@ -1,7 +1,7 @@
 import os, json
 from auth.multi_graph import graph_client
-from processors import save_attachment, process_all_content
-from extractor import extract_price_change_json
+from utils.processors import save_attachment, process_all_content
+from services.extractor import extract_price_change_json
 
 OUTPUT_DIR = "outputs"
 DOWNLOADS_DIR = "downloads"

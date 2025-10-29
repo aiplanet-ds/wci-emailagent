@@ -3,6 +3,11 @@ Quick script to refresh Epicor Bearer Token
 Run this when you get 401 token expired errors
 """
 
+import sys
+from pathlib import Path
+# Add parent directory to path to allow imports from project root
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import os
 from dotenv import load_dotenv, set_key
 from services.epicor_auth import epicor_auth

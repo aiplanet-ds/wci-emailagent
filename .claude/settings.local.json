@@ -6,7 +6,9 @@
       "Bash(npm install @tanstack/react-query axios react-router-dom lucide-react tailwindcss postcss autoprefixer class-variance-authority clsx tailwind-merge)",
       "Bash(npx tailwindcss init -p)",
       "Bash(npm run build)",
-      "Bash(python test_price_list_fix.py:*)"
+      "Bash(python test_price_list_fix.py:*)",
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []
