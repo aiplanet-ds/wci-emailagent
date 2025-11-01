@@ -10,7 +10,8 @@
       "Bash(.venv/Scripts/python:*)",
       "Bash(curl:*)",
       "Bash(python:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(awk:*)"
     ],
     "deny": [],
     "ask": []
