@@ -1,0 +1,870 @@
+{
+  "last_updated": "2025-10-29T19:46:03.897233",
+  "ttl_hours": 24,
+  "verified_emails": [
+    "12087347222@efaxsend.com",
+    "12157360589@efaxsend.com",
+    "12622552761@efaxsend.com",
+    "13193667682@efaxsend.com",
+    "15122332414@efaxsend.com",
+    "15635826501@efaxsend.com",
+    "16167734214@efaxsend.com",
+    "17083399876@efaxsend.com",
+    "17087563105@efaxsend.com",
+    "17088677052@efaxsend.com",
+    "17184422124@efaxsend.com",
+    "17248460850@efaxsend.com",
+    "17813957247@efaxsend.com",
+    "18007850756@efaxsend.com",
+    "18009248277@efaxsend.com",
+    "18009270579@efaxsend.com",
+    "18569316400@efaxsend.com",
+    "19103719055@efaxsend.com",
+    "19498583430@efaxsend.com",
+    "ahunscke@industrialnut.com;custservice@industrialnut.com",
+    "amossberger@ofalloncasting.com",
+    "arthur.klein@bossard.com",
+    "asaldana@borgwarner.com",
+    "astanton@lakeviewindustries.com",
+    "bretf@hawkeyebox.com",
+    "bruggles@worldclassind.com",
+    "btaube@usnameplate.com",
+    "carlos.quinones@jtekt.com",
+    "cblevins@schrader-pacific.com",
+    "cbogaard@thombert.com",
+    "charles.hsu@cp-diecast.com",
+    "cindy@andersonbrass.com",
+    "cotto@pioneerindustrial.com",
+    "cs1@evanspremiumparts.com",
+    "customer.service@teknicast.com",
+    "customerservice@groupo.com",
+    "customerservice@ripleyind.com",
+    "customerservice@spiralindustries.com",
+    "dan@serviceexpressco.com",
+    "danielle.pryor@motherson.com",
+    "darrin@wiringharness.com",
+    "dave.rindt@toolrite.com",
+    "debbier@actionspringco.com",
+    "denise.wheatley@shipstdf.com",
+    "edmerritt@activarppg.com",
+    "fatma.kodas@mubea.com",
+    "firstfitcxna@gates.com",
+    "fordsell@ameritech.net",
+    "heathern@criterionmfg.com",
+    "inside.sales@cooperproducts.com",
+    "jao@worldclassind.com",
+    "jeffrey.hauser@concentricab.com",
+    "jlesniak@mckey.com",
+    "jmyers@hddistributors.com",
+    "john.matthews@apache-inc.com",
+    "jpolen@allsealsinc.com",
+    "julann.kortemeier@gabriel.com",
+    "karif@ifpusa.com",
+    "koliver@usa.unipartsgroup.com",
+    "lorih@quistelectronics.com",
+    "louann.loveless@caplugs.com",
+    "mak@worldclassind.com",
+    "measorders@te.com",
+    "milan.malic@erwagner.com",
+    "mmarkham@lucasmilhaupt.com",
+    "moliver@precisionrings.com",
+    "mwolff@worldclassind.com",
+    "nancy.mallory@anrodscreen.com",
+    "orderdesk@kmcstampings.com;marnhoelter@kmcstampings.com",
+    "orders.ablus@vignal-group.com",
+    "orders@beckerandassociates.com",
+    "orders@hartfiel.com",
+    "pdcco@verizon.net",
+    "philipsautoorders@lumileds.com",
+    "psc.hiawatha.support@support.parker.com",
+    "purchaseorders@sensata.com; dmontalvanmartinez@sensata.com",
+    "qr@normagroup.com",
+    "rebecca.wendel@fastercouplings.com",
+    "rfilby@powersignal.com",
+    "rkovarik@fusioninc.com",
+    "ryleyt@lislecorp.com",
+    "sales@aerofastinc.com",
+    "sales@barnesballscrew.com",
+    "sales@coloradosintered.com",
+    "sales@heli-cal.com",
+    "sales@nielsenhardware.com",
+    "saleswcf@wireclothfilter.net",
+    "service@chemacinc.com",
+    "sfrq@bossard.com",
+    "sprocket@babbittsteam.com",
+    "srobbins@pmlights.com",
+    "ssh@worldclassind.com",
+    "staceys@powerprocess.net",
+    "tphipps@ultraspecialties.com",
+    "tracyj@tcdcinc.com",
+    "treasa.henry@te.com",
+    "waterloo@bdi-usa.com",
+    "wlinck@bigriversllc.com"
+  ],
+  "verified_domains": [
+    "actionspringco.com",
+    "activarppg.com",
+    "aerofastinc.com",
+    "allsealsinc.com",
+    "ameritech.net",
+    "andersonbrass.com",
+    "anrodscreen.com",
+    "apache-inc.com",
+    "babbittsteam.com",
+    "barnesballscrew.com",
+    "bdi-usa.com",
+    "beckerandassociates.com",
+    "bigriversllc.com",
+    "borgwarner.com",
+    "bossard.com",
+    "caplugs.com",
+    "chemacinc.com",
+    "coloradosintered.com",
+    "concentricab.com",
+    "cooperproducts.com",
+    "cp-diecast.com",
+    "criterionmfg.com",
+    "efaxsend.com",
+    "erwagner.com",
+    "evanspremiumparts.com",
+    "fastercouplings.com",
+    "fusioninc.com",
+    "gabriel.com",
+    "gates.com",
+    "groupo.com",
+    "hartfiel.com",
+    "hawkeyebox.com",
+    "hddistributors.com",
+    "heli-cal.com",
+    "ifpusa.com",
+    "industrialnut.com;custservice",
+    "jtekt.com",
+    "kmcstampings.com;marnhoelter",
+    "lakeviewindustries.com",
+    "lislecorp.com",
+    "lucasmilhaupt.com",
+    "lumileds.com",
+    "mckey.com",
+    "motherson.com",
+    "mubea.com",
+    "nielsenhardware.com",
+    "normagroup.com",
+    "ofalloncasting.com",
+    "pioneerindustrial.com",
+    "pmlights.com",
+    "powerprocess.net",
+    "powersignal.com",
+    "precisionrings.com",
+    "quistelectronics.com",
+    "ripleyind.com",
+    "schrader-pacific.com",
+    "sensata.com; dmontalvanmartinez",
+    "serviceexpressco.com",
+    "shipstdf.com",
+    "spiralindustries.com",
+    "support.parker.com",
+    "tcdcinc.com",
+    "te.com",
+    "teknicast.com",
+    "thombert.com",
+    "toolrite.com",
+    "ultraspecialties.com",
+    "usa.unipartsgroup.com",
+    "usnameplate.com",
+    "verizon.net",
+    "vignal-group.com",
+    "wireclothfilter.net",
+    "wiringharness.com",
+    "worldclassind.com"
+  ],
+  "vendor_lookup": {
+    "mak@worldclassind.com": {
+      "vendor_id": "WORL3",
+      "vendor_name": "World Class Industries"
+    },
+    "@worldclassind.com": {
+      "vendor_id": "WORL3",
+      "vendor_name": "World Class Industries"
+    },
+    "fordsell@ameritech.net": {
+      "vendor_id": "FORDS",
+      "vendor_name": "Fordsell Machine"
+    },
+    "@ameritech.net": {
+      "vendor_id": "FORDS",
+      "vendor_name": "Fordsell Machine"
+    },
+    "tracyj@tcdcinc.com": {
+      "vendor_id": "TWINC",
+      "vendor_name": "Twin City Die Casting Company"
+    },
+    "@tcdcinc.com": {
+      "vendor_id": "TWINC",
+      "vendor_name": "Twin City Die Casting Company"
+    },
+    "customer.service@teknicast.com": {
+      "vendor_id": "TEKNI",
+      "vendor_name": "Teknicast"
+    },
+    "@teknicast.com": {
+      "vendor_id": "TEKNI",
+      "vendor_name": "Teknicast"
+    },
+    "dave.rindt@toolrite.com": {
+      "vendor_id": "TOOLR",
+      "vendor_name": "Toolrite Mfg Co, Inc."
+    },
+    "@toolrite.com": {
+      "vendor_id": "TOOLR",
+      "vendor_name": "Toolrite Mfg Co, Inc."
+    },
+    "purchaseorders@sensata.com; dmontalvanmartinez@sensata.com": {
+      "vendor_id": "SENS1",
+      "vendor_name": "SENSATA TECHNOLOGIES, INC."
+    },
+    "@sensata.com; dmontalvanmartinez": {
+      "vendor_id": "SENS1",
+      "vendor_name": "SENSATA TECHNOLOGIES, INC."
+    },
+    "denise.wheatley@shipstdf.com": {
+      "vendor_id": "STAN1",
+      "vendor_name": "Standard Forwarding Freight, LLC"
+    },
+    "@shipstdf.com": {
+      "vendor_id": "STAN1",
+      "vendor_name": "Standard Forwarding Freight, LLC"
+    },
+    "rebecca.wendel@fastercouplings.com": {
+      "vendor_id": "FAST1",
+      "vendor_name": "Faster Inc. (Indiana)"
+    },
+    "@fastercouplings.com": {
+      "vendor_id": "FAST1",
+      "vendor_name": "Faster Inc. (Indiana)"
+    },
+    "cs1@evanspremiumparts.com": {
+      "vendor_id": "EVAN1",
+      "vendor_name": "Premium Manufacturing Inc"
+    },
+    "@evanspremiumparts.com": {
+      "vendor_id": "EVAN1",
+      "vendor_name": "Premium Manufacturing Inc"
+    },
+    "18009270579@efaxsend.com": {
+      "vendor_id": "SCHOT",
+      "vendor_name": "Schott Elecpac, LLC"
+    },
+    "@efaxsend.com": {
+      "vendor_id": "SCHOT",
+      "vendor_name": "Schott Elecpac, LLC"
+    },
+    "service@chemacinc.com": {
+      "vendor_id": "CHEMA",
+      "vendor_name": "Chemac Inc."
+    },
+    "@chemacinc.com": {
+      "vendor_id": "CHEMA",
+      "vendor_name": "Chemac Inc."
+    },
+    "rfilby@powersignal.com": {
+      "vendor_id": "ARRO6",
+      "vendor_name": "Arrow Electronics, Inc"
+    },
+    "@powersignal.com": {
+      "vendor_id": "ARRO6",
+      "vendor_name": "Arrow Electronics, Inc"
+    },
+    "sales@coloradosintered.com": {
+      "vendor_id": "CSMIN",
+      "vendor_name": "CSM, INC- Colorado Sintered Metals"
+    },
+    "@coloradosintered.com": {
+      "vendor_id": "CSMIN",
+      "vendor_name": "CSM, INC- Colorado Sintered Metals"
+    },
+    "charles.hsu@cp-diecast.com": {
+      "vendor_id": "CHINA",
+      "vendor_name": "China Precision Diecasting Inc.- JD"
+    },
+    "@cp-diecast.com": {
+      "vendor_id": "CHINA",
+      "vendor_name": "China Precision Diecasting Inc.- JD"
+    },
+    "louann.loveless@caplugs.com": {
+      "vendor_id": "CAPLU",
+      "vendor_name": "Caplugs"
+    },
+    "@caplugs.com": {
+      "vendor_id": "CAPLU",
+      "vendor_name": "Caplugs"
+    },
+    "qr@normagroup.com": {
+      "vendor_id": "NORM3",
+      "vendor_name": "NORMA Pennsylvania, Inc."
+    },
+    "@normagroup.com": {
+      "vendor_id": "NORM3",
+      "vendor_name": "NORMA Pennsylvania, Inc."
+    },
+    "13193667682@efaxsend.com": {
+      "vendor_id": "BAKE1",
+      "vendor_name": "Baker Paper Company, Inc."
+    },
+    "customerservice@groupo.com": {
+      "vendor_id": "GROU1",
+      "vendor_name": "Group O Packaging Solutions"
+    },
+    "@groupo.com": {
+      "vendor_id": "GROU1",
+      "vendor_name": "Group O Packaging Solutions"
+    },
+    "waterloo@bdi-usa.com": {
+      "vendor_id": "BDIWA",
+      "vendor_name": "BDI - Waterloo"
+    },
+    "@bdi-usa.com": {
+      "vendor_id": "BDIWA",
+      "vendor_name": "BDI - Waterloo"
+    },
+    "carlos.quinones@jtekt.com": {
+      "vendor_id": "JTEKT",
+      "vendor_name": "JTEKT"
+    },
+    "@jtekt.com": {
+      "vendor_id": "JTEKT",
+      "vendor_name": "JTEKT"
+    },
+    "ryleyt@lislecorp.com": {
+      "vendor_id": "LISLE",
+      "vendor_name": "Lisle Corporation"
+    },
+    "@lislecorp.com": {
+      "vendor_id": "LISLE",
+      "vendor_name": "Lisle Corporation"
+    },
+    "sfrq@bossard.com": {
+      "vendor_id": "BOSSA",
+      "vendor_name": "Bossard Larson"
+    },
+    "@bossard.com": {
+      "vendor_id": "BOSSA",
+      "vendor_name": "Bossard Larson"
+    },
+    "karif@ifpusa.com": {
+      "vendor_id": "IFPMO",
+      "vendor_name": "IFP Motion Solutions fka:Iowa Fluid Powe"
+    },
+    "@ifpusa.com": {
+      "vendor_id": "IFPMO",
+      "vendor_name": "IFP Motion Solutions fka:Iowa Fluid Powe"
+    },
+    "cindy@andersonbrass.com": {
+      "vendor_id": "ANDE1",
+      "vendor_name": "Anderson Brass Company"
+    },
+    "@andersonbrass.com": {
+      "vendor_id": "ANDE1",
+      "vendor_name": "Anderson Brass Company"
+    },
+    "ssh@worldclassind.com": {
+      "vendor_id": "ERIEH",
+      "vendor_name": "Erie Hard Facing"
+    },
+    "milan.malic@erwagner.com": {
+      "vendor_id": "ERWAG",
+      "vendor_name": "ER Wagner"
+    },
+    "@erwagner.com": {
+      "vendor_id": "ERWAG",
+      "vendor_name": "ER Wagner"
+    },
+    "jmyers@hddistributors.com": {
+      "vendor_id": "HDDIS",
+      "vendor_name": "H&D Distributors, Inc."
+    },
+    "@hddistributors.com": {
+      "vendor_id": "HDDIS",
+      "vendor_name": "H&D Distributors, Inc."
+    },
+    "15635826501@efaxsend.com": {
+      "vendor_id": "MCDON",
+      "vendor_name": "McDonald Supply"
+    },
+    "orderdesk@kmcstampings.com;marnhoelter@kmcstampings.com": {
+      "vendor_id": "KMCST",
+      "vendor_name": "KMC Stampings"
+    },
+    "@kmcstampings.com;marnhoelter": {
+      "vendor_id": "KMCST",
+      "vendor_name": "KMC Stampings"
+    },
+    "bruggles@worldclassind.com": {
+      "vendor_id": "JOHND",
+      "vendor_name": "John Deere Harvester"
+    },
+    "17088677052@efaxsend.com": {
+      "vendor_id": "LAWRE",
+      "vendor_name": "Lawrence Screw Products"
+    },
+    "tphipps@ultraspecialties.com": {
+      "vendor_id": "ULTRA",
+      "vendor_name": "Ultra Specialties, Inc."
+    },
+    "@ultraspecialties.com": {
+      "vendor_id": "ULTRA",
+      "vendor_name": "Ultra Specialties, Inc."
+    },
+    "orders@hartfiel.com": {
+      "vendor_id": "HART1",
+      "vendor_name": "Hartfiel Automation"
+    },
+    "@hartfiel.com": {
+      "vendor_id": "HART1",
+      "vendor_name": "Hartfiel Automation"
+    },
+    "sprocket@babbittsteam.com": {
+      "vendor_id": "BABBI",
+      "vendor_name": "Babbitt Steam Spec."
+    },
+    "@babbittsteam.com": {
+      "vendor_id": "BABBI",
+      "vendor_name": "Babbitt Steam Spec."
+    },
+    "orders@beckerandassociates.com": {
+      "vendor_id": "BECKE",
+      "vendor_name": "Becker And Associates"
+    },
+    "@beckerandassociates.com": {
+      "vendor_id": "BECKE",
+      "vendor_name": "Becker And Associates"
+    },
+    "jlesniak@mckey.com": {
+      "vendor_id": "MCKEY",
+      "vendor_name": "Mckey Perforating Co., Inc."
+    },
+    "@mckey.com": {
+      "vendor_id": "MCKEY",
+      "vendor_name": "Mckey Perforating Co., Inc."
+    },
+    "btaube@usnameplate.com": {
+      "vendor_id": "USNAM",
+      "vendor_name": "U.S. NAMEPLATE CO."
+    },
+    "@usnameplate.com": {
+      "vendor_id": "USNAM",
+      "vendor_name": "U.S. NAMEPLATE CO."
+    },
+    "firstfitcxna@gates.com": {
+      "vendor_id": "GATE1",
+      "vendor_name": "Gates Rubber - Denver, CO"
+    },
+    "@gates.com": {
+      "vendor_id": "GATE1",
+      "vendor_name": "Gates Rubber - Denver, CO"
+    },
+    "jeffrey.hauser@concentricab.com": {
+      "vendor_id": "CONCE",
+      "vendor_name": "Concentric Rockford Inc."
+    },
+    "@concentricab.com": {
+      "vendor_id": "CONCE",
+      "vendor_name": "Concentric Rockford Inc."
+    },
+    "mwolff@worldclassind.com": {
+      "vendor_id": "JOHN4",
+      "vendor_name": "John Deere Des Moines Works"
+    },
+    "arthur.klein@bossard.com": {
+      "vendor_id": "BOSS1",
+      "vendor_name": "Bossard North America  Cedar Falls"
+    },
+    "fatma.kodas@mubea.com": {
+      "vendor_id": "MUBEA",
+      "vendor_name": "Mubea Inc"
+    },
+    "@mubea.com": {
+      "vendor_id": "MUBEA",
+      "vendor_name": "Mubea Inc"
+    },
+    "psc.hiawatha.support@support.parker.com": {
+      "vendor_id": "PARK4",
+      "vendor_name": "Parker Hannifin - IA"
+    },
+    "@support.parker.com": {
+      "vendor_id": "PARK4",
+      "vendor_name": "Parker Hannifin - IA"
+    },
+    "customerservice@spiralindustries.com": {
+      "vendor_id": "SPIR1",
+      "vendor_name": "Spiral Industries, Inc."
+    },
+    "@spiralindustries.com": {
+      "vendor_id": "SPIR1",
+      "vendor_name": "Spiral Industries, Inc."
+    },
+    "cbogaard@thombert.com": {
+      "vendor_id": "THOMB",
+      "vendor_name": "Thombert Incorporated"
+    },
+    "@thombert.com": {
+      "vendor_id": "THOMB",
+      "vendor_name": "Thombert Incorporated"
+    },
+    "edmerritt@activarppg.com": {
+      "vendor_id": "SEELY",
+      "vendor_name": "Seelye Plastics"
+    },
+    "@activarppg.com": {
+      "vendor_id": "SEELY",
+      "vendor_name": "Seelye Plastics"
+    },
+    "17813957247@efaxsend.com": {
+      "vendor_id": "CONAN",
+      "vendor_name": "Conant Controls Inc."
+    },
+    "moliver@precisionrings.com": {
+      "vendor_id": "PRECI",
+      "vendor_name": "Precision Rings, Inc."
+    },
+    "@precisionrings.com": {
+      "vendor_id": "PRECI",
+      "vendor_name": "Precision Rings, Inc."
+    },
+    "jao@worldclassind.com": {
+      "vendor_id": "BROOK",
+      "vendor_name": "Brooks Electronics, Inc."
+    },
+    "12157360589@efaxsend.com": {
+      "vendor_id": "NYLOM",
+      "vendor_name": "Nylomatic"
+    },
+    "ahunscke@industrialnut.com;custservice@industrialnut.com": {
+      "vendor_id": "INDU1",
+      "vendor_name": "Industrial Nut Corp."
+    },
+    "@industrialnut.com;custservice": {
+      "vendor_id": "INDU1",
+      "vendor_name": "Industrial Nut Corp."
+    },
+    "sales@nielsenhardware.com": {
+      "vendor_id": "NIELS",
+      "vendor_name": "Nielsen Hardware"
+    },
+    "@nielsenhardware.com": {
+      "vendor_id": "NIELS",
+      "vendor_name": "Nielsen Hardware"
+    },
+    "18007850756@efaxsend.com": {
+      "vendor_id": "SERVO",
+      "vendor_name": "Servometer Corp."
+    },
+    "nancy.mallory@anrodscreen.com": {
+      "vendor_id": "ANROD",
+      "vendor_name": "Anrod Screen Cylinder Co."
+    },
+    "@anrodscreen.com": {
+      "vendor_id": "ANROD",
+      "vendor_name": "Anrod Screen Cylinder Co."
+    },
+    "inside.sales@cooperproducts.com": {
+      "vendor_id": "COOP1",
+      "vendor_name": "Cooper Products, Inc."
+    },
+    "@cooperproducts.com": {
+      "vendor_id": "COOP1",
+      "vendor_name": "Cooper Products, Inc."
+    },
+    "17083399876@efaxsend.com": {
+      "vendor_id": "CHICA",
+      "vendor_name": "Chicago-Wilcox Company"
+    },
+    "bretf@hawkeyebox.com": {
+      "vendor_id": "BUCK4",
+      "vendor_name": "Buckeye Corrugated - Cedar Falls"
+    },
+    "@hawkeyebox.com": {
+      "vendor_id": "BUCK4",
+      "vendor_name": "Buckeye Corrugated - Cedar Falls"
+    },
+    "sales@barnesballscrew.com": {
+      "vendor_id": "BARNE",
+      "vendor_name": "Barnes Industries, Inc."
+    },
+    "@barnesballscrew.com": {
+      "vendor_id": "BARNE",
+      "vendor_name": "Barnes Industries, Inc."
+    },
+    "astanton@lakeviewindustries.com": {
+      "vendor_id": "LAKEV",
+      "vendor_name": "Lakeview Industries"
+    },
+    "@lakeviewindustries.com": {
+      "vendor_id": "LAKEV",
+      "vendor_name": "Lakeview Industries"
+    },
+    "16167734214@efaxsend.com": {
+      "vendor_id": "THERM",
+      "vendor_name": "Therm-O-Disc, Inc - MI"
+    },
+    "rkovarik@fusioninc.com": {
+      "vendor_id": "FUSI1",
+      "vendor_name": "Fusion Inc."
+    },
+    "@fusioninc.com": {
+      "vendor_id": "FUSI1",
+      "vendor_name": "Fusion Inc."
+    },
+    "wlinck@bigriversllc.com": {
+      "vendor_id": "CONBR",
+      "vendor_name": "Conbraco Industries, Inc"
+    },
+    "@bigriversllc.com": {
+      "vendor_id": "CONBR",
+      "vendor_name": "Conbraco Industries, Inc"
+    },
+    "customerservice@ripleyind.com": {
+      "vendor_id": "RIPLE",
+      "vendor_name": "RIPLEY INDUSTRIES INC."
+    },
+    "@ripleyind.com": {
+      "vendor_id": "RIPLE",
+      "vendor_name": "RIPLEY INDUSTRIES INC."
+    },
+    "darrin@wiringharness.com": {
+      "vendor_id": "MHELE",
+      "vendor_name": "M&H Electric Fabricators, Inc"
+    },
+    "@wiringharness.com": {
+      "vendor_id": "MHELE",
+      "vendor_name": "M&H Electric Fabricators, Inc"
+    },
+    "cotto@pioneerindustrial.com": {
+      "vendor_id": "PION2",
+      "vendor_name": "Pioneer Industrial Corp"
+    },
+    "@pioneerindustrial.com": {
+      "vendor_id": "PION2",
+      "vendor_name": "Pioneer Industrial Corp"
+    },
+    "cblevins@schrader-pacific.com": {
+      "vendor_id": "SCHR1",
+      "vendor_name": "Schrader Bridgeport- VA"
+    },
+    "@schrader-pacific.com": {
+      "vendor_id": "SCHR1",
+      "vendor_name": "Schrader Bridgeport- VA"
+    },
+    "19498583430@efaxsend.com": {
+      "vendor_id": "CONT1",
+      "vendor_name": "Control Components, Inc."
+    },
+    "12087347222@efaxsend.com": {
+      "vendor_id": "SEAST",
+      "vendor_name": "Seastrom Manufacturing Co Inc"
+    },
+    "17248460850@efaxsend.com": {
+      "vendor_id": "STAN2",
+      "vendor_name": "Standard Horse Nail Corp."
+    },
+    "17184422124@efaxsend.com": {
+      "vendor_id": "TECHP",
+      "vendor_name": "Tech Products, Inc."
+    },
+    "saleswcf@wireclothfilter.net": {
+      "vendor_id": "WIREC",
+      "vendor_name": "Wire Cloth Filter Manufacturing Co"
+    },
+    "@wireclothfilter.net": {
+      "vendor_id": "WIREC",
+      "vendor_name": "Wire Cloth Filter Manufacturing Co"
+    },
+    "pdcco@verizon.net": {
+      "vendor_id": "PITTS",
+      "vendor_name": "Pittsburgh Die & Casting Co"
+    },
+    "@verizon.net": {
+      "vendor_id": "PITTS",
+      "vendor_name": "Pittsburgh Die & Casting Co"
+    },
+    "staceys@powerprocess.net": {
+      "vendor_id": "POWE1",
+      "vendor_name": "Power Process Equipment, Inc."
+    },
+    "@powerprocess.net": {
+      "vendor_id": "POWE1",
+      "vendor_name": "Power Process Equipment, Inc."
+    },
+    "18569316400@efaxsend.com": {
+      "vendor_id": "MERCE",
+      "vendor_name": "Mercer Gasket & Shim"
+    },
+    "treasa.henry@te.com": {
+      "vendor_id": "TECON",
+      "vendor_name": "TE CONNECTIVITY"
+    },
+    "@te.com": {
+      "vendor_id": "TECON",
+      "vendor_name": "TE CONNECTIVITY"
+    },
+    "heathern@criterionmfg.com": {
+      "vendor_id": "CRITE",
+      "vendor_name": "Criterion Inc"
+    },
+    "@criterionmfg.com": {
+      "vendor_id": "CRITE",
+      "vendor_name": "Criterion Inc"
+    },
+    "julann.kortemeier@gabriel.com": {
+      "vendor_id": "GABRI",
+      "vendor_name": "Gabriel Ride Control Products"
+    },
+    "@gabriel.com": {
+      "vendor_id": "GABRI",
+      "vendor_name": "Gabriel Ride Control Products"
+    },
+    "amossberger@ofalloncasting.com": {
+      "vendor_id": "OFALL",
+      "vendor_name": "O'Fallon Casting, LLC"
+    },
+    "@ofalloncasting.com": {
+      "vendor_id": "OFALL",
+      "vendor_name": "O'Fallon Casting, LLC"
+    },
+    "lorih@quistelectronics.com": {
+      "vendor_id": "QUIST",
+      "vendor_name": "Quist Electronics"
+    },
+    "@quistelectronics.com": {
+      "vendor_id": "QUIST",
+      "vendor_name": "Quist Electronics"
+    },
+    "measorders@te.com": {
+      "vendor_id": "MEASU",
+      "vendor_name": "Measurement Specialties, Inc."
+    },
+    "12622552761@efaxsend.com": {
+      "vendor_id": "DIELE",
+      "vendor_name": "Dielectric Corp."
+    },
+    "18009248277@efaxsend.com": {
+      "vendor_id": "UTEXI",
+      "vendor_name": "Utex Industries, Inc."
+    },
+    "19103719055@efaxsend.com": {
+      "vendor_id": "QRPIN",
+      "vendor_name": "QRP Inc"
+    },
+    "sales@heli-cal.com": {
+      "vendor_id": "HELIC",
+      "vendor_name": "Helical Product Co Inc"
+    },
+    "@heli-cal.com": {
+      "vendor_id": "HELIC",
+      "vendor_name": "Helical Product Co Inc"
+    },
+    "sales@aerofastinc.com": {
+      "vendor_id": "AEROF",
+      "vendor_name": "Aerofast, Inc."
+    },
+    "@aerofastinc.com": {
+      "vendor_id": "AEROF",
+      "vendor_name": "Aerofast, Inc."
+    },
+    "jpolen@allsealsinc.com": {
+      "vendor_id": "ALLSE",
+      "vendor_name": "All Seals Incorporated"
+    },
+    "@allsealsinc.com": {
+      "vendor_id": "ALLSE",
+      "vendor_name": "All Seals Incorporated"
+    },
+    "debbier@actionspringco.com": {
+      "vendor_id": "ACTIO",
+      "vendor_name": "Action Spring"
+    },
+    "@actionspringco.com": {
+      "vendor_id": "ACTIO",
+      "vendor_name": "Action Spring"
+    },
+    "danielle.pryor@motherson.com": {
+      "vendor_id": "MSSLW",
+      "vendor_name": "MSSL Wiring System Inc. (Portland)"
+    },
+    "@motherson.com": {
+      "vendor_id": "MSSLW",
+      "vendor_name": "MSSL Wiring System Inc. (Portland)"
+    },
+    "koliver@usa.unipartsgroup.com": {
+      "vendor_id": "UNIPA",
+      "vendor_name": "Uniparts Olsen Inc."
+    },
+    "@usa.unipartsgroup.com": {
+      "vendor_id": "UNIPA",
+      "vendor_name": "Uniparts Olsen Inc."
+    },
+    "philipsautoorders@lumileds.com": {
+      "vendor_id": "LUMIL",
+      "vendor_name": "Lumileds Delaware, LLC"
+    },
+    "@lumileds.com": {
+      "vendor_id": "LUMIL",
+      "vendor_name": "Lumileds Delaware, LLC"
+    },
+    "17087563105@efaxsend.com": {
+      "vendor_id": "KINGO",
+      "vendor_name": "King Of The Road"
+    },
+    "dan@serviceexpressco.com": {
+      "vendor_id": "SERV1",
+      "vendor_name": "SERVICE EXPRESS CO., Inc."
+    },
+    "@serviceexpressco.com": {
+      "vendor_id": "SERV1",
+      "vendor_name": "SERVICE EXPRESS CO., Inc."
+    },
+    "orders.ablus@vignal-group.com": {
+      "vendor_id": "VIGNA",
+      "vendor_name": "Vignal fka ABL Lights Group"
+    },
+    "@vignal-group.com": {
+      "vendor_id": "VIGNA",
+      "vendor_name": "Vignal fka ABL Lights Group"
+    },
+    "15122332414@efaxsend.com": {
+      "vendor_id": "THEPI",
+      "vendor_name": "The Pierce - Lockcraft Company"
+    },
+    "john.matthews@apache-inc.com": {
+      "vendor_id": "MICO2",
+      "vendor_name": "Mi Conveyance Solutions   fka:Apache Hos"
+    },
+    "@apache-inc.com": {
+      "vendor_id": "MICO2",
+      "vendor_name": "Mi Conveyance Solutions   fka:Apache Hos"
+    },
+    "mmarkham@lucasmilhaupt.com": {
+      "vendor_id": "LUCAS",
+      "vendor_name": "Lucas-Milhaupt, Inc."
+    },
+    "@lucasmilhaupt.com": {
+      "vendor_id": "LUCAS",
+      "vendor_name": "Lucas-Milhaupt, Inc."
+    },
+    "srobbins@pmlights.com": {
+      "vendor_id": "PETER",
+      "vendor_name": "Peterson Manufacturing Co."
+    },
+    "@pmlights.com": {
+      "vendor_id": "PETER",
+      "vendor_name": "Peterson Manufacturing Co."
+    },
+    "asaldana@borgwarner.com": {
+      "vendor_id": "BORG1",
+      "vendor_name": "Borg Warner Transmission Systems"
+    },
+    "@borgwarner.com": {
+      "vendor_id": "BORG1",
+      "vendor_name": "Borg Warner Transmission Systems"
+    }
+  }
+}

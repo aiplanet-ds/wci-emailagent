@@ -14,7 +14,12 @@ from typing import Dict, List, Optional, Any
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-import aiofiles
+
+# Database imports
+from database.config import SessionLocal
+from database.services.user_service import UserService
+from database.services.delta_service import DeltaService as DBDeltaService
+from database.services.email_state_service import EmailStateService as DBEmailStateService
 
 # Import LLM-powered detection service
 from services.llm_detector import llm_is_price_change_email
@@ -29,13 +34,11 @@ class DeltaEmailService:
     """
     Delta query service for polling user emails and processing new/changed messages
     """
-    
+
     def __init__(self):
         from auth.multi_graph import graph_client
         self.graph_client = graph_client
         self.scheduler = AsyncIOScheduler()
-        self.delta_tokens_file = "delta_tokens.json"
-        self.active_users_file = "active_users.json"
         self.polling_interval = 60  # 1 minute for automated workflow
         self.is_running = False
 
@@ -43,72 +46,84 @@ class DeltaEmailService:
         os.makedirs("delta_cache", exist_ok=True)
         
     async def load_delta_tokens(self) -> Dict[str, str]:
-        """Load delta tokens for all users"""
+        """Load delta tokens for all users from database"""
         try:
-            if os.path.exists(self.delta_tokens_file):
-                with open(self.delta_tokens_file, 'r') as f:
-                    return json.load(f)
+            async with SessionLocal() as db:
+                users = await UserService.get_all_users(db, active_only=True)
+                tokens = {}
+                for user in users:
+                    token = await DBDeltaService.get_delta_token(db, user.id)
+                    if token:
+                        tokens[user.email] = token
+                return tokens
         except Exception as e:
-            logger.error(f"Error loading delta tokens: {e}")
-        return {}
-    
+            logger.error(f"Error loading delta tokens from database: {e}")
+            return {}
+
     async def save_delta_tokens(self, tokens: Dict[str, str]):
-        """Save delta tokens for all users"""
+        """Save delta tokens for all users to database"""
         try:
-            with open(self.delta_tokens_file, 'w') as f:
-                json.dump(tokens, f, indent=2)
+            async with SessionLocal() as db:
+                for user_email, token in tokens.items():
+                    user = await UserService.get_user_by_email(db, user_email)
+                    if user:
+                        await DBDeltaService.set_delta_token(db, user.id, token)
+                await db.commit()
         except Exception as e:
-            logger.error(f"Error saving delta tokens: {e}")
+            logger.error(f"Error saving delta tokens to database: {e}")
     
     async def load_active_users(self) -> List[str]:
-        """Load list of active users to monitor"""
+        """Load list of active users to monitor from database"""
         try:
-            if os.path.exists(self.active_users_file):
-                with open(self.active_users_file, 'r') as f:
-                    data = json.load(f)
-                    return data.get('users', [])
+            async with SessionLocal() as db:
+                users = await UserService.get_all_users(db, active_only=True)
+                return [user.email for user in users]
         except Exception as e:
-            logger.error(f"Error loading active users: {e}")
-        return []
-    
+            logger.error(f"Error loading active users from database: {e}")
+            return []
+
     async def save_active_users(self, users: List[str]):
-        """Save list of active users"""
-        try:
-            data = {
-                'users': users,
-                'last_updated': datetime.now().isoformat()
-            }
-            with open(self.active_users_file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving active users: {e}")
+        """Save list of active users to database - deprecated, use activate_user/deactivate_user instead"""
+        logger.warning("save_active_users is deprecated - user activation is now managed per-user")
     
     async def add_user_to_monitoring(self, user_email: str):
-        """Add a user to email monitoring"""
-        active_users = await self.load_active_users()
-        if user_email not in active_users:
-            active_users.append(user_email)
-            await self.save_active_users(active_users)
-            logger.info(f"✅ User added to monitoring list")
-            logger.info(f"📊 Total active users: {len(active_users)}")
-        else:
-            logger.info(f"ℹ️  User already in monitoring list")
-    
+        """Add a user to email monitoring by activating them in database"""
+        try:
+            async with SessionLocal() as db:
+                user, created = await UserService.get_or_create_user(db, user_email)
+                if not user.is_active:
+                    await UserService.activate_user(db, user.id)
+                    await db.commit()
+                    logger.info(f"✅ User added to monitoring list")
+                else:
+                    logger.info(f"ℹ️  User already in monitoring list")
+
+                # Count active users
+                active_users = await UserService.get_all_users(db, active_only=True)
+                logger.info(f"📊 Total active users: {len(active_users)}")
+        except Exception as e:
+            logger.error(f"Error adding user to monitoring: {e}")
+
     async def remove_user_from_monitoring(self, user_email: str):
-        """Remove a user from email monitoring"""
-        active_users = await self.load_active_users()
-        if user_email in active_users:
-            active_users.remove(user_email)
-            await self.save_active_users(active_users)
+        """Remove a user from email monitoring by deactivating them in database"""
+        try:
+            async with SessionLocal() as db:
+                user = await UserService.get_user_by_email(db, user_email)
+                if user and user.is_active:
+                    # Deactivate user
+                    await UserService.deactivate_user(db, user.id)
 
-            # Also remove their delta token
-            delta_tokens = await self.load_delta_tokens()
-            if user_email in delta_tokens:
-                del delta_tokens[user_email]
-                await self.save_delta_tokens(delta_tokens)
+                    # Also remove their delta token
+                    await DBDeltaService.delete_delta_token(db, user.id)
 
-            logger.info(f"✅ User removed from monitoring list")
-            logger.info(f"📊 Remaining active users: {len(active_users)}")
+                    await db.commit()
+
+                    # Count remaining active users
+                    active_users = await UserService.get_all_users(db, active_only=True)
+                    logger.info(f"✅ User removed from monitoring list")
+                    logger.info(f"📊 Remaining active users: {len(active_users)}")
+        except Exception as e:
+            logger.error(f"Error removing user from monitoring: {e}")
     
     async def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
         """Get delta messages for a user"""
@@ -213,11 +228,18 @@ class DeltaEmailService:
         """Process new messages for a user with vendor verification and liberal price change filtering"""
         from main import process_user_message
         from services.vendor_verification_service import vendor_verification_service
-        from services.email_state_service import email_state_service
 
         processed_count = 0
         skipped_count = 0
         flagged_count = 0
+
+        # Get user from database
+        async with SessionLocal() as db:
+            user = await UserService.get_user_by_email(db, user_email)
+            if not user:
+                logger.error(f"User {user_email} not found in database")
+                return
+            user_id = user.id
 
         for i, message in enumerate(messages, 1):
             try:
@@ -233,7 +255,7 @@ class DeltaEmailService:
                 verification_enabled = os.getenv("VENDOR_VERIFICATION_ENABLED", "true").lower() == "true"
 
                 if verification_enabled:
-                    verification_result = vendor_verification_service.verify_sender(sender_email)
+                    verification_result = await vendor_verification_service.verify_sender(sender_email)
 
                     if verification_result['is_verified']:
                         # VERIFIED VENDOR - Proceed with LLM detection
@@ -257,11 +279,26 @@ class DeltaEmailService:
                             await asyncio.to_thread(process_user_message, full_message, user_email)
 
                             # Mark as vendor verified and processed
-                            email_state_service.mark_as_vendor_verified(
-                                message_id,
-                                verification_result['method'],
-                                verification_result['vendor_info']
-                            )
+                            async with SessionLocal() as db:
+                                # Find vendor if available
+                                vendor_id = None
+                                if verification_result.get('vendor_info'):
+                                    from database.services.vendor_service import VendorService
+                                    vendor = await VendorService.get_vendor_by_id(
+                                        db, verification_result['vendor_info'].get('vendor_id')
+                                    )
+                                    if vendor:
+                                        vendor_id = vendor.id
+
+                                await DBEmailStateService.update_vendor_verification(
+                                    db,
+                                    message_id,
+                                    vendor_verified=True,
+                                    verification_status="verified",
+                                    verification_method=verification_result['method'],
+                                    vendor_id=vendor_id
+                                )
+                                await db.commit()
 
                             processed_count += 1
                         else:
@@ -285,13 +322,28 @@ class DeltaEmailService:
                         await self._save_flagged_email_metadata(full_message, user_email)
 
                         # Mark as pending verification (LLM detection not yet performed)
-                        email_state_service.update_email_state(message_id, {
-                            "vendor_verified": False,
-                            "verification_status": "pending_review",
-                            "flagged_reason": f"Email from unverified sender: {sender_email}",
-                            "awaiting_llm_detection": True,  # New flag: LLM detection pending approval
-                            "llm_detection_performed": False
-                        })
+                        async with SessionLocal() as db:
+                            state = await DBEmailStateService.get_state_by_message_id(db, message_id)
+                            if not state:
+                                # Create new state
+                                state = await DBEmailStateService.create_state(
+                                    db,
+                                    message_id=message_id,
+                                    user_id=user_id
+                                )
+
+                            await DBEmailStateService.update_vendor_verification(
+                                db,
+                                message_id,
+                                vendor_verified=False,
+                                verification_status="pending_review",
+                                flagged_reason=f"Email from unverified sender: {sender_email}"
+                            )
+
+                            # Set LLM detection flags
+                            state.awaiting_llm_detection = True
+                            state.llm_detection_performed = False
+                            await db.commit()
 
                         flagged_count += 1
 

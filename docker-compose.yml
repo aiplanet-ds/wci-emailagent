@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wci-emailagent-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-wci_emailagent}
+      POSTGRES_USER: ${DB_USER:-wci_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-wci_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-wci_user} -d ${DB_NAME:-wci_emailagent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - wci-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wci-emailagent-app
+    environment:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-wci_user}:${DB_PASSWORD:-wci_password}@postgres:5432/${DB_NAME:-wci_emailagent}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-wci_emailagent}
+      DB_USER: ${DB_USER:-wci_user}
+      DB_PASSWORD: ${DB_PASSWORD:-wci_password}
+
+      # Azure AD (matching .env.template names)
+      AZ_TENANT_ID: ${AZ_TENANT_ID:-common}
+      AZ_CLIENT_ID: ${AZ_CLIENT_ID}
+      AZ_CLIENT_SECRET: ${AZ_CLIENT_SECRET}
+      AZ_USER_EMAIL: ${AZ_USER_EMAIL}
+      GRAPH_MODE: ${GRAPH_MODE:-delegated}
+
+      # Azure OpenAI (matching .env.template names)
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_API_ENDPOINT: ${AZURE_OPENAI_API_ENDPOINT}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4.1}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-12-01-preview}
+
+      # Epicor (matching .env.template names)
+      EPICOR_BASE_URL: ${EPICOR_BASE_URL}
+      EPICOR_API_KEY: ${EPICOR_API_KEY}
+      EPICOR_BEARER_TOKEN: ${EPICOR_BEARER_TOKEN}
+      EPICOR_COMPANY_ID: ${EPICOR_COMPANY_ID}
+      EPICOR_DEFAULT_PRICE_LIST: ${EPICOR_DEFAULT_PRICE_LIST:-UNA1}
+      EPICOR_AUTO_TOKEN: ${EPICOR_AUTO_TOKEN:-false}
+      EPICOR_CLIENT_ID: ${EPICOR_CLIENT_ID}
+      EPICOR_CLIENT_SECRET: ${EPICOR_CLIENT_SECRET}
+      EPICOR_USERNAME: ${EPICOR_USERNAME}
+      EPICOR_PASSWORD: ${EPICOR_PASSWORD}
+
+      # App config (matching .env.template names)
+      SESSION_SECRET: ${SESSION_SECRET}
+      PRICE_CHANGE_CONFIDENCE_THRESHOLD: ${PRICE_CHANGE_CONFIDENCE_THRESHOLD:-0.75}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - wci-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    command: uvicorn start:app --host 0.0.0.0 --port 8000 --reload
+
+networks:
+  wci-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local
