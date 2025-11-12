@@ -149,7 +149,7 @@ def llm_is_price_change_email(
 
         # Add threshold check
         result["confidence"] = confidence
-        result["meets_threshold"] = confidence >= confidence_threshold
+        result["meets_threshold"] = result["is_price_change"] and (confidence >= confidence_threshold)
 
         logger.info(
             f"LLM Detection Result: is_price_change={result['is_price_change']}, "
