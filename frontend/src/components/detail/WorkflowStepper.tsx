@@ -38,8 +38,8 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
   ];
 
   return (
-    <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-gray-200 rounded-lg p-6">
-      <h4 className="text-sm font-semibold text-gray-700 mb-4">3-Stage Workflow</h4>
+    <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <h4 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wide">3-Stage Workflow</h4>
 
       <div className="flex items-center justify-between">
         {steps.map((step, index) => (
@@ -48,25 +48,25 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
             <div className="flex flex-col items-center">
               <div
                 className={`
-                  flex items-center justify-center w-12 h-12 rounded-full border-2
+                  flex items-center justify-center w-8 h-8 rounded-full border
                   ${
                     step.id <= 2 || (step.id === 3 && hasEpicorSync)
                       ? 'bg-white border-green-500'
-                      : 'bg-gray-100 border-gray-300'
+                      : 'bg-gray-50 border-gray-300'
                   }
                 `}
               >
                 {step.id <= 2 || (step.id === 3 && hasEpicorSync) ? (
-                  <Check className="h-5 w-5 text-green-500" />
+                  <Check className="h-4 w-4 text-green-500" />
                 ) : (
-                  <step.icon className={`h-5 w-5 ${step.color}`} />
+                  <step.icon className={`h-4 w-4 ${step.color}`} />
                 )}
               </div>
 
-              <div className="mt-3 text-center">
+              <div className="mt-2 text-center">
                 <div
                   className={`
-                    text-sm font-medium
+                    text-xs font-medium
                     ${
                       step.id <= 2 || (step.id === 3 && hasEpicorSync)
                         ? 'text-gray-900'
@@ -76,7 +76,7 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
                 >
                   {step.name}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">{step.description}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{step.description}</div>
               </div>
             </div>
 
@@ -84,7 +84,7 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
             {index < steps.length - 1 && (
               <div
                 className={`
-                  flex-1 h-0.5 mx-4 mt-[-2rem]
+                  flex-1 h-px mx-3 mt-[-1.5rem]
                   ${
                     step.id < 3 || (step.id === 2 && hasEpicorSync)
                       ? 'bg-green-500'
