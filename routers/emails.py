@@ -184,7 +184,7 @@ async def get_all_price_change_emails_from_db(
             "sender": email.sender_email or "Unknown",
             "date": email.received_at.isoformat() if email.received_at else None,
             "supplier_name": email.supplier_info.get("supplier_name") if email.supplier_info else "Unknown",
-            "is_price_change": state.is_price_change if state else False,
+            "is_price_change": state.is_price_change if state else None,
             "processed": state.processed if state else False,
             "needs_info": validation.get("needs_info", False),
             "missing_fields_count": len(validation.get("all_missing_fields", [])),
@@ -195,6 +195,8 @@ async def get_all_price_change_emails_from_db(
             "vendor_verified": state.vendor_verified if state else False,
             "verification_method": state.verification_method if state else None,
             "flagged_reason": state.flagged_reason if state else None,
+            "epicor_synced": state.epicor_synced if state else False,
+            "llm_detection_performed": state.llm_detection_performed if state else False,
             "received_time": email.received_at.isoformat() if email.received_at else None,
             "email_id": email.id
         })
@@ -832,9 +834,38 @@ async def approve_and_process_email(
             print(f"✅ PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
             print(f"💡 Reasoning: {reasoning}")
 
-            # Run AI extraction
-            from main import process_user_message
-            process_user_message(msg, user_email, skip_verification=True)
+            # Run AI extraction inline (async)
+            from services.extractor import extract_price_change_json
+
+            print(f"\n🤖 STAGE 2: AI ENTITY EXTRACTION")
+            print("-" * 80)
+            print(f"🔄 Azure OpenAI GPT-4.1 Processing...")
+
+            # Extract entities using AI (combined_content and metadata already prepared above)
+            result = extract_price_change_json(combined_content, metadata)
+
+            print(f"✅ AI Extraction Complete")
+
+            # Save extracted data to database
+            await EmailService.update_email(
+                db,
+                email_id=email.id,
+                supplier_info=result.get("supplier_info"),
+                price_change_summary=result.get("price_change_summary"),
+                affected_products=result.get("affected_products"),
+                additional_details=result.get("additional_details")
+            )
+
+            # Update email state to manually approved (not processed yet - waiting for Epicor sync)
+            await EmailStateService.update_state(
+                db=db,
+                message_id=message_id,
+                processed=False,
+                verification_status="manually_approved",
+                is_price_change=True
+            )
+
+            await db.commit()
 
             # Reload email data from database
             await db.refresh(email)
@@ -885,7 +916,7 @@ async def approve_and_process_email(
                 verification_status="manually_approved",
                 approved_reason=f"Manually approved - LLM confirmed not a price change (Confidence: {confidence:.2f})",
                 is_price_change=False,
-                processed=True
+                processed=False
             )
             await db.commit()
 

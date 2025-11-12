@@ -114,8 +114,9 @@ class DeltaEmailService:
                     # Deactivate user
                     await UserService.deactivate_user(db, user.id)
 
-                    # Also remove their delta token
-                    await DBDeltaService.delete_delta_token(db, user.id)
+                    # Keep delta token for efficient re-login
+                    # Delta tokens persist across sessions to avoid full mailbox sync
+                    logger.info(f"   📌 Delta token preserved for {user_email}")
 
                     await db.commit()
 
@@ -244,12 +245,22 @@ class DeltaEmailService:
 
         for i, message in enumerate(messages, 1):
             try:
-                subject = message.get('subject', 'No Subject')
                 message_id = message.get('id', '')
+
+                # Check if email already exists in database - skip if it does
+                async with SessionLocal() as db:
+                    existing_email = await EmailService.get_email_by_message_id(db, message_id)
+                    if existing_email:
+                        logger.info(f"\n📧 Email {i}/{len(messages)}: Already exists (ID: {message_id[:20]}...) - SKIPPED")
+                        skipped_count += 1
+                        continue
+
+                # Only NEW emails reach this point
+                subject = message.get('subject', 'No Subject')
                 sender_info = message.get('from', {}).get('emailAddress', {})
                 sender_email = sender_info.get('address', '').lower() if sender_info else ''
 
-                logger.info(f"\n📧 Email {i}/{len(messages)}: {subject}")
+                logger.info(f"\n📧 Email {i}/{len(messages)}: {subject} (NEW)")
                 logger.info(f"   From: {sender_email}")
 
                 # STEP 1: VENDOR VERIFICATION CHECK (before expensive LLM detection)
@@ -329,7 +340,7 @@ class DeltaEmailService:
 
                             state = await DBEmailStateService.get_state_by_message_id(db, message_id)
                             if not state:
-                                # Create new state with email_id link
+                                # Create NEW state and flag for verification
                                 state = await DBEmailStateService.create_state(
                                     db,
                                     message_id=message_id,
@@ -337,18 +348,23 @@ class DeltaEmailService:
                                     email_id=email_record.id
                                 )
 
-                            await DBEmailStateService.update_vendor_verification(
-                                db,
-                                message_id,
-                                vendor_verified=False,
-                                verification_status="pending_review",
-                                flagged_reason=f"Email from unverified sender: {sender_email}"
-                            )
+                                await DBEmailStateService.update_vendor_verification(
+                                    db,
+                                    message_id,
+                                    vendor_verified=False,
+                                    verification_status="pending_review",
+                                    flagged_reason=f"Email from unverified sender: {sender_email}"
+                                )
 
-                            # Set LLM detection flags
-                            state.awaiting_llm_detection = True
-                            state.llm_detection_performed = False
-                            await db.commit()
+                                # Set LLM detection flags
+                                state.awaiting_llm_detection = True
+                                state.llm_detection_performed = False
+                                await db.commit()
+                            else:
+                                # State already exists - this shouldn't happen after duplicate check
+                                # But if it does (edge case), don't overwrite existing state
+                                logger.warning(f"   ⚠️  EmailState already exists for {message_id} - skipping state update")
+                                await db.commit()
 
                         flagged_count += 1
 

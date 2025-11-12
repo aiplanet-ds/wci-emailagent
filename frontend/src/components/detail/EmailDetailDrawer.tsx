@@ -2,6 +2,7 @@ import { X, Mail, CheckCircle2, Circle, Shield, FileText } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/Badge';
 import { VerificationBadge } from '../ui/VerificationBadge';
+import { PriceChangeBadge } from '../ui/PriceChangeBadge';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { formatDate } from '../../lib/utils';
@@ -118,14 +119,27 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                     <span>{formatDate(data.email_data.email_metadata.date)}</span>
                   </div>
                   <div className="flex gap-2 mt-3">
-                    {data.validation.is_price_change && (
-                      <Badge variant="info">Price Change</Badge>
+                    {/* Category 1: Verification Status (MANDATORY for ALL) */}
+                    {data.state.verification_status && (
+                      <VerificationBadge status={data.state.verification_status} />
                     )}
-                    {data.state.processed ? (
-                      <Badge variant="success">Processed</Badge>
-                    ) : (
-                      <Badge variant="warning">Unprocessed</Badge>
+
+                    {/* Category 2: Price Change Detection (MANDATORY for verified/approved) */}
+                    {(data.state.verification_status === 'verified' || data.state.verification_status === 'manually_approved')
+                      && data.state.llm_detection_performed && data.state.is_price_change !== null && (
+                      <PriceChangeBadge isPriceChange={data.state.is_price_change} />
                     )}
+
+                    {/* Category 3: Epicor Integration (MANDATORY for verified/approved + price change) */}
+                    {(data.state.verification_status === 'verified' || data.state.verification_status === 'manually_approved')
+                      && data.state.is_price_change === true && (
+                      data.state.epicor_synced ? (
+                        <Badge variant="success">Processed</Badge>
+                      ) : (
+                        <Badge variant="warning">Unprocessed</Badge>
+                      )
+                    )}
+
                     {data.validation.needs_info && (
                       <Badge variant="warning">Needs Info</Badge>
                     )}
