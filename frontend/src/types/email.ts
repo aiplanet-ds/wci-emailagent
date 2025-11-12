@@ -76,7 +76,7 @@ export interface VendorInfo {
 export interface EmailState {
   message_id: string;
   processed: boolean;
-  is_price_change: boolean;
+  is_price_change: boolean | null;
   needs_info: boolean;
   selected_missing_fields: string[];
   followup_draft: string | null;
@@ -90,6 +90,8 @@ export interface EmailState {
   manually_approved_by: string | null;
   manually_approved_at: string | null;
   flagged_reason: string | null;
+  epicor_synced: boolean;
+  llm_detection_performed: boolean;
 }
 
 export interface EpicorUpdateDetail {
@@ -130,7 +132,7 @@ export interface EmailListItem {
   sender: string;
   date: string;
   supplier_name: string;
-  is_price_change: boolean;
+  is_price_change: boolean | null;
   processed: boolean;
   needs_info: boolean;
   missing_fields_count: number;
@@ -143,6 +145,8 @@ export interface EmailListItem {
   verification_method?: string | null;
   flagged_reason?: string | null;
   received_time?: string;
+  epicor_synced: boolean;
+  llm_detection_performed: boolean;
 }
 
 export interface EmailListResponse {

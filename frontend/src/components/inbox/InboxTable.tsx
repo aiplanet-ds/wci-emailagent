@@ -1,6 +1,7 @@
 import { Mail, AlertCircle, CheckCircle2, Package } from 'lucide-react';
 import { Badge } from '../ui/Badge';
 import { VerificationBadge } from '../ui/VerificationBadge';
+import { PriceChangeBadge } from '../ui/PriceChangeBadge';
 import { formatDate } from '../../lib/utils';
 import type { EmailListItem } from '../../types/email';
 
@@ -67,14 +68,25 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
               </td>
               <td className="px-6 py-4">
                 <div className="flex gap-2 flex-wrap">
+                  {/* Category 1: Verification Status (MANDATORY for ALL) */}
                   {email.verification_status && (
                     <VerificationBadge status={email.verification_status} />
                   )}
-                  {email.is_price_change && (
-                    <Badge variant="info">Price Change</Badge>
+
+                  {/* Category 2: Price Change Detection (MANDATORY for verified/approved) */}
+                  {(email.verification_status === 'verified' || email.verification_status === 'manually_approved')
+                    && email.llm_detection_performed && email.is_price_change !== null && (
+                    <PriceChangeBadge isPriceChange={email.is_price_change} />
                   )}
-                  {email.processed && (
-                    <Badge variant="success">Processed</Badge>
+
+                  {/* Category 3: Epicor Integration (MANDATORY for verified/approved + price change) */}
+                  {(email.verification_status === 'verified' || email.verification_status === 'manually_approved')
+                    && email.is_price_change === true && (
+                    email.epicor_synced ? (
+                      <Badge variant="success">Processed</Badge>
+                    ) : (
+                      <Badge variant="warning">Unprocessed</Badge>
+                    )
                   )}
                 </div>
               </td>
