@@ -1,4 +1,4 @@
-import { X, Mail, CheckCircle2, Circle, Shield, FileText } from 'lucide-react';
+import { X, Mail, CheckCircle2, Circle, Shield, FileText, ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/Badge';
 import { VerificationBadge } from '../ui/VerificationBadge';
@@ -27,6 +27,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
   const [followupDraft, setFollowupDraft] = useState('');
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingWarnings, setPendingWarnings] = useState<string[]>([]);
+  const [isEmailBodyExpanded, setIsEmailBodyExpanded] = useState(false);
 
   const { data, isLoading } = useEmailDetail(messageId);
   const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(messageId);
@@ -96,7 +97,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
       />
 
       {/* Drawer */}
-      <div className="fixed right-0 top-0 bottom-0 w-full max-w-2xl bg-white shadow-2xl z-50 overflow-y-auto">
+      <div className="fixed right-0 top-0 bottom-0 w-full max-w-2xl bg-white shadow-lg z-50 overflow-y-auto">
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-gray-500">Loading...</div>
@@ -177,46 +178,60 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
             </div>
 
             {/* Content */}
-            <div className="px-6 py-6 space-y-6">
-              {/* Original Email Content */}
+            <div className="px-6 py-6 space-y-4">
+              {/* Original Email Content - Collapsible */}
               {rawEmail && !isLoadingRaw && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h4 className="text-sm font-semibold text-blue-900 mb-3 flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    Original Email
-                  </h4>
-
-                  {/* Email Body */}
-                  <div className="mb-4">
-                    <EmailBodyViewer
-                      body={rawEmail.body}
-                      bodyType={rawEmail.bodyType}
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <button
+                    onClick={() => setIsEmailBodyExpanded(!isEmailBodyExpanded)}
+                    className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Mail className="h-4 w-4 text-gray-500" />
+                      <h4 className="text-sm font-medium text-gray-700">Mail</h4>
+                    </div>
+                    <ChevronDown
+                      className={`h-4 w-4 text-gray-500 transition-transform ${
+                        isEmailBodyExpanded ? 'rotate-180' : ''
+                      }`}
                     />
-                  </div>
+                  </button>
 
-                  {/* Attachments */}
-                  {rawEmail.attachments && rawEmail.attachments.length > 0 && (
-                    <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-2">
-                        Attachments ({rawEmail.attachments.length})
-                      </h5>
-                      <AttachmentList
-                        attachments={rawEmail.attachments}
-                        messageId={messageId}
-                      />
+                  {isEmailBodyExpanded && (
+                    <div className="px-3 py-3 border-t border-gray-200 bg-white">
+                      {/* Email Body */}
+                      <div className="mb-3">
+                        <EmailBodyViewer
+                          body={rawEmail.body}
+                          bodyType={rawEmail.bodyType}
+                        />
+                      </div>
+
+                      {/* Attachments */}
+                      {rawEmail.attachments && rawEmail.attachments.length > 0 && (
+                        <div>
+                          <h5 className="text-xs font-medium text-gray-600 mb-2">
+                            Attachments ({rawEmail.attachments.length})
+                          </h5>
+                          <AttachmentList
+                            attachments={rawEmail.attachments}
+                            messageId={messageId}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
 
               {isLoadingRaw && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <div className="border border-gray-200 rounded-lg p-3">
                   <div className="text-sm text-gray-500">Loading email content...</div>
                 </div>
               )}
 
-              <div className="border-t border-gray-300 pt-6">
-                <h4 className="text-sm font-semibold text-gray-700 mb-4">Extracted Data</h4>
+              <div className="border-t border-gray-200 pt-4">
+                <h4 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wide">Extracted Data</h4>
               </div>
 
               {/* Workflow Stepper - Shows 3-Stage Workflow */}
@@ -224,15 +239,15 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
               {/* Vendor Verification Status */}
               {data.state.verification_status && (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-blue-600" />
+                <div className="bg-white border border-gray-200 rounded-lg p-3">
+                  <h4 className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                    <Shield className="h-3.5 w-3.5 text-gray-500" />
                     Vendor Verification
                   </h4>
 
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">Status:</span>
+                      <span className="text-xs text-gray-600">Status:</span>
                       <VerificationBadge
                         status={data.state.verification_status}
                         method={data.state.verification_method}
@@ -241,7 +256,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                     </div>
 
                     {data.state.vendor_info && (
-                      <div className="text-sm">
+                      <div className="text-xs">
                         <span className="text-gray-600">Vendor:</span>{' '}
                         <span className="font-medium text-gray-900">
                           {data.state.vendor_info.vendor_name} ({data.state.vendor_info.vendor_id})
@@ -287,97 +302,94 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
               {/* Epicor Integration Results */}
               {data.epicor_status && (
-                <div className="space-y-4">
-                  {/* Results Summary */}
-                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-lg p-4">
-                    <h4 className="text-sm font-semibold text-green-900 mb-3 flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Integration Results
-                    </h4>
+                <div className="bg-white border border-gray-200 rounded-lg p-4">
+                  <h4 className="text-xs font-semibold text-gray-700 mb-3 flex items-center gap-1.5 uppercase tracking-wide">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Integration Results
+                  </h4>
 
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-4 gap-3 mb-4">
-                      <div className="text-center">
-                        <div className="text-2xl font-bold text-gray-900">{data.epicor_status.total}</div>
-                        <div className="text-xs text-gray-600">Total</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-2xl font-bold text-green-600">{data.epicor_status.successful}</div>
-                        <div className="text-xs text-gray-600">Success</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-2xl font-bold text-red-600">{data.epicor_status.failed}</div>
-                        <div className="text-xs text-gray-600">Failed</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-2xl font-bold text-gray-400">{data.epicor_status.skipped}</div>
-                        <div className="text-xs text-gray-600">Skipped</div>
-                      </div>
+                  {/* Stats Grid */}
+                  <div className="grid grid-cols-4 gap-2 mb-3">
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-gray-900">{data.epicor_status.total}</div>
+                      <div className="text-xs text-gray-600">Total</div>
                     </div>
-
-                    {/* Details */}
-                    {data.epicor_status.details && data.epicor_status.details.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="text-xs font-medium text-gray-700 mb-2">Part Details:</div>
-                        {data.epicor_status.details.map((detail, idx) => (
-                          <div
-                            key={idx}
-                            className={`
-                              text-xs p-3 rounded border
-                              ${detail.status === 'success'
-                                ? 'bg-white border-green-200'
-                                : detail.status === 'failed'
-                                ? 'bg-red-50 border-red-200'
-                                : 'bg-gray-50 border-gray-200'}
-                            `}
-                          >
-                            <div className="flex items-start justify-between mb-1">
-                              <code className="font-mono font-semibold text-gray-900">
-                                {detail.part_num}
-                              </code>
-                              <span className={`
-                                px-2 py-0.5 rounded text-xs font-medium
-                                ${detail.status === 'success'
-                                  ? 'bg-green-100 text-green-700'
-                                  : detail.status === 'failed'
-                                  ? 'bg-red-100 text-red-700'
-                                  : 'bg-gray-100 text-gray-700'}
-                              `}>
-                                {detail.status}
-                              </span>
-                            </div>
-
-                            {detail.vendor_name && (
-                              <div className="text-gray-600 mb-1">
-                                Vendor: <span className="font-medium">{detail.vendor_name}</span>
-                              </div>
-                            )}
-
-                            {detail.list_code && (
-                              <div className="text-gray-600 mb-1">
-                                List: <span className="font-medium">{detail.list_code}</span>
-                              </div>
-                            )}
-
-                            {detail.status === 'success' && (
-                              <div className="text-gray-700 font-medium">
-                                ${detail.old_price} → ${detail.new_price}
-                                {detail.effective_date && (
-                                  <span className="text-gray-500 ml-2">
-                                    (Effective: {detail.effective_date})
-                                  </span>
-                                )}
-                              </div>
-                            )}
-
-                            {detail.status === 'failed' && detail.message && (
-                              <div className="text-red-600 mt-1">{detail.message}</div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-green-600">{data.epicor_status.successful}</div>
+                      <div className="text-xs text-gray-600">Success</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-red-600">{data.epicor_status.failed}</div>
+                      <div className="text-xs text-gray-600">Failed</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-gray-400">{data.epicor_status.skipped}</div>
+                      <div className="text-xs text-gray-600">Skipped</div>
+                    </div>
                   </div>
+
+                  {/* Details */}
+                  {data.epicor_status.details && data.epicor_status.details.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-gray-600 mb-2">Part Details:</div>
+                      {data.epicor_status.details.map((detail, idx) => (
+                        <div
+                          key={idx}
+                          className={`
+                            text-xs p-2 rounded border
+                            ${detail.status === 'success'
+                              ? 'bg-white border-green-200'
+                              : detail.status === 'failed'
+                              ? 'bg-red-50 border-red-200'
+                              : 'bg-gray-50 border-gray-200'}
+                          `}
+                        >
+                          <div className="flex items-start justify-between mb-1">
+                            <code className="font-mono font-semibold text-gray-900 text-xs">
+                              {detail.part_num}
+                            </code>
+                            <span className={`
+                              px-1.5 py-0.5 rounded text-xs font-medium
+                              ${detail.status === 'success'
+                                ? 'bg-green-100 text-green-700'
+                                : detail.status === 'failed'
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-gray-100 text-gray-700'}
+                            `}>
+                              {detail.status}
+                            </span>
+                          </div>
+
+                          {detail.vendor_name && (
+                            <div className="text-gray-600 mb-1">
+                              Vendor: <span className="font-medium">{detail.vendor_name}</span>
+                            </div>
+                          )}
+
+                          {detail.list_code && (
+                            <div className="text-gray-600 mb-1">
+                              List: <span className="font-medium">{detail.list_code}</span>
+                            </div>
+                          )}
+
+                          {detail.status === 'success' && (
+                            <div className="text-gray-700 font-medium">
+                              ${detail.old_price} → ${detail.new_price}
+                              {detail.effective_date && (
+                                <span className="text-gray-500 ml-2">
+                                  (Effective: {detail.effective_date})
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {detail.status === 'failed' && detail.message && (
+                            <div className="text-red-600 mt-1">{detail.message}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

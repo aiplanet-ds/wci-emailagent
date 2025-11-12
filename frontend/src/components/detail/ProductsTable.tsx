@@ -12,11 +12,11 @@ export function ProductsTable({ products }: ProductsTableProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Affected Products</CardTitle>
+          <CardTitle>Affected Products</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-center py-6 text-gray-500">
-            <Package className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+          <div className="text-center py-4 text-gray-500">
+            <Package className="h-6 w-6 mx-auto mb-2 text-gray-400" />
             <p className="text-sm">No products found</p>
           </div>
         </CardContent>
@@ -27,8 +27,8 @@ export function ProductsTable({ products }: ProductsTableProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2">
-          <Package className="h-5 w-5" />
+        <CardTitle className="flex items-center gap-2">
+          <Package className="h-4 w-4" />
           Affected Products ({products.length})
         </CardTitle>
       </CardHeader>
@@ -37,11 +37,11 @@ export function ProductsTable({ products }: ProductsTableProps) {
           <table className="w-full text-sm">
             <thead className="border-b border-gray-200 bg-gray-50">
               <tr>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Part Number</th>
-                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Old Price</th>
-                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">New Price</th>
-                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Change</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Part Number</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Old Price</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">New Price</th>
+                <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Change</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -51,27 +51,27 @@ export function ProductsTable({ products }: ProductsTableProps) {
 
                 return (
                   <tr key={idx} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2">
                       <div className="font-medium text-gray-900">{product.product_name || 'Unknown Product'}</div>
                       {product.unit_of_measure && (
                         <div className="text-xs text-gray-500">Unit: {product.unit_of_measure}</div>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2">
                       <code className="text-xs bg-gray-100 px-2 py-1 rounded">
                         {product.product_code || product.product_id || 'N/A'}
                       </code>
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-600">
+                    <td className="px-3 py-2 text-right text-gray-600">
                       {formatCurrency(product.old_price, product.currency)}
                     </td>
-                    <td className="px-4 py-3 text-right font-medium text-gray-900">
+                    <td className="px-3 py-2 text-right font-medium text-gray-900">
                       {formatCurrency(product.new_price, product.currency)}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {isIncrease && <TrendingUp className="h-4 w-4 text-red-500" />}
-                        {isDecrease && <TrendingDown className="h-4 w-4 text-green-500" />}
+                        {isIncrease && <TrendingUp className="h-3.5 w-3.5 text-red-500" />}
+                        {isDecrease && <TrendingDown className="h-3.5 w-3.5 text-green-500" />}
                         <span className={`font-medium ${isIncrease ? 'text-red-600' : isDecrease ? 'text-green-600' : 'text-gray-600'}`}>
                           {formatCurrency(product.price_change_amount, product.currency)}
                         </span>
