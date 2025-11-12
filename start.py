@@ -204,10 +204,34 @@ async def logout(request: Request):
 # Start delta service when application starts
 @app.on_event("startup")
 async def startup_event():
-    """Start the delta service when the application starts"""
+    """Initialize database and start the delta service when the application starts"""
     print("\n" + "="*80)
     print("[STARTUP] EMAIL INTELLIGENCE SYSTEM - AUTOMATED MODE")
     print("="*80)
+
+    # Database initialization
+    print("[DB] Initializing database connection...")
+    try:
+        from database.config import init_db, engine
+        from sqlalchemy import text
+
+        # Test database connection
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        print("[OK] Database connection successful")
+
+        # Ensure all tables exist
+        print("[DB] Creating/verifying database tables...")
+        await init_db()
+        print("[OK] Database tables ready")
+
+    except Exception as e:
+        print(f"[ERROR] Database initialization failed: {e}")
+        print("[ERROR] Application cannot start without database")
+        print("[ERROR] Please ensure PostgreSQL is running and DATABASE_URL is correct")
+        raise
+
+    # Configuration and service startup
     print("[CONFIG] Configuration:")
     print("   [POLL] Polling Interval: 60 seconds (1 minute)")
     print("   [AI] AI Engine: Azure OpenAI")

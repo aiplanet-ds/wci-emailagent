@@ -5,8 +5,12 @@ Handles dashboard statistics endpoints
 from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
+from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.dashboard_service import dashboard_service
+from database.config import get_db
+from database.services.user_service import UserService
+from database.services.dashboard_service import DashboardService
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -43,6 +47,7 @@ def get_user_from_session(request: Request) -> str:
 @router.get("/stats", response_model=DashboardStatsResponse)
 async def get_dashboard_stats(
     request: Request,
+    db: AsyncSession = Depends(get_db),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None
 ):
@@ -64,14 +69,45 @@ async def get_dashboard_stats(
     user_email = get_user_from_session(request)
 
     try:
-        stats = dashboard_service.get_user_stats(
-            user_email=user_email,
-            start_date=start_date,
-            end_date=end_date
+        # Get user from database
+        user = await UserService.get_user_by_email(db, user_email)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User not found: {user_email}")
+
+        # Parse date strings to datetime objects
+        start_dt = None
+        end_dt = None
+
+        if start_date:
+            try:
+                # Handle ISO format with Z or timezone
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+                # Strip timezone for PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+                if start_dt.tzinfo:
+                    start_dt = start_dt.replace(tzinfo=None)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid start_date format: {str(e)}")
+
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                if end_dt.tzinfo:
+                    end_dt = end_dt.replace(tzinfo=None)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid end_date format: {str(e)}")
+
+        # Get stats from database
+        stats = await DashboardService.get_user_stats(
+            db=db,
+            user_id=user.id,
+            start_date=start_dt,
+            end_date=end_dt
         )
 
         return DashboardStatsResponse(**stats)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,

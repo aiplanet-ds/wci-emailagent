@@ -18,6 +18,7 @@ from database.config import get_db
 from database.services.user_service import UserService
 from database.services.email_service import EmailService
 from database.services.email_state_service import EmailStateService
+from database.services.epicor_sync_result_service import EpicorSyncResultService
 
 # Legacy services
 from services.validation_service import validation_service
@@ -881,9 +882,10 @@ async def approve_and_process_email(
             await EmailStateService.update_state(
                 db=db,
                 message_id=message_id,
-                verification_status="rejected",
-                rejected_reason=f"LLM detected this is not a price change (Confidence: {confidence:.2f})",
-                is_price_change=False
+                verification_status="manually_approved",
+                approved_reason=f"Manually approved - LLM confirmed not a price change (Confidence: {confidence:.2f})",
+                is_price_change=False,
+                processed=True
             )
             await db.commit()
 

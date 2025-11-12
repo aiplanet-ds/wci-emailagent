@@ -145,14 +145,7 @@ def process_user_message(msg, user_email, skip_verification=False):
         # This extraction focuses solely on extracting structured data
         result = extract_price_change_json(combined_content, email_metadata)
 
-        # Save results to user-specific directory (for backwards compatibility)
-        output_filename = f"price_change_{message_id}.json"
-        output_path = os.path.join(user_output_dir, output_filename)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
-
-        # Also save to database
+        # Save to database (JSON file writes removed - database is now the primary storage)
         async def save_to_database():
             async with SessionLocal() as db:
                 # Get or create user

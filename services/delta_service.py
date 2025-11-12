@@ -18,6 +18,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 # Database imports
 from database.config import SessionLocal
 from database.services.user_service import UserService
+from database.services.email_service import EmailService
 from database.services.delta_service import DeltaService as DBDeltaService
 from database.services.email_state_service import EmailStateService as DBEmailStateService
 
@@ -323,13 +324,17 @@ class DeltaEmailService:
 
                         # Mark as pending verification (LLM detection not yet performed)
                         async with SessionLocal() as db:
+                            # Get the email record to link the state
+                            email_record = await EmailService.get_email_by_message_id(db, message_id)
+
                             state = await DBEmailStateService.get_state_by_message_id(db, message_id)
                             if not state:
-                                # Create new state
+                                # Create new state with email_id link
                                 state = await DBEmailStateService.create_state(
                                     db,
                                     message_id=message_id,
-                                    user_id=user_id
+                                    user_id=user_id,
+                                    email_id=email_record.id
                                 )
 
                             await DBEmailStateService.update_vendor_verification(
@@ -390,62 +395,57 @@ class DeltaEmailService:
         logger.info("="*80 + "\n")
 
     async def _save_flagged_email_metadata(self, msg: Dict, user_email: str):
-        """Save basic email metadata for flagged emails without AI extraction"""
-        import json
-        import os
-
-        safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
-        user_output_dir = os.path.join("outputs", safe_email)
-        os.makedirs(user_output_dir, exist_ok=True)
+        """Save basic email metadata for flagged emails to database without AI extraction"""
+        from datetime import datetime
 
         message_id = msg.get('id', '')
         subject = msg.get('subject', '(no subject)')
         sender_info = msg.get('from', {}).get('emailAddress', {})
         sender = sender_info.get('address', '(no sender)')
-        date_received = msg.get('receivedDateTime', '(no date)')
+        date_received_str = msg.get('receivedDateTime', '')
+        has_attachments = msg.get('hasAttachments', False)
 
-        # Save minimal metadata (no LLM detection or AI extraction yet)
-        flagged_data = {
-            "email_metadata": {
-                "subject": subject,
-                "sender": sender,
-                "date": date_received,
-                "message_id": message_id
-            },
-            "flagged": True,
-            "flagged_reason": "Unverified vendor email - pending manual approval",
-            "awaiting_llm_detection": True,  # New: LLM detection will run after approval
-            "llm_detection_performed": False,  # New: Track if LLM detection has been performed
-            "supplier_info": {
-                "supplier_id": None,
-                "supplier_name": None,
-                "contact_person": None,
-                "contact_email": sender,
-                "contact_phone": None
-            },
-            "price_change_summary": {
-                "change_type": None,
-                "effective_date": None,
-                "notification_date": None,
-                "reason": "Awaiting verification and LLM detection",
-                "overall_impact": None
-            },
-            "affected_products": [],
-            "additional_details": {
-                "terms_and_conditions": None,
-                "payment_terms": None,
-                "minimum_order_quantity": None,
-                "notes": "This email requires manual approval. LLM detection and AI extraction will run after approval."
-            }
-        }
+        # Parse date
+        try:
+            date_received = datetime.fromisoformat(date_received_str.replace('Z', '+00:00'))
+            if date_received.tzinfo:
+                date_received = date_received.replace(tzinfo=None)
+        except:
+            date_received = datetime.utcnow()
 
-        output_filename = f"price_change_{message_id}.json"
-        output_path = os.path.join(user_output_dir, output_filename)
+        # Extract email body
+        email_body = ""
+        body_data = msg.get("body", {})
+        if body_data:
+            email_body = body_data.get("content", "")
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(flagged_data, f, indent=2, ensure_ascii=False)
+        # Save minimal email record to database (no AI extraction yet)
+        async with SessionLocal() as db:
+            # Get user
+            user, _ = await UserService.get_or_create_user(db, user_email)
 
-        logger.info(f"   💾 Saved flagged email metadata: {output_filename}")
+            # Create minimal email record
+            email_record = await EmailService.get_email_by_message_id(db, message_id)
+            if not email_record:
+                email_record = await EmailService.create_email(
+                    db,
+                    message_id=message_id,
+                    user_id=user.id,
+                    subject=subject,
+                    sender_email=sender,
+                    received_at=date_received,
+                    has_attachments=has_attachments,
+                    body_text=email_body,
+                    # No AI-extracted fields yet - will be populated after approval
+                    supplier_info={"contact_email": sender},
+                    price_change_summary={"reason": "Awaiting verification and LLM detection"},
+                    affected_products=[],
+                    additional_details={"notes": "This email requires manual approval. LLM detection and AI extraction will run after approval."},
+                    raw_email_data=msg
+                )
+                await db.commit()
+
+        logger.info(f"   💾 Saved flagged email metadata to database (email_id: {email_record.id})")
 
     async def poll_user_emails(self, user_email: str):
         """Poll emails for a specific user"""
