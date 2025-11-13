@@ -97,6 +97,27 @@ services:
           memory: 1G
     command: uvicorn start:app --host 0.0.0.0 --port 8000 --reload
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: wci-emailagent-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+    networks:
+      - wci-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
 networks:
   wci-network:
     driver: bridge
