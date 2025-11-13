@@ -26,12 +26,12 @@ export function PriceChangeSummary({ summary }: PriceChangeSummaryProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Price Change Summary</CardTitle>
+        <CardTitle>Price Change Summary</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
-          <div className="flex items-start gap-3">
-            <ChangeIcon className="h-4 w-4 text-gray-400 mt-0.5" />
+        <div className="space-y-2">
+          <div className="flex items-start gap-2">
+            <ChangeIcon className="h-3.5 w-3.5 text-gray-400 mt-0.5" />
             <div className="flex-1">
               <p className="text-xs text-gray-500">Change Type</p>
               <div className="mt-1">
@@ -46,8 +46,8 @@ export function PriceChangeSummary({ summary }: PriceChangeSummaryProps) {
             </div>
           </div>
 
-          <div className="flex items-start gap-3">
-            <Calendar className="h-4 w-4 text-gray-400 mt-0.5" />
+          <div className="flex items-start gap-2">
+            <Calendar className="h-3.5 w-3.5 text-gray-400 mt-0.5" />
             <div className="flex-1">
               <p className="text-xs text-gray-500">Effective Date</p>
               <p className="text-sm text-gray-900 font-medium">
@@ -57,8 +57,8 @@ export function PriceChangeSummary({ summary }: PriceChangeSummaryProps) {
           </div>
 
           {summary.notification_date && (
-            <div className="flex items-start gap-3">
-              <Calendar className="h-4 w-4 text-gray-400 mt-0.5" />
+            <div className="flex items-start gap-2">
+              <Calendar className="h-3.5 w-3.5 text-gray-400 mt-0.5" />
               <div className="flex-1">
                 <p className="text-xs text-gray-500">Notification Date</p>
                 <p className="text-sm text-gray-900">{formatDate(summary.notification_date)}</p>
@@ -67,8 +67,8 @@ export function PriceChangeSummary({ summary }: PriceChangeSummaryProps) {
           )}
 
           {summary.reason && (
-            <div className="flex items-start gap-3">
-              <FileText className="h-4 w-4 text-gray-400 mt-0.5" />
+            <div className="flex items-start gap-2">
+              <FileText className="h-3.5 w-3.5 text-gray-400 mt-0.5" />
               <div className="flex-1">
                 <p className="text-xs text-gray-500">Reason</p>
                 <p className="text-sm text-gray-900">{summary.reason}</p>
@@ -77,8 +77,8 @@ export function PriceChangeSummary({ summary }: PriceChangeSummaryProps) {
           )}
 
           {summary.overall_impact && (
-            <div className="flex items-start gap-3">
-              <FileText className="h-4 w-4 text-gray-400 mt-0.5" />
+            <div className="flex items-start gap-2">
+              <FileText className="h-3.5 w-3.5 text-gray-400 mt-0.5" />
               <div className="flex-1">
                 <p className="text-xs text-gray-500">Overall Impact</p>
                 <p className="text-sm text-gray-900">{summary.overall_impact}</p>

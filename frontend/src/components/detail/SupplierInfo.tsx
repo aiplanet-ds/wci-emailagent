@@ -18,13 +18,13 @@ export function SupplierInfo({ supplier }: SupplierInfoProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Supplier Information</CardTitle>
+        <CardTitle>Supplier Information</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
+        <div className="space-y-2">
           {fields.map((field, idx) => (
-            <div key={idx} className="flex items-start gap-3">
-              <field.icon className="h-4 w-4 text-gray-400 mt-0.5 flex-shrink-0" />
+            <div key={idx} className="flex items-start gap-2">
+              <field.icon className="h-3.5 w-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-gray-500">{field.label}</p>
                 <p className="text-sm text-gray-900 font-medium break-words">

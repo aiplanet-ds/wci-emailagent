@@ -104,6 +104,12 @@ export const emailApi = {
     const { data } = await api.post('/api/emails/vendors/refresh-cache');
     return data;
   },
+
+  // Get raw email content (body and attachments)
+  async getRawEmailContent(messageId: string): Promise<any> {
+    const { data } = await api.get(`/api/emails/${messageId}/raw`);
+    return data;
+  },
 };
 
 export default api;

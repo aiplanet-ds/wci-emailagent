@@ -52,3 +52,12 @@ export function useGenerateFollowup() {
     },
   });
 }
+
+export function useRawEmailContent(messageId: string | null) {
+  return useQuery({
+    queryKey: ['rawEmail', messageId],
+    queryFn: () => emailApi.getRawEmailContent(messageId!),
+    enabled: !!messageId, // Only run if messageId is provided
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+}

@@ -6,7 +6,13 @@ import { usePendingEmails } from '../hooks/useVendorVerification';
 
 export function PendingVerification() {
   const [search, setSearch] = useState('');
+  const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const { data, isLoading, error } = usePendingEmails();
+
+  const handleToggleExpand = (messageId: string) => {
+    // If clicking the same card, collapse it; otherwise expand the new one
+    setExpandedEmailId(expandedEmailId === messageId ? null : messageId);
+  };
 
   // Filter emails by verification status and search
   const filteredEmails = data?.emails.filter((email) => {
@@ -103,7 +109,12 @@ export function PendingVerification() {
         /* Email List */
         <div className="space-y-4">
           {filteredEmails?.map((email) => (
-            <PendingEmailCard key={email.message_id} email={email} />
+            <PendingEmailCard
+              key={email.message_id}
+              email={email}
+              isExpanded={expandedEmailId === email.message_id}
+              onToggleExpand={() => handleToggleExpand(email.message_id)}
+            />
           ))}
         </div>
       )}

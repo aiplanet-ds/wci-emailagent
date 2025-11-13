@@ -3,15 +3,24 @@ Email API Router
 Handles all email-related API endpoints for the Price-Change Inbox Dashboard
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 import json
 import os
 from pathlib import Path
 from datetime import datetime
+import base64
 
-from services.email_state_service import email_state_service
+# Database imports
+from database.config import get_db
+from database.services.user_service import UserService
+from database.services.email_service import EmailService
+from database.services.email_state_service import EmailStateService
+from database.services.epicor_sync_result_service import EpicorSyncResultService
+
+# Legacy services
 from services.validation_service import validation_service
 from services.epicor_service import EpicorAPIService
 from auth.multi_graph import MultiUserGraphClient
@@ -52,15 +61,31 @@ def get_user_from_session(request: Request) -> str:
     return user_email
 
 
+async def get_user_from_db(db: AsyncSession, user_email: str):
+    """Get user from database, raise 404 if not found"""
+    user = await UserService.get_user_by_email(db, user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {user_email}")
+    return user
+
+
+async def get_email_from_db(db: AsyncSession, message_id: str):
+    """Get email from database, raise 404 if not found"""
+    email = await EmailService.get_email_by_message_id(db, message_id)
+    if not email:
+        raise HTTPException(status_code=404, detail=f"Email not found: {message_id}")
+    return email
+
+
 def get_user_outputs_directory(user_email: str) -> str:
-    """Get the outputs directory for a specific user"""
+    """Get the outputs directory for a specific user (legacy function for backwards compatibility)"""
     safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
     outputs_dir = f"outputs/{safe_email}"
     return outputs_dir
 
 
 def load_email_json(file_path: str) -> Dict[str, Any]:
-    """Load email data from JSON file"""
+    """Load email data from JSON file (legacy function, use database instead)"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -69,76 +94,112 @@ def load_email_json(file_path: str) -> Dict[str, Any]:
 
 
 def extract_message_id_from_filename(filename: str) -> str:
-    """Extract message ID from price_change_<message_id>.json filename"""
+    """Extract message ID from price_change_<message_id>.json filename (deprecated)"""
     if filename.startswith("price_change_") and filename.endswith(".json"):
         return filename[len("price_change_"):-len(".json")]
     return filename
 
 
-def get_all_price_change_emails(user_email: str) -> List[Dict[str, Any]]:
+async def get_all_price_change_emails_from_db(
+    db: AsyncSession,
+    user_id: int,
+    filter_type: Optional[str] = None,
+    search: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
-    Get all price change emails from JSON files and Graph API
+    Get all price change emails from database with optional filtering
 
-    Returns list of emails with metadata, state, and validation info
+    Args:
+        db: Database session
+        user_id: User ID
+        filter_type: Filter type (all, processed, unprocessed, pending_verification, etc.)
+        search: Search term for subject or sender
+
+    Returns:
+        List of email dictionaries with metadata
     """
+    from sqlalchemy import select, and_, or_
+    from database.models import Email, EmailState, EpicorSyncResult
+    from sqlalchemy.orm import joinedload
+
+    # Build query with joins
+    query = (
+        select(Email)
+        .where(Email.user_id == user_id)
+        .options(joinedload(Email.email_state))
+        .order_by(Email.received_at.desc())
+    )
+
+    # Apply filters
+    if filter_type and filter_type != "all":
+        query = query.join(EmailState, Email.id == EmailState.email_id, isouter=True)
+
+        if filter_type == "price_change":
+            query = query.where(EmailState.is_price_change == True)
+        elif filter_type == "non_price_change":
+            query = query.where(or_(EmailState.is_price_change == False, EmailState.is_price_change == None))
+        elif filter_type == "processed":
+            query = query.where(EmailState.processed == True)
+        elif filter_type == "unprocessed":
+            query = query.where(or_(EmailState.processed == False, EmailState.processed == None))
+        elif filter_type == "pending_verification":
+            query = query.where(EmailState.verification_status == "pending_review")
+        elif filter_type == "rejected":
+            query = query.where(EmailState.verification_status == "rejected")
+
+    # Apply search filter
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.where(
+            or_(
+                Email.subject.ilike(search_pattern),
+                Email.sender_email.ilike(search_pattern)
+            )
+        )
+
+    # Execute query
+    result = await db.execute(query)
+    emails_db = result.unique().scalars().all()
+
+    # Build response list
     emails = []
-    outputs_dir = get_user_outputs_directory(user_email)
+    for email in emails_db:
+        state = email.email_state
 
-    # Check if outputs directory exists
-    if os.path.exists(outputs_dir):
-        # Load from JSON files
-        for filename in os.listdir(outputs_dir):
-            if filename.startswith("price_change_") and filename.endswith(".json"):
-                file_path = os.path.join(outputs_dir, filename)
+        # Get Epicor sync result if exists
+        epicor_result = await EpicorSyncResultService.get_sync_result_by_email_id(db, email.id)
 
-                try:
-                    email_data = load_email_json(file_path)
-                    message_id = extract_message_id_from_filename(filename)
+        # Validate email data
+        email_dict = {
+            "supplier_info": email.supplier_info,
+            "price_change_summary": email.price_change_summary,
+            "affected_products": email.affected_products,
+            "additional_details": email.additional_details
+        }
+        validation = validation_service.validate_email_data(email_dict)
 
-                    # Get state and validation
-                    state = email_state_service.get_email_state(message_id)
-                    validation = validation_service.validate_email_data(email_data)
-
-                    # Build email summary
-                    email_metadata = email_data.get("email_metadata", {})
-                    supplier_info = email_data.get("supplier_info", {})
-
-                    # Check for epicor update status
-                    epicor_file = os.path.join(outputs_dir, f"epicor_update_{message_id}.json")
-                    epicor_status = None
-                    if os.path.exists(epicor_file):
-                        try:
-                            with open(epicor_file, 'r') as f:
-                                epicor_status = json.load(f)
-                        except:
-                            pass
-
-                    emails.append({
-                        "message_id": message_id,
-                        "subject": email_metadata.get("subject", "No Subject"),
-                        "sender": email_metadata.get("sender", "Unknown"),
-                        "date": email_metadata.get("date", None),
-                        "supplier_name": supplier_info.get("supplier_name", "Unknown"),
-                        "is_price_change": validation.get("is_price_change", True),
-                        "processed": state.get("processed", False),
-                        "needs_info": validation.get("needs_info", False),
-                        "missing_fields_count": len(validation.get("all_missing_fields", [])),
-                        "products_count": len(email_data.get("affected_products", [])),
-                        "has_epicor_sync": epicor_status is not None,
-                        "epicor_success_count": epicor_status.get("successful", 0) if epicor_status else 0,
-                        "file_path": file_path,
-                        "verification_status": state.get("verification_status"),
-                        "vendor_verified": state.get("vendor_verified", False),
-                        "verification_method": state.get("verification_method"),
-                        "flagged_reason": state.get("flagged_reason"),
-                        "received_time": email_metadata.get("date", None)
-                    })
-                except Exception as e:
-                    print(f"Error loading email {filename}: {str(e)}")
-                    continue
-
-    # Sort by date (newest first)
-    emails.sort(key=lambda x: x.get("date") or "", reverse=True)
+        emails.append({
+            "message_id": email.message_id,
+            "subject": email.subject or "No Subject",
+            "sender": email.sender_email or "Unknown",
+            "date": email.received_at.isoformat() if email.received_at else None,
+            "supplier_name": email.supplier_info.get("supplier_name") if email.supplier_info else "Unknown",
+            "is_price_change": state.is_price_change if state else None,
+            "processed": state.processed if state else False,
+            "needs_info": validation.get("needs_info", False),
+            "missing_fields_count": len(validation.get("all_missing_fields", [])),
+            "products_count": len(email.affected_products) if email.affected_products else 0,
+            "has_epicor_sync": epicor_result is not None,
+            "epicor_success_count": epicor_result.successful_updates if epicor_result else 0,
+            "verification_status": state.verification_status if state else None,
+            "vendor_verified": state.vendor_verified if state else False,
+            "verification_method": state.verification_method if state else None,
+            "flagged_reason": state.flagged_reason if state else None,
+            "epicor_synced": state.epicor_synced if state else False,
+            "llm_detection_performed": state.llm_detection_performed if state else False,
+            "received_time": email.received_at.isoformat() if email.received_at else None,
+            "email_id": email.id
+        })
 
     return emails
 
@@ -146,81 +207,236 @@ def get_all_price_change_emails(user_email: str) -> List[Dict[str, Any]]:
 @router.get("", response_model=EmailListResponse)
 async def list_emails(
     request: Request,
+    db: AsyncSession = Depends(get_db),
     filter: Optional[str] = None,  # all, price_change, non_price_change, processed, unprocessed, pending_verification, rejected
     search: Optional[str] = None
 ):
     """
-    Get list of all emails for the authenticated user
+    Get list of all emails from database for the authenticated user
 
     Query params:
     - filter: all, price_change, non_price_change, processed, unprocessed, pending_verification, rejected
     - search: search by subject or sender
     """
     user_email = get_user_from_session(request)
-    emails = get_all_price_change_emails(user_email)
+    user = await get_user_from_db(db, user_email)
 
-    # Apply filters
-    if filter == "price_change":
-        emails = [e for e in emails if e.get("is_price_change")]
-    elif filter == "non_price_change":
-        emails = [e for e in emails if not e.get("is_price_change")]
-    elif filter == "processed":
-        emails = [e for e in emails if e.get("processed") and e.get("verification_status") != "rejected"]
-    elif filter == "unprocessed":
-        emails = [e for e in emails if not e.get("processed")]
-    elif filter == "pending_verification":
-        emails = [e for e in emails if e.get("verification_status") == "pending_review"]
-    elif filter == "rejected":
-        emails = [e for e in emails if e.get("verification_status") == "rejected"]
-
-    # Apply search
-    if search:
-        search_lower = search.lower()
-        emails = [
-            e for e in emails
-            if search_lower in e.get("subject", "").lower()
-            or search_lower in e.get("sender", "").lower()
-            or search_lower in e.get("supplier_name", "").lower()
-        ]
+    # Get emails from database with filters
+    emails = await get_all_price_change_emails_from_db(
+        db=db,
+        user_id=user.id,
+        filter_type=filter,
+        search=search
+    )
 
     return EmailListResponse(emails=emails, total=len(emails))
 
 
 @router.get("/{message_id}", response_model=EmailDetailResponse)
-async def get_email_detail(message_id: str, request: Request):
-    """Get detailed information for a specific email"""
+async def get_email_detail(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get detailed information for a specific email from database"""
     user_email = get_user_from_session(request)
-    outputs_dir = get_user_outputs_directory(user_email)
+    user = await get_user_from_db(db, user_email)
 
-    # Load email data
-    email_file = os.path.join(outputs_dir, f"price_change_{message_id}.json")
-    if not os.path.exists(email_file):
-        raise HTTPException(status_code=404, detail="Email not found")
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
 
-    email_data = load_email_json(email_file)
+    # Verify email belongs to user
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    # Get state
-    state = email_state_service.get_email_state(message_id)
+    # Get email state
+    state = await EmailStateService.get_state_by_message_id(db, message_id)
 
-    # Validate data
+    # Get Epicor sync result
+    epicor_result = await EpicorSyncResultService.get_sync_result_by_email_id(db, email.id)
+
+    # Build email data response
+    email_data = {
+        "supplier_info": email.supplier_info or {},
+        "price_change_summary": email.price_change_summary or {},
+        "affected_products": email.affected_products or [],
+        "additional_details": email.additional_details or {},
+        "email_metadata": {
+            "subject": email.subject,
+            "sender": email.sender_email,
+            "date": email.received_at.isoformat() if email.received_at else None,
+            "message_id": email.message_id,
+            "attachments": []
+        }
+    }
+
+    # Validate email data
     validation = validation_service.validate_email_data(email_data)
 
-    # Check epicor sync status
-    epicor_file = os.path.join(outputs_dir, f"epicor_update_{message_id}.json")
+    # Build state response
+    state_dict = {
+        "processed": state.processed if state else False,
+        "epicor_synced": state.epicor_synced if state else False,
+        "needs_info": state.needs_info if state else False,
+        "selected_missing_fields": state.selected_missing_fields if state else [],
+        "followup_draft": state.followup_draft if state else None,
+        "verification_status": state.verification_status if state else None,
+        "vendor_verified": state.vendor_verified if state else False,
+        "verification_method": state.verification_method if state else None,
+        "flagged_reason": state.flagged_reason if state else None,
+        "is_price_change": state.is_price_change if state else None,
+        "llm_confidence": state.llm_confidence if state else None,
+        "llm_reasoning": state.llm_reasoning if state else None
+    }
+
+    # Build Epicor status response
     epicor_status = None
-    if os.path.exists(epicor_file):
-        try:
-            with open(epicor_file, 'r') as f:
-                epicor_status = json.load(f)
-        except:
-            pass
+    if epicor_result:
+        epicor_status = {
+            "successful": epicor_result.successful_updates,
+            "failed": epicor_result.failed_updates,
+            "total": epicor_result.total_products,
+            "status": epicor_result.sync_status,
+            "results": epicor_result.results_summary,
+            "synced_at": epicor_result.synced_at.isoformat() if epicor_result.synced_at else None
+        }
 
     return EmailDetailResponse(
         email_data=email_data,
-        state=state,
+        state=state_dict,
         validation=validation,
         epicor_status=epicor_status
     )
+
+
+@router.get("/{message_id}/raw")
+async def get_raw_email_content(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get raw email body content and attachment metadata
+
+    Returns:
+    - body: Full HTML or text email body
+    - bodyType: 'html' or 'text'
+    - attachments: List of attachment metadata (name, size, contentType, id)
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Verify the email belongs to this user
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        # Fetch full email from Microsoft Graph API
+        graph_client = MultiUserGraphClient()
+        msg = graph_client.get_user_message_by_id(user_email, message_id)
+
+        # Extract email body
+        body_data = msg.get("body", {})
+        body_content = body_data.get("content", "")
+        body_type = body_data.get("contentType", "text").lower()
+
+        # Get attachment metadata if email has attachments
+        attachments_meta = []
+        if msg.get("hasAttachments", False):
+            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+
+            for att in attachments:
+                if att.get("@odata.type", "").endswith("fileAttachment"):
+                    attachments_meta.append({
+                        "id": att.get("id", ""),
+                        "name": att.get("name", "unknown"),
+                        "contentType": att.get("contentType", "application/octet-stream"),
+                        "size": att.get("size", 0)
+                    })
+
+        return {
+            "body": body_content,
+            "bodyType": body_type,
+            "attachments": attachments_meta,
+            "subject": msg.get("subject", "No Subject"),
+            "from": msg.get("from", {}).get("emailAddress", {}),
+            "receivedDateTime": msg.get("receivedDateTime", "")
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch raw email content: {str(e)}"
+        )
+
+
+@router.get("/{message_id}/attachments/{attachment_id}")
+async def download_attachment(
+    message_id: str,
+    attachment_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Download a specific attachment by ID
+
+    Returns the attachment file as a downloadable response
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Verify the email belongs to this user
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        # Get attachment from Microsoft Graph API
+        graph_client = MultiUserGraphClient()
+        attachments = graph_client.get_user_message_attachments(user_email, message_id)
+
+        # Find the specific attachment
+        target_attachment = None
+        for att in attachments:
+            if att.get("id") == attachment_id:
+                target_attachment = att
+                break
+
+        if not target_attachment:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        # Decode attachment content
+        content_bytes_b64 = target_attachment.get("contentBytes")
+        if not content_bytes_b64:
+            raise HTTPException(status_code=404, detail="Attachment has no content")
+
+        # Decode base64 content
+        if isinstance(content_bytes_b64, str):
+            content = base64.b64decode(content_bytes_b64)
+        else:
+            content = content_bytes_b64
+
+        # Get attachment metadata
+        filename = target_attachment.get("name", "attachment")
+        content_type = target_attachment.get("contentType", "application/octet-stream")
+
+        # Return as downloadable file
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to download attachment: {str(e)}"
+        )
 
 
 @router.patch("/{message_id}")
@@ -228,6 +444,7 @@ async def update_email_state(
     message_id: str,
     update: EmailStateUpdate,
     request: Request,
+    db: AsyncSession = Depends(get_db),
     force: bool = False
 ):
     """
@@ -243,14 +460,22 @@ async def update_email_state(
     - force: Set to true to bypass warnings and proceed with sync
     """
     user_email = get_user_from_session(request)
-    outputs_dir = get_user_outputs_directory(user_email)
+    user = await get_user_from_db(db, user_email)
 
-    # Load email data
-    email_file = os.path.join(outputs_dir, f"price_change_{message_id}.json")
-    if not os.path.exists(email_file):
-        raise HTTPException(status_code=404, detail="Email not found")
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
 
-    email_data = load_email_json(email_file)
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Build email_data dict for validation service (same format as JSON)
+    email_data = {
+        "supplier_info": email.supplier_info or {},
+        "price_change_summary": email.price_change_summary or {},
+        "affected_products": email.affected_products or [],
+        "additional_details": email.additional_details or {}
+    }
 
     # If marking as processed, validate and sync to Epicor
     if update.processed is True:
@@ -290,32 +515,99 @@ async def update_email_state(
                 effective_date=price_summary.get("effective_date")
             )
 
-            # Save epicor result
-            epicor_file = os.path.join(outputs_dir, f"epicor_update_{message_id}.json")
-            with open(epicor_file, 'w') as f:
-                json.dump(epicor_result, f, indent=2)
+            # Save epicor result to DATABASE (not JSON file)
+            sync_status = "success"
+            total_products = len(affected_products)
+            successful_updates = epicor_result.get("successful_updates", 0)
+            failed_updates = epicor_result.get("failed_updates", 0)
 
-            # Mark as processed and epicor synced
-            state = email_state_service.mark_as_processed(message_id, user_email)
-            email_state_service.mark_as_epicor_synced(message_id)
+            # Create sync result record in database
+            sync_result = await EpicorSyncResultService.create_sync_result(
+                db=db,
+                email_id=email.id,
+                user_id=user.id,
+                sync_status=sync_status,
+                total_products=total_products,
+                successful_updates=successful_updates,
+                failed_updates=failed_updates,
+                results_summary=epicor_result,
+                error_message=None
+            )
+
+            # Update email state in database (mark as processed and synced)
+            state = await EmailStateService.get_state_by_message_id(db, message_id)
+            if state:
+                await EmailStateService.update_state(
+                    db=db,
+                    message_id=message_id,
+                    processed=True,
+                    epicor_synced=True
+                )
+            else:
+                state = await EmailStateService.create_state(
+                    db=db,
+                    message_id=message_id,
+                    user_id=user.id,
+                    processed=True,
+                    epicor_synced=True
+                )
+
+            await db.commit()
+
+            # Return state as dict for response
+            state_dict = {
+                "message_id": state.message_id,
+                "processed": state.processed,
+                "epicor_synced": state.epicor_synced,
+                "vendor_verified": state.vendor_verified,
+                "verification_status": state.verification_status
+            }
 
             return {
                 "success": True,
-                "state": state,
+                "state": state_dict,
                 "epicor_result": epicor_result,
                 "warnings_bypassed": sync_check["warnings"] if force else []
             }
 
         except Exception as e:
+            await db.rollback()
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to sync to Epicor: {str(e)}"
             )
 
     elif update.processed is False:
-        # Mark as unprocessed
-        state = email_state_service.mark_as_unprocessed(message_id)
-        return {"success": True, "state": state}
+        # Mark as unprocessed in database
+        state = await EmailStateService.get_state_by_message_id(db, message_id)
+        if state:
+            await EmailStateService.update_state(
+                db=db,
+                message_id=message_id,
+                processed=False,
+                epicor_synced=False
+            )
+        else:
+            state = await EmailStateService.create_state(
+                db=db,
+                message_id=message_id,
+                user_id=user.id,
+                processed=False,
+                epicor_synced=False
+            )
+
+        await db.commit()
+
+        # Return state as dict
+        state_dict = {
+            "message_id": state.message_id,
+            "processed": state.processed,
+            "epicor_synced": state.epicor_synced,
+            "vendor_verified": state.vendor_verified,
+            "verification_status": state.verification_status
+        }
+
+        return {"success": True, "state": state_dict}
 
     else:
         raise HTTPException(status_code=400, detail="Invalid update data")
@@ -325,18 +617,27 @@ async def update_email_state(
 async def generate_followup(
     message_id: str,
     followup_request: FollowupRequest,
-    request: Request
+    request: Request,
+    db: AsyncSession = Depends(get_db)
 ):
     """Generate AI follow-up email draft for missing information"""
     user_email = get_user_from_session(request)
-    outputs_dir = get_user_outputs_directory(user_email)
+    user = await get_user_from_db(db, user_email)
 
-    # Load email data
-    email_file = os.path.join(outputs_dir, f"price_change_{message_id}.json")
-    if not os.path.exists(email_file):
-        raise HTTPException(status_code=404, detail="Email not found")
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
 
-    email_data = load_email_json(email_file)
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Build email_data dict for followup generation
+    email_data = {
+        "supplier_info": email.supplier_info or {},
+        "price_change_summary": email.price_change_summary or {},
+        "affected_products": email.affected_products or [],
+        "additional_details": email.additional_details or {}
+    }
 
     # Validate missing fields list
     if not followup_request.missing_fields or len(followup_request.missing_fields) == 0:
@@ -352,12 +653,25 @@ async def generate_followup(
             missing_fields=followup_request.missing_fields
         )
 
-        # Save the draft to state
-        email_state_service.save_followup_draft(message_id, followup_draft)
-        email_state_service.set_missing_fields(
-            message_id,
-            [f['field'] for f in followup_request.missing_fields]
+        # Get or create email state in database
+        state = await EmailStateService.get_state_by_message_id(db, message_id)
+        if not state:
+            state = await EmailStateService.create_state(
+                db=db,
+                message_id=message_id,
+                user_id=user.id
+            )
+
+        # Save the draft to state in database
+        missing_field_names = [f['field'] for f in followup_request.missing_fields]
+        await EmailStateService.update_state(
+            db=db,
+            message_id=message_id,
+            followup_draft=followup_draft,
+            missing_fields=missing_field_names
         )
+
+        await db.commit()
 
         return {
             "success": True,
@@ -366,6 +680,7 @@ async def generate_followup(
         }
 
     except Exception as e:
+        await db.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate follow-up email: {str(e)}"
@@ -373,81 +688,259 @@ async def generate_followup(
 
 
 @router.get("/pending-verification", response_model=EmailListResponse)
-async def list_pending_verification_emails(request: Request):
+async def list_pending_verification_emails(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
     """Get all emails pending vendor verification"""
     user_email = get_user_from_session(request)
-    all_emails = get_all_price_change_emails(user_email)
+    user = await get_user_from_db(db, user_email)
 
-    # Filter for pending verification
-    pending_emails = []
-    for email in all_emails:
-        # Get state to check verification status
-        message_id = email.get("message_id")
-        state = email_state_service.get_email_state(message_id)
-
-        if state.get("verification_status") == "pending_review":
-            # Add verification fields to email info
-            email["verification_status"] = state.get("verification_status")
-            email["flagged_reason"] = state.get("flagged_reason")
-            email["vendor_verified"] = state.get("vendor_verified", False)
-            pending_emails.append(email)
+    # Get all emails with pending_review verification status from database
+    pending_emails = await get_all_price_change_emails_from_db(
+        db=db,
+        user_id=user.id,
+        filter_type="pending_verification"
+    )
 
     return EmailListResponse(emails=pending_emails, total=len(pending_emails))
 
 
 @router.post("/{message_id}/approve-and-process")
-async def approve_and_process_email(message_id: str, request: Request):
-    """Manually approve unverified email and trigger AI extraction"""
-    user_email = get_user_from_session(request)
-    outputs_dir = get_user_outputs_directory(user_email)
+async def approve_and_process_email(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually approve unverified email and trigger LLM detection + AI extraction.
 
-    # Load flagged email metadata
-    email_file = os.path.join(outputs_dir, f"price_change_{message_id}.json")
-    if not os.path.exists(email_file):
-        raise HTTPException(status_code=404, detail="Email not found")
+    New Workflow:
+    1. Mark as manually approved
+    2. Run LLM price change detection
+    3. If detected as price change → run AI extraction
+    4. If NOT detected as price change → save result, skip extraction
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
+
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Check if already processed
-    state = email_state_service.get_email_state(message_id)
-    if state.get("verification_status") != "pending_review":
+    state = await EmailStateService.get_state_by_message_id(db, message_id)
+    if not state or state.verification_status != "pending_review":
         raise HTTPException(
             status_code=400,
             detail="Email is not pending verification"
         )
 
-    # Mark as manually approved
-    email_state_service.mark_as_manually_approved(message_id, user_email)
+    # Mark as manually approved in database
+    await EmailStateService.update_state(
+        db=db,
+        message_id=message_id,
+        vendor_verified=True,
+        manually_approved_by=user_email,
+        manually_approved_at=datetime.utcnow()
+    )
+    await db.commit()
 
-    # Trigger AI extraction with skip_verification=True
     try:
         # Get original message from Graph API
         graph_client = MultiUserGraphClient()
         msg = graph_client.get_user_message_by_id(user_email, message_id)
 
-        # Process with AI extraction
-        from main import process_user_message
-        process_user_message(msg, user_email, skip_verification=True)
+        # STEP 1: Run LLM Price Change Detection
+        from services.llm_detector import llm_is_price_change_email
+        from utils.processors import process_all_content
+        import base64
 
-        # Reload processed email data
-        email_data = load_email_json(email_file)
-        state = email_state_service.get_email_state(message_id)
-        validation = validation_service.validate_email_data(email_data)
+        # Extract email body
+        email_body = ""
+        body_data = msg.get("body", {})
+        if body_data:
+            email_body = body_data.get("content", "")
 
-        return {
-            "success": True,
-            "message": "Email approved and processed successfully",
-            "email_data": email_data,
-            "state": state,
-            "validation": validation
+        # Process attachments (if any)
+        attachment_paths = []
+        if msg.get("hasAttachments", False):
+            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+
+            # Create user-specific downloads directory
+            safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
+            user_downloads_dir = os.path.join("downloads", safe_email)
+            os.makedirs(user_downloads_dir, exist_ok=True)
+
+            for att in attachments:
+                if att.get("@odata.type", "").endswith("fileAttachment"):
+                    filename = att.get("name", "unknown")
+                    content_bytes = att.get("contentBytes")
+
+                    if content_bytes:
+                        try:
+                            if isinstance(content_bytes, str):
+                                decoded_content = base64.b64decode(content_bytes)
+                            else:
+                                decoded_content = content_bytes
+
+                            path = os.path.join(user_downloads_dir, filename)
+                            with open(path, "wb") as f:
+                                f.write(decoded_content)
+
+                            attachment_paths.append(path)
+                        except Exception as e:
+                            print(f"Warning: Could not save attachment {filename}: {e}")
+
+        # Process all content
+        combined_content = process_all_content(email_body, attachment_paths)
+
+        # Prepare metadata
+        subject = msg.get('subject', 'No Subject')
+        sender_info = msg.get('from', {}).get('emailAddress', {})
+        sender = sender_info.get('address', '') if sender_info else ''
+        date_received = msg.get('receivedDateTime', '')
+
+        metadata = {
+            'subject': subject,
+            'sender': sender,
+            'date': date_received,
+            'message_id': message_id,
+            'has_attachments': msg.get('hasAttachments', False)
         }
+
+        # Run LLM detection
+        print(f"🤖 Running LLM price change detection for approved email...")
+        detection_result = llm_is_price_change_email(combined_content, metadata)
+
+        # Update email state with detection result in database
+        await EmailStateService.update_state(
+            db=db,
+            message_id=message_id,
+            llm_detection_performed=True,
+            llm_detection_result=detection_result,
+            awaiting_llm_detection=False
+        )
+        await db.commit()
+
+        # STEP 2: Process based on detection result
+        if detection_result.get("meets_threshold", False):
+            # Detected as price change - proceed with AI extraction
+            confidence = detection_result.get("confidence", 0.0)
+            reasoning = detection_result.get("reasoning", "N/A")
+            print(f"✅ PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
+            print(f"💡 Reasoning: {reasoning}")
+
+            # Run AI extraction inline (async)
+            from services.extractor import extract_price_change_json
+
+            print(f"\n🤖 STAGE 2: AI ENTITY EXTRACTION")
+            print("-" * 80)
+            print(f"🔄 Azure OpenAI GPT-4.1 Processing...")
+
+            # Extract entities using AI (combined_content and metadata already prepared above)
+            result = extract_price_change_json(combined_content, metadata)
+
+            print(f"✅ AI Extraction Complete")
+
+            # Save extracted data to database
+            await EmailService.update_email(
+                db,
+                email_id=email.id,
+                supplier_info=result.get("supplier_info"),
+                price_change_summary=result.get("price_change_summary"),
+                affected_products=result.get("affected_products"),
+                additional_details=result.get("additional_details")
+            )
+
+            # Update email state to manually approved (not processed yet - waiting for Epicor sync)
+            await EmailStateService.update_state(
+                db=db,
+                message_id=message_id,
+                processed=False,
+                verification_status="manually_approved",
+                is_price_change=True
+            )
+
+            await db.commit()
+
+            # Reload email data from database
+            await db.refresh(email)
+            state = await EmailStateService.get_state_by_message_id(db, message_id)
+
+            # Build email_data dict
+            email_data = {
+                "supplier_info": email.supplier_info or {},
+                "price_change_summary": email.price_change_summary or {},
+                "affected_products": email.affected_products or [],
+                "additional_details": email.additional_details or {}
+            }
+
+            validation = validation_service.validate_email_data(email_data)
+
+            # Convert state to dict
+            state_dict = {
+                "message_id": state.message_id,
+                "processed": state.processed,
+                "epicor_synced": state.epicor_synced,
+                "vendor_verified": state.vendor_verified,
+                "verification_status": state.verification_status,
+                "is_price_change": state.is_price_change
+            } if state else {}
+
+            return {
+                "success": True,
+                "message": "Email approved and processed successfully",
+                "is_price_change": True,
+                "detection_confidence": confidence,
+                "detection_reasoning": reasoning,
+                "email_data": email_data,
+                "state": state_dict,
+                "validation": validation
+            }
+
+        else:
+            # NOT detected as price change - skip extraction
+            confidence = detection_result.get("confidence", 0.0)
+            reasoning = detection_result.get("reasoning", "N/A")
+            print(f"⏭️ NOT A PRICE CHANGE (Confidence: {confidence:.2f})")
+            print(f"💡 Reasoning: {reasoning}")
+
+            # Update email state to reflect it's not a price change in database
+            await EmailStateService.update_state(
+                db=db,
+                message_id=message_id,
+                verification_status="manually_approved",
+                approved_reason=f"Manually approved - LLM confirmed not a price change (Confidence: {confidence:.2f})",
+                is_price_change=False,
+                processed=False
+            )
+            await db.commit()
+
+            return {
+                "success": True,
+                "message": "Email approved but LLM detected it is not a price change notification",
+                "is_price_change": False,
+                "detection_confidence": confidence,
+                "detection_reasoning": reasoning,
+                "action": "skipped_extraction"
+            }
 
     except Exception as e:
         # Revert approval if processing failed
-        email_state_service.update_email_state(message_id, {
-            "verification_status": "pending_review",
-            "vendor_verified": False,
-            "manually_approved_by": None,
-            "manually_approved_at": None
-        })
+        await EmailStateService.update_state(
+            db=db,
+            message_id=message_id,
+            verification_status="pending_review",
+            vendor_verified=False,
+            manually_approved_by=None,
+            manually_approved_at=None,
+            awaiting_llm_detection=True
+        )
+        await db.commit()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process approved email: {str(e)}"
@@ -455,20 +948,39 @@ async def approve_and_process_email(message_id: str, request: Request):
 
 
 @router.post("/{message_id}/reject")
-async def reject_email(message_id: str, request: Request):
+async def reject_email(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
     """Reject/ignore unverified email"""
     user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
+
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Check if email exists and is pending verification
-    state = email_state_service.get_email_state(message_id)
-    if state.get("verification_status") != "pending_review":
+    state = await EmailStateService.get_state_by_message_id(db, message_id)
+    if not state or state.verification_status != "pending_review":
         raise HTTPException(
             status_code=400,
             detail="Email is not pending verification"
         )
 
-    # Mark as rejected
-    email_state_service.mark_as_rejected(message_id)
+    # Mark as rejected (simple, no detailed tracking) in database
+    await EmailStateService.update_state(
+        db=db,
+        message_id=message_id,
+        verification_status="rejected",
+        awaiting_llm_detection=False,
+        llm_detection_performed=False
+    )
+    await db.commit()
 
     return {
         "success": True,
@@ -477,29 +989,36 @@ async def reject_email(message_id: str, request: Request):
 
 
 @router.get("/vendors/cache-status")
-async def get_vendor_cache_status(request: Request):
+async def get_vendor_cache_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
     """Get vendor cache information"""
     get_user_from_session(request)  # Verify authentication
 
     from services.vendor_verification_service import vendor_verification_service
 
-    status = vendor_verification_service.get_cache_status()
+    status = await vendor_verification_service.get_cache_status()
     return status
 
 
 @router.post("/vendors/refresh-cache")
-async def refresh_vendor_cache(request: Request):
+async def refresh_vendor_cache(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
     """Manually refresh vendor cache from Epicor"""
     get_user_from_session(request)  # Verify authentication
 
     from services.vendor_verification_service import vendor_verification_service
 
     try:
-        result = vendor_verification_service.refresh_cache()
+        result = await vendor_verification_service.refresh_cache()
+        cache_status = await vendor_verification_service.get_cache_status()
         return {
             "success": True,
             "message": "Vendor cache refreshed successfully",
-            "cache_status": vendor_verification_service.get_cache_status()
+            "cache_status": cache_status
         }
     except Exception as e:
         raise HTTPException(

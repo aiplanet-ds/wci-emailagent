@@ -1,7 +1,14 @@
 import os, json
+import asyncio
 from auth.multi_graph import graph_client
 from utils.processors import save_attachment, process_all_content
 from services.extractor import extract_price_change_json
+
+# Database imports
+from database.config import SessionLocal
+from database.services.user_service import UserService
+from database.services.email_service import EmailService
+from database.services.email_state_service import EmailStateService
 
 OUTPUT_DIR = "outputs"
 DOWNLOADS_DIR = "downloads"
@@ -98,10 +105,21 @@ def process_user_message(msg, user_email, skip_verification=False):
 
     # ========== PRE-STAGE 2: VENDOR VERIFICATION CHECK ==========
     if not skip_verification:
-        from services.email_state_service import email_state_service
-        state = email_state_service.get_email_state(message_id)
+        # Check email state in database
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        if state.get('verification_status') == 'pending_review':
+        async def check_verification_status():
+            async with SessionLocal() as db:
+                state = await EmailStateService.get_state_by_message_id(db, message_id)
+                return state
+
+        state = loop.run_until_complete(check_verification_status())
+
+        if state and state.verification_status == 'pending_review':
             print("\n⚠️  EMAIL FLAGGED FOR VERIFICATION")
             print("-"*80)
             print("   This email is from an unverified sender")
@@ -123,23 +141,68 @@ def process_user_message(msg, user_email, skip_verification=False):
     print("   • Reason for Change")
 
     try:
+        # Note: Email has already been validated as price change by LLM detector in delta_service
+        # This extraction focuses solely on extracting structured data
         result = extract_price_change_json(combined_content, email_metadata)
 
-        # Check if email was identified as price change
-        if result.get("error") == "Email does not appear to be a price change notification":
-            print("   ℹ️  Not a price change email - SKIPPED")
-            print("="*80 + "\n")
-            return
+        # Save to database (JSON file writes removed - database is now the primary storage)
+        async def save_to_database():
+            async with SessionLocal() as db:
+                # Get or create user
+                user, _ = await UserService.get_or_create_user(db, user_email)
 
-        # Save results to user-specific directory
-        output_filename = f"price_change_{message_id}.json"
-        output_path = os.path.join(user_output_dir, output_filename)
+                # Create or update email record
+                email_record = await EmailService.get_email_by_message_id(db, message_id)
+                if not email_record:
+                    email_record = await EmailService.create_email(
+                        db,
+                        message_id=message_id,
+                        user_id=user.id,
+                        subject=subject,
+                        sender_email=sender,
+                        received_at=date_received,
+                        has_attachments=has_attachments,
+                        body_text=email_body,
+                        supplier_info=result.get("supplier_info"),
+                        price_change_summary=result.get("price_change_summary"),
+                        affected_products=result.get("affected_products"),
+                        additional_details=result.get("additional_details"),
+                        raw_email_data=msg
+                    )
+                else:
+                    # Update existing record
+                    email_record.supplier_info = result.get("supplier_info")
+                    email_record.price_change_summary = result.get("price_change_summary")
+                    email_record.affected_products = result.get("affected_products")
+                    email_record.additional_details = result.get("additional_details")
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
+                # Update email state
+                state = await EmailStateService.get_state_by_message_id(db, message_id)
+                if not state:
+                    state = await EmailStateService.create_state(
+                        db,
+                        message_id=message_id,
+                        user_id=user.id,
+                        email_id=email_record.id,
+                        is_price_change=True
+                    )
+                else:
+                    state.email_id = email_record.id
+                    state.is_price_change = True
+
+                await db.commit()
+
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        loop.run_until_complete(save_to_database())
 
         print(f"✅ Stage 2 Complete: Data extracted successfully")
         print(f"   💾 Saved to: {output_filename}")
+        print(f"   💾 Saved to database")
 
         # Print summary of extracted data
         print("\n📋 Extracted Data Summary:")

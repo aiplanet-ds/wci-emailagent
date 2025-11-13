@@ -84,56 +84,14 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
 Return ONLY valid JSON with no additional text or explanations.
 """
 
-def is_price_change_email(email_content: str, metadata: Dict[str, Any]) -> bool:
-    """
-    Determine if an email is a price change notification
-    """
-    # Keywords that indicate price change emails
-    price_change_keywords = [
-        'price change', 'price increase', 'price decrease', 'price adjustment',
-        'new pricing', 'pricing update', 'cost increase', 'rate change',
-        'tariff', 'price list', 'effective date', 'price revision',
-        'currency change', 'discount removed', 'pricing notification'
-    ]
-
-    # Check subject line
-    subject = metadata.get('subject', '').lower()
-    email_body = email_content.lower()
-
-    # Check for keywords in subject or content
-    for keyword in price_change_keywords:
-        if keyword in subject or keyword in email_body:
-            return True
-
-    # Check for price-related patterns
-    import re
-    price_patterns = [
-        r'\$\d+\.?\d*',  # Dollar amounts
-        r'€\d+\.?\d*',   # Euro amounts
-        r'£\d+\.?\d*',   # Pound amounts
-        r'\d+%\s*(increase|decrease)',  # Percentage changes
-        r'(old|new|current|previous)\s*price',
-        r'effective\s*(date|from)',
-    ]
-
-    for pattern in price_patterns:
-        if re.search(pattern, email_body, re.IGNORECASE):
-            return True
-
-    return False
-
-
 def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract structured data from price change email using Azure OpenAI
+    Extract structured data from price change email using Azure OpenAI.
+
+    Note: This function assumes the email has already been validated as a price change
+    notification by the LLM detector service. It focuses solely on data extraction.
     """
     try:
-        # Check if this is actually a price change email
-        if not is_price_change_email(content, metadata):
-            return {
-                "error": "Email does not appear to be a price change notification",
-                "email_type": "not_price_change"
-            }
 
         # Prepare metadata for the prompt
         safe_metadata = {
