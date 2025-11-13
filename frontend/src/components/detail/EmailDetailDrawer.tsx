@@ -1,4 +1,4 @@
-import { X, Mail, CheckCircle2, Circle, Shield, FileText, ChevronDown } from 'lucide-react';
+import { X, Mail, CheckCircle2, Circle, Shield, ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../ui/Badge';
 import { VerificationBadge } from '../ui/VerificationBadge';

@@ -18,7 +18,7 @@ export function PriceChangeBadge({ isPriceChange, className }: PriceChangeBadgeP
   }
 
   return (
-    <Badge variant="secondary" className={className}>
+    <Badge variant="default" className={className}>
       <span className="flex items-center gap-1">
         <span>📄</span>
         <span>Not Price Change</span>
