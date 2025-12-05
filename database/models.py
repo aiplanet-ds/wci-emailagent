@@ -302,3 +302,49 @@ class AuditLog(Base):
 
     def __repr__(self):
         return f"<AuditLog(id={self.id}, action_type='{self.action_type}')>"
+
+
+class OAuthToken(Base):
+    """OAuth token storage for external API integrations (e.g., Epicor)"""
+
+    __tablename__ = "oauth_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Service identification (e.g., 'epicor', 'microsoft', etc.)
+    service_name = Column(String(100), unique=True, nullable=False, index=True)
+
+    # Token data
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    token_type = Column(String(50), default="Bearer")
+
+    # Expiration tracking
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    # Metadata for tracking
+    obtained_via = Column(String(50))  # 'client_credentials', 'password', 'refresh_token'
+    scope = Column(String(500))
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Index for efficient lookup by service and expiration
+    __table_args__ = (
+        Index('ix_oauth_tokens_service_expires', 'service_name', 'expires_at'),
+    )
+
+    def __repr__(self):
+        return f"<OAuthToken(id={self.id}, service='{self.service_name}', expires_at={self.expires_at})>"
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if the token is expired"""
+        return datetime.utcnow() >= self.expires_at
+
+    @property
+    def expires_soon(self) -> bool:
+        """Check if the token expires within 5 minutes"""
+        from datetime import timedelta
+        return datetime.utcnow() >= (self.expires_at - timedelta(minutes=5))

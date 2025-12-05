@@ -231,6 +231,23 @@ async def startup_event():
         print("[ERROR] Please ensure PostgreSQL is running and DATABASE_URL is correct")
         raise
 
+    # Initialize Epicor OAuth token
+    print("[EPICOR] Initializing Epicor OAuth token...")
+    try:
+        from services.epicor_auth import epicor_auth
+        from database.config import get_db
+
+        async for db in get_db():
+            token_initialized = await epicor_auth.initialize_token_async(db)
+            if token_initialized:
+                print("[OK] Epicor OAuth token initialized and stored in database")
+            else:
+                print("[WARN] Epicor OAuth token initialization failed - API calls may fail")
+            break
+    except Exception as e:
+        print(f"[WARN] Epicor OAuth initialization error: {e}")
+        print("[WARN] Epicor API calls may fail until token is obtained")
+
     # Configuration and service startup
     print("[CONFIG] Configuration:")
     print("   [POLL] Polling Interval: 60 seconds (1 minute)")

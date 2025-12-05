@@ -25,6 +25,7 @@ from database.models import (
     EpicorSyncResult,
     DeltaToken,
     AuditLog,
+    OAuthToken,
 )
 
 # this is the Alembic Config object, which provides
