@@ -7,6 +7,7 @@ from database.services.vendor_service import VendorService
 from database.services.delta_service import DeltaService
 from database.services.audit_service import AuditService
 from database.services.epicor_sync_result_service import EpicorSyncResultService
+from database.services.oauth_token_service import OAuthTokenService
 
 __all__ = [
     "UserService",
@@ -16,4 +17,5 @@ __all__ = [
     "DeltaService",
     "AuditService",
     "EpicorSyncResultService",
+    "OAuthTokenService",
 ]
