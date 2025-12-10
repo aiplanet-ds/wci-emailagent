@@ -1,21 +1,22 @@
-import { X, Mail, CheckCircle2, Circle, Shield, ChevronDown } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Circle, Mail, Shield, X } from 'lucide-react';
 import { useState } from 'react';
+import { useEmailDetail, useGenerateFollowup, useRawEmailContent, useUpdateEmailProcessed } from '../../hooks/useEmails';
+import { formatDate } from '../../lib/utils';
+import type { MissingField } from '../../types/email';
+import { AttachmentList } from '../email/AttachmentList';
+import { EmailBodyViewer } from '../email/EmailBodyViewer';
 import { Badge } from '../ui/Badge';
-import { VerificationBadge } from '../ui/VerificationBadge';
-import { PriceChangeBadge } from '../ui/PriceChangeBadge';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
-import { formatDate } from '../../lib/utils';
-import { SupplierInfo } from './SupplierInfo';
+import { PriceChangeBadge } from '../ui/PriceChangeBadge';
+import { VerificationBadge } from '../ui/VerificationBadge';
+import { BomImpactPanel } from './BomImpactPanel';
+import { FollowupModal } from './FollowupModal';
+import { MissingFieldsChecklist } from './MissingFieldsChecklist';
 import { PriceChangeSummary } from './PriceChangeSummary';
 import { ProductsTable } from './ProductsTable';
-import { MissingFieldsChecklist } from './MissingFieldsChecklist';
-import { FollowupModal } from './FollowupModal';
+import { SupplierInfo } from './SupplierInfo';
 import { WorkflowStepper } from './WorkflowStepper';
-import { EmailBodyViewer } from '../email/EmailBodyViewer';
-import { AttachmentList } from '../email/AttachmentList';
-import { useEmailDetail, useUpdateEmailProcessed, useGenerateFollowup, useRawEmailContent } from '../../hooks/useEmails';
-import type { MissingField } from '../../types/email';
 
 interface EmailDetailDrawerProps {
   messageId: string | null;
@@ -33,6 +34,9 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
   const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(messageId);
   const updateProcessed = useUpdateEmailProcessed();
   const generateFollowup = useGenerateFollowup();
+
+  // Debug: Log is_price_change value
+  console.log('EmailDetailDrawer - is_price_change:', data?.state?.is_price_change, 'data.state:', data?.state);
 
   if (!messageId) return null;
 
@@ -290,6 +294,11 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
               {/* Products Table */}
               <ProductsTable products={data.email_data.affected_products} />
+
+              {/* BOM Impact Analysis - Show for price change emails */}
+              {data.state.is_price_change && (
+                <BomImpactPanel messageId={messageId} />
+              )}
 
               {/* Missing Fields Checklist */}
               {data.validation.all_missing_fields.length > 0 && (

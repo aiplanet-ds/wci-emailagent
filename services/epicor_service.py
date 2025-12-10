@@ -29,6 +29,14 @@ class EpicorAPIService:
         self.company_id = os.getenv("EPICOR_COMPANY_ID")
         self.default_price_list = os.getenv("EPICOR_DEFAULT_PRICE_LIST", "UNA1")
 
+        # Load margin thresholds from environment with defaults
+        # These define the margin percentage levels for risk classification
+        self.margin_thresholds = {
+            "critical": float(os.getenv("MARGIN_THRESHOLD_CRITICAL", "10.0")),  # < 10% = critical
+            "high": float(os.getenv("MARGIN_THRESHOLD_HIGH", "15.0")),          # 10-15% = high
+            "medium": float(os.getenv("MARGIN_THRESHOLD_MEDIUM", "20.0"))       # 15-20% = medium, > 20% = low
+        }
+
         # Validate required configuration
         if not self.base_url:
             raise ValueError("EPICOR_BASE_URL not configured in .env file")
@@ -46,6 +54,7 @@ class EpicorAPIService:
         logger.info(f"   Company ID: {self.company_id}")
         logger.info(f"   Default Price List: {self.default_price_list}")
         logger.info(f"   Auth Method: Bearer Token + X-api-Key")
+        logger.info(f"   Margin Thresholds: Critical<{self.margin_thresholds['critical']}%, High<{self.margin_thresholds['high']}%, Medium<{self.margin_thresholds['medium']}%")
     
     def _get_headers(self) -> Dict[str, str]:
         """Get authentication headers for API requests"""
@@ -113,15 +122,26 @@ class EpicorAPIService:
             Part data dictionary or None if not found
         """
         try:
-            url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/Parts(Company='{self.company_id}',PartNum='{part_num}')"
+            # Use filter query instead of key lookup to handle special characters like #
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/Parts"
             headers = self._get_headers()
 
-            response = requests.get(url, headers=headers, timeout=10)
+            params = {
+                "$filter": f"Company eq '{self.company_id}' and PartNum eq '{part_num}'",
+                "$top": 1
+            }
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
 
             if response.status_code == 200:
-                part_data = response.json()
-                logger.info(f"✅ Retrieved part: {part_num}")
-                return part_data
+                data = response.json()
+                parts = data.get("value", [])
+                if parts:
+                    logger.info(f"✅ Retrieved part: {part_num}")
+                    return parts[0]
+                else:
+                    logger.warning(f"⚠️ Part not found: {part_num}")
+                    return None
             elif response.status_code == 404:
                 logger.warning(f"⚠️ Part not found: {part_num}")
                 return None
@@ -132,6 +152,1233 @@ class EpicorAPIService:
         except Exception as e:
             logger.error(f"❌ Exception retrieving part {part_num}: {e}")
             return None
+
+    def get_part_where_used(self, part_num: str) -> List[Dict[str, Any]]:
+        """
+        Find direct parent assemblies that use a given component part.
+
+        Calls the Epicor GetPartWhereUsed endpoint to perform BOM implosion
+        (find which assemblies contain this part as a component).
+
+        Args:
+            part_num: Component part number to look up
+
+        Returns:
+            List of parent assemblies with fields:
+            - PartNum: Parent assembly part number
+            - RevisionNum: Revision of the parent assembly
+            - QtyPer: Quantity of the component used per parent assembly
+            - CanTrackUp: Boolean indicating if this parent has further parents (for multi-level traversal)
+            - Description: Parent assembly description
+            - MtlSeq: Material sequence number in the BOM
+        """
+        try:
+            logger.info(f"🔍 Finding assemblies that use part: {part_num}")
+
+            # Build the endpoint URL for GetPartWhereUsed action
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/GetPartWhereUsed"
+            headers = self._get_headers()
+
+            # Build the request body
+            payload = {
+                "whereUsedPartNum": part_num,
+                "pageSize": 0,       # 0 = return all results
+                "absolutePage": 0
+            }
+
+            logger.info(f"   Calling GetPartWhereUsed endpoint...")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                # Extract the PartWhereUsed array from returnObj
+                return_obj = data.get("returnObj", {})
+                where_used_list = return_obj.get("PartWhereUsed", [])
+
+                if not where_used_list:
+                    logger.info(f"   ℹ️  No parent assemblies found for part {part_num}")
+                    return []
+
+                # Parse and normalize the results
+                results = []
+                for item in where_used_list:
+                    parent_info = {
+                        "PartNum": item.get("PartNum", ""),
+                        "RevisionNum": item.get("RevisionNum", ""),
+                        "QtyPer": float(item.get("QtyPer", 1.0)),
+                        "CanTrackUp": item.get("CanTrackUp", False),
+                        "Description": item.get("Description", "") or item.get("PartDescription", ""),
+                        "MtlSeq": item.get("MtlSeq", 0),
+                        "MtlPartNum": item.get("MtlPartNum", part_num)
+                    }
+                    results.append(parent_info)
+
+                logger.info(f"✅ Found {len(results)} parent assemblies for part {part_num}")
+                for r in results[:5]:  # Log first 5 for brevity
+                    logger.info(f"   - {r['PartNum']} (Rev: {r['RevisionNum']}, QtyPer: {r['QtyPer']}, CanTrackUp: {r['CanTrackUp']})")
+                if len(results) > 5:
+                    logger.info(f"   ... and {len(results) - 5} more")
+
+                return results
+
+            elif response.status_code == 404:
+                logger.warning(f"⚠️ GetPartWhereUsed endpoint not found - verify API version")
+                return []
+            else:
+                logger.error(f"❌ Error calling GetPartWhereUsed: {response.status_code}")
+                logger.error(f"   Response: {response.text[:500]}")
+                return []
+
+        except requests.exceptions.Timeout:
+            logger.error(f"❌ Timeout calling GetPartWhereUsed for part {part_num}")
+            return []
+        except Exception as e:
+            logger.error(f"❌ Exception in get_part_where_used for {part_num}: {e}")
+            return []
+
+    def find_all_affected_assemblies(
+        self,
+        part_num: str,
+        max_levels: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Recursively find ALL assemblies (direct and indirect) affected by a component.
+
+        Performs multi-level BOM traversal using GetPartWhereUsed to find:
+        - Direct parent assemblies that use the component
+        - Indirect parent assemblies (assemblies that use the direct parents)
+        - Continues up the BOM hierarchy until no more parents or max_levels reached
+
+        Calculates cumulative quantity at each level (multiplies QtyPer as we traverse up).
+
+        Args:
+            part_num: Component part number to start from
+            max_levels: Maximum BOM levels to traverse (default 10, prevents infinite loops)
+
+        Returns:
+            List of dictionaries containing:
+            - assembly_part_num: Parent assembly part number
+            - revision: Assembly revision
+            - qty_per: Quantity per (at this direct level)
+            - cumulative_qty: Cumulative quantity from original component to this assembly
+            - bom_level: BOM level (1 = direct parent, 2 = grandparent, etc.)
+            - direct_parent_of: The part this assembly directly contains
+            - can_track_up: Whether this assembly has further parents
+            - description: Assembly description
+        """
+        logger.info(f"🔍 Finding ALL affected assemblies for part: {part_num}")
+        logger.info(f"   Max traversal levels: {max_levels}")
+
+        all_affected = []
+        visited = set()  # Track visited parts to prevent circular references
+
+        def traverse(current_part: str, level: int, cumulative_qty: float, parent_chain: List[str]):
+            """Recursive helper function to traverse BOM hierarchy"""
+
+            # Prevent infinite loops and excessive depth
+            if current_part in visited:
+                logger.debug(f"   Skipping already visited part: {current_part}")
+                return
+            if level > max_levels:
+                logger.warning(f"⚠️ Max level ({max_levels}) reached at part {current_part}")
+                return
+
+            visited.add(current_part)
+
+            # Get direct parents of current part
+            parents = self.get_part_where_used(current_part)
+
+            if not parents:
+                logger.debug(f"   No parents found for {current_part} at level {level}")
+                return
+
+            for parent in parents:
+                parent_part = parent.get("PartNum", "")
+                if not parent_part:
+                    continue
+
+                # Skip if this parent is in our traversal chain (circular reference)
+                if parent_part in parent_chain:
+                    logger.warning(f"⚠️ Circular reference detected: {parent_part} already in chain")
+                    continue
+
+                qty_per = parent.get("QtyPer", 1.0)
+                total_qty = cumulative_qty * qty_per
+                can_track_up = parent.get("CanTrackUp", False)
+
+                # Build the affected assembly entry
+                affected_entry = {
+                    "assembly_part_num": parent_part,
+                    "revision": parent.get("RevisionNum", ""),
+                    "qty_per": qty_per,
+                    "cumulative_qty": total_qty,
+                    "bom_level": level,
+                    "direct_parent_of": current_part,
+                    "can_track_up": can_track_up,
+                    "description": parent.get("Description", ""),
+                    "mtl_seq": parent.get("MtlSeq", 0)
+                }
+
+                all_affected.append(affected_entry)
+
+                logger.debug(f"   Level {level}: {parent_part} (QtyPer: {qty_per}, Cumulative: {total_qty}, CanTrackUp: {can_track_up})")
+
+                # Recursively check if this parent has parents
+                if can_track_up:
+                    new_chain = parent_chain + [parent_part]
+                    traverse(parent_part, level + 1, total_qty, new_chain)
+
+        # Start traversal from the component part
+        try:
+            traverse(part_num, 1, 1.0, [part_num])
+
+            # Log summary
+            if all_affected:
+                # Count assemblies by level
+                level_counts = {}
+                for item in all_affected:
+                    lvl = item["bom_level"]
+                    level_counts[lvl] = level_counts.get(lvl, 0) + 1
+
+                logger.info(f"✅ Found {len(all_affected)} total affected assemblies for {part_num}")
+                for lvl in sorted(level_counts.keys()):
+                    logger.info(f"   Level {lvl}: {level_counts[lvl]} assemblies")
+            else:
+                logger.info(f"ℹ️  No affected assemblies found for part {part_num}")
+
+            return all_affected
+
+        except Exception as e:
+            logger.error(f"❌ Exception in find_all_affected_assemblies: {e}")
+            return all_affected  # Return what we found so far
+
+    def calculate_assembly_cost_impact(
+        self,
+        component_price_delta: float,
+        qty_per_assembly: float,
+        assembly_part_num: str
+    ) -> Dict[str, Any]:
+        """
+        Calculate how a component price change affects an assembly's cost.
+
+        Args:
+            component_price_delta: Price difference (new_price - old_price)
+            qty_per_assembly: Quantity of component used per assembly (from BOM)
+            assembly_part_num: Assembly part number to analyze
+
+        Returns:
+            Dictionary containing:
+            - assembly_part_num: The assembly analyzed
+            - current_cost: Current assembly cost from Epicor
+            - cost_increase_per_unit: Cost increase per assembly unit
+            - new_assembly_cost: Projected new assembly cost
+            - cost_increase_pct: Percentage cost increase
+            - cost_field_used: Which cost field was used (StdCost or AvgMaterialCost)
+        """
+        try:
+            logger.info(f"💰 Calculating cost impact for assembly: {assembly_part_num}")
+            logger.info(f"   Price delta: ${component_price_delta:.4f}, QtyPer: {qty_per_assembly}")
+
+            # Get assembly's current cost from Epicor
+            assembly_data = self.get_part(assembly_part_num)
+
+            if not assembly_data:
+                logger.warning(f"⚠️ Assembly {assembly_part_num} not found in Epicor")
+                return {
+                    "assembly_part_num": assembly_part_num,
+                    "error": f"Assembly {assembly_part_num} not found",
+                    "current_cost": 0,
+                    "cost_increase_per_unit": component_price_delta * qty_per_assembly,
+                    "new_assembly_cost": 0,
+                    "cost_increase_pct": 0,
+                    "cost_field_used": None
+                }
+
+            # Try StdCost first, fall back to AvgMaterialCost
+            current_cost = assembly_data.get("StdCost")
+            cost_field_used = "StdCost"
+
+            if current_cost is None or current_cost == 0:
+                current_cost = assembly_data.get("AvgMaterialCost", 0)
+                cost_field_used = "AvgMaterialCost"
+
+            if current_cost is None:
+                current_cost = 0
+                cost_field_used = "None (defaulted to 0)"
+
+            # Calculate cost impact
+            cost_increase_per_unit = component_price_delta * qty_per_assembly
+            new_assembly_cost = current_cost + cost_increase_per_unit
+
+            # Calculate percentage increase (handle zero cost)
+            if current_cost > 0:
+                cost_increase_pct = (cost_increase_per_unit / current_cost) * 100
+            else:
+                cost_increase_pct = 0 if cost_increase_per_unit == 0 else 100  # 100% if going from 0 to something
+
+            logger.info(f"   Current cost (${cost_field_used}): ${current_cost:.4f}")
+            logger.info(f"   Cost increase: ${cost_increase_per_unit:.4f} ({cost_increase_pct:.2f}%)")
+            logger.info(f"   New projected cost: ${new_assembly_cost:.4f}")
+
+            return {
+                "assembly_part_num": assembly_part_num,
+                "assembly_description": assembly_data.get("PartDescription", ""),
+                "current_cost": round(current_cost, 4),
+                "cost_increase_per_unit": round(cost_increase_per_unit, 4),
+                "new_assembly_cost": round(new_assembly_cost, 4),
+                "cost_increase_pct": round(cost_increase_pct, 2),
+                "cost_field_used": cost_field_used
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Exception calculating cost impact for {assembly_part_num}: {e}")
+            return {
+                "assembly_part_num": assembly_part_num,
+                "error": str(e),
+                "current_cost": 0,
+                "cost_increase_per_unit": component_price_delta * qty_per_assembly,
+                "new_assembly_cost": 0,
+                "cost_increase_pct": 0,
+                "cost_field_used": None
+            }
+
+    def calculate_annual_impact(
+        self,
+        price_delta: float,
+        affected_assemblies: List[Dict[str, Any]],
+        weekly_demand_override: Optional[Dict[str, float]] = None,
+        use_forecast: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Estimate the annual financial impact of a component price change.
+
+        Formula: Annual Cost Delta = Price Difference × Cumulative Qty × Weekly Demand × 52
+
+        Args:
+            price_delta: Component price difference (new_price - old_price)
+            affected_assemblies: List from find_all_affected_assemblies()
+            weekly_demand_override: Optional dict mapping assembly_part_num to weekly demand
+                                   (overrides forecast data if provided for a specific part)
+            use_forecast: If True, automatically fetch forecast data from Epicor
+                         for assemblies without override values (default: False)
+
+        Returns:
+            Dictionary containing:
+            - total_annual_impact: Sum of annual impact across all assemblies
+            - total_assemblies_impacted: Count of affected assemblies
+            - impact_by_assembly: Detailed breakdown for each assembly
+        """
+        try:
+            logger.info(f"📊 Calculating annual impact for {len(affected_assemblies)} assemblies")
+            logger.info(f"   Price delta: ${price_delta:.4f}")
+
+            if weekly_demand_override:
+                logger.info(f"   Using demand overrides for {len(weekly_demand_override)} assemblies")
+
+            # If use_forecast is enabled, fetch forecast data for assemblies
+            forecast_demand = {}
+            if use_forecast:
+                logger.info(f"   📈 Fetching forecast data from Epicor...")
+                assembly_parts = [a.get("assembly_part_num", "") for a in affected_assemblies]
+                # Remove duplicates
+                unique_parts = list(set(p for p in assembly_parts if p))
+                forecast_demand = self.get_assembly_demand(unique_parts)
+
+            total_annual_impact = 0.0
+            impact_by_assembly = []
+
+            for assembly in affected_assemblies:
+                assembly_part = assembly.get("assembly_part_num", "")
+                cumulative_qty = assembly.get("cumulative_qty", assembly.get("qty_per", 1.0))
+
+                # Determine weekly demand with priority:
+                # 1. Override (if provided for this part)
+                # 2. Forecast data (if use_forecast=True and data exists)
+                # 3. Default to 0
+                demand_source = "default"
+                weekly_demand = 0.0
+
+                if weekly_demand_override and assembly_part in weekly_demand_override:
+                    weekly_demand = weekly_demand_override[assembly_part]
+                    demand_source = "override"
+                elif use_forecast and assembly_part in forecast_demand:
+                    weekly_demand = forecast_demand[assembly_part]
+                    demand_source = "forecast" if weekly_demand > 0 else "forecast_zero"
+
+                # Calculate annual impact
+                # Impact = Price Delta × Cumulative Qty × Weekly Demand × 52 weeks
+                annual_demand = weekly_demand * 52
+                annual_impact = price_delta * cumulative_qty * annual_demand
+
+                total_annual_impact += annual_impact
+
+                impact_entry = {
+                    "assembly_part_num": assembly_part,
+                    "revision": assembly.get("revision", ""),
+                    "bom_level": assembly.get("bom_level", 0),
+                    "qty_per": assembly.get("qty_per", 1.0),
+                    "cumulative_qty": cumulative_qty,
+                    "weekly_demand": weekly_demand,
+                    "annual_demand": annual_demand,
+                    "cost_increase_per_unit": round(price_delta * cumulative_qty, 4),
+                    "annual_cost_impact": round(annual_impact, 2),
+                    "demand_source": demand_source
+                }
+
+                impact_by_assembly.append(impact_entry)
+
+                if weekly_demand > 0:
+                    logger.debug(f"   {assembly_part}: Weekly={weekly_demand}, Annual Impact=${annual_impact:.2f}")
+
+            # Sort by annual impact (highest first)
+            impact_by_assembly.sort(key=lambda x: x["annual_cost_impact"], reverse=True)
+
+            # Log summary
+            assemblies_with_demand = sum(1 for a in impact_by_assembly if a["weekly_demand"] > 0)
+            forecast_sources = sum(1 for a in impact_by_assembly if a["demand_source"] == "forecast")
+            logger.info(f"✅ Annual impact calculation complete")
+            logger.info(f"   Total assemblies: {len(affected_assemblies)}")
+            logger.info(f"   Assemblies with demand data: {assemblies_with_demand}")
+            if use_forecast:
+                logger.info(f"   Demand from forecast: {forecast_sources}")
+            logger.info(f"   Total annual impact: ${total_annual_impact:,.2f}")
+
+            return {
+                "total_annual_impact": round(total_annual_impact, 2),
+                "total_assemblies_impacted": len(affected_assemblies),
+                "assemblies_with_demand_data": assemblies_with_demand,
+                "demand_from_forecast": forecast_sources if use_forecast else 0,
+                "impact_by_assembly": impact_by_assembly,
+                "price_delta": price_delta,
+                "calculation_note": "Annual Impact = Price Delta × Cumulative Qty × Weekly Demand × 52"
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Exception calculating annual impact: {e}")
+            return {
+                "total_annual_impact": 0,
+                "total_assemblies_impacted": len(affected_assemblies) if affected_assemblies else 0,
+                "assemblies_with_demand_data": 0,
+                "impact_by_assembly": [],
+                "error": str(e)
+            }
+
+    def get_part_forecast(
+        self,
+        part_num: str,
+        weeks_ahead: int = 52,
+        plant: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get forecast/planned demand for a part from Epicor ForecastSvc.
+
+        Retrieves forecast quantities for the specified part and calculates
+        weekly demand based on future forecasts.
+
+        Args:
+            part_num: Part number to get forecast for
+            weeks_ahead: Number of weeks to look ahead (default: 52 for annual)
+            plant: Optional plant code to filter by
+
+        Returns:
+            Dictionary containing:
+            - total_forecast_qty: Sum of all forecast quantities
+            - weekly_demand: Calculated average weekly demand
+            - forecast_records: Number of forecast records found
+            - forecasts: List of individual forecast entries
+            - data_source: "epicor_forecast"
+        """
+        try:
+            logger.info(f"📊 Getting forecast for part: {part_num}")
+
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.ForecastSvc/Forecasts"
+            headers = self._get_headers()
+
+            # Build filter - get forecasts for this part with future dates
+            from datetime import datetime, timedelta, timezone
+            today = datetime.now(timezone.utc)
+            end_date = today + timedelta(weeks=weeks_ahead)
+
+            # Format dates for OData filter with timezone (Epicor requires timezone offset)
+            today_str = today.strftime("%Y-%m-%dT00:00:00Z")
+            end_date_str = end_date.strftime("%Y-%m-%dT00:00:00Z")
+
+            filter_parts = [
+                f"PartNum eq '{part_num}'",
+                f"ForeDate ge {today_str}",
+                f"ForeDate le {end_date_str}"
+            ]
+
+            if plant:
+                filter_parts.append(f"Plant eq '{plant}'")
+
+            params = {
+                "$filter": " and ".join(filter_parts),
+                "$select": "PartNum,ForeDate,ForeQty,ForeQtyUOM,Plant,CustNum,CustomerName",
+                "$orderby": "ForeDate asc"
+            }
+
+            logger.info(f"   Querying forecasts from {today.date()} to {end_date.date()}")
+
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+
+            if response.status_code == 200:
+                data = response.json()
+                forecasts = data.get("value", [])
+
+                # Calculate totals
+                total_qty = sum(float(f.get("ForeQty", 0)) for f in forecasts)
+                weekly_demand = total_qty / weeks_ahead if weeks_ahead > 0 else 0
+
+                logger.info(f"✅ Found {len(forecasts)} forecast records for {part_num}")
+                logger.info(f"   Total forecast qty: {total_qty}")
+                logger.info(f"   Avg weekly demand: {weekly_demand:.2f}")
+
+                return {
+                    "part_num": part_num,
+                    "total_forecast_qty": round(total_qty, 2),
+                    "weekly_demand": round(weekly_demand, 4),
+                    "annual_demand": round(total_qty, 2),
+                    "weeks_covered": weeks_ahead,
+                    "forecast_records": len(forecasts),
+                    "forecasts": forecasts,
+                    "data_source": "epicor_forecast"
+                }
+
+            elif response.status_code == 404:
+                logger.info(f"   ℹ️ No forecasts found for part {part_num}")
+                return {
+                    "part_num": part_num,
+                    "total_forecast_qty": 0,
+                    "weekly_demand": 0,
+                    "annual_demand": 0,
+                    "weeks_covered": weeks_ahead,
+                    "forecast_records": 0,
+                    "forecasts": [],
+                    "data_source": "epicor_forecast",
+                    "message": "No forecast data available"
+                }
+            else:
+                logger.error(f"❌ Error getting forecast: {response.status_code} - {response.text[:200]}")
+                return {
+                    "part_num": part_num,
+                    "total_forecast_qty": 0,
+                    "weekly_demand": 0,
+                    "annual_demand": 0,
+                    "forecast_records": 0,
+                    "forecasts": [],
+                    "error": f"API error: {response.status_code}"
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Exception getting forecast for {part_num}: {e}")
+            return {
+                "part_num": part_num,
+                "total_forecast_qty": 0,
+                "weekly_demand": 0,
+                "annual_demand": 0,
+                "forecast_records": 0,
+                "forecasts": [],
+                "error": str(e)
+            }
+
+    def get_assembly_demand(
+        self,
+        assembly_part_nums: List[str],
+        weeks_ahead: int = 52
+    ) -> Dict[str, float]:
+        """
+        Get weekly demand for multiple assemblies from Epicor forecasts.
+
+        Convenience method that retrieves forecast data for a list of assemblies
+        and returns a dictionary mapping part numbers to weekly demand.
+        This can be passed directly to calculate_annual_impact().
+
+        Args:
+            assembly_part_nums: List of assembly part numbers
+            weeks_ahead: Number of weeks to look ahead (default: 52)
+
+        Returns:
+            Dictionary mapping assembly_part_num to weekly_demand
+            Example: {"ASSY-001": 25.5, "ASSY-002": 12.0}
+        """
+        logger.info(f"📊 Getting demand data for {len(assembly_part_nums)} assemblies")
+
+        demand_data = {}
+
+        for part_num in assembly_part_nums:
+            forecast = self.get_part_forecast(part_num, weeks_ahead)
+            weekly_demand = forecast.get("weekly_demand", 0)
+            demand_data[part_num] = weekly_demand
+
+            if weekly_demand > 0:
+                logger.debug(f"   {part_num}: {weekly_demand:.2f}/week")
+
+        assemblies_with_demand = sum(1 for d in demand_data.values() if d > 0)
+        logger.info(f"✅ Retrieved demand for {assemblies_with_demand}/{len(assembly_part_nums)} assemblies")
+
+        return demand_data
+
+    def check_margin_erosion(
+        self,
+        assembly_part_num: str,
+        cost_increase: float,
+        margin_thresholds: Optional[Dict[str, float]] = None
+    ) -> Dict[str, Any]:
+        """
+        Check if a cost increase will cause margin erosion below acceptable thresholds.
+
+        Margin thresholds are loaded from environment variables by default:
+        - MARGIN_THRESHOLD_CRITICAL (default 10%): < this = critical risk
+        - MARGIN_THRESHOLD_HIGH (default 15%): < this = high risk
+        - MARGIN_THRESHOLD_MEDIUM (default 20%): < this = medium risk, >= this = low risk
+
+        Args:
+            assembly_part_num: Assembly part number to check
+            cost_increase: Cost increase per unit from component price change
+            margin_thresholds: Optional custom thresholds dict (overrides env vars)
+                               Keys: critical, high, medium
+
+        Returns:
+            Dictionary containing:
+            - assembly_part_num: The assembly analyzed
+            - current_cost, new_cost, selling_price: Financial data
+            - current_margin_pct, new_margin_pct, margin_change_pct: Margin analysis
+            - risk_level: "critical", "high", "medium", or "low"
+            - requires_review: Boolean indicating if human review is needed
+            - recommendation: Human-readable recommendation text
+        """
+        try:
+            logger.info(f"📉 Checking margin erosion for assembly: {assembly_part_num}")
+            logger.info(f"   Cost increase: ${cost_increase:.4f}")
+
+            # Use provided thresholds, or fall back to instance thresholds (from env vars)
+            if margin_thresholds is None:
+                margin_thresholds = self.margin_thresholds
+
+            # Get assembly's current cost and selling price from Epicor
+            assembly_data = self.get_part(assembly_part_num)
+
+            if not assembly_data:
+                logger.warning(f"⚠️ Assembly {assembly_part_num} not found")
+                return {
+                    "assembly_part_num": assembly_part_num,
+                    "error": f"Assembly {assembly_part_num} not found",
+                    "risk_level": "unknown",
+                    "requires_review": True,
+                    "recommendation": "Cannot analyze - assembly not found in Epicor"
+                }
+
+            # Get cost (try StdCost first, then AvgMaterialCost)
+            current_cost = assembly_data.get("StdCost")
+            if current_cost is None or current_cost == 0:
+                current_cost = assembly_data.get("AvgMaterialCost", 0) or 0
+
+            # Get selling price
+            selling_price = assembly_data.get("UnitPrice", 0) or 0
+
+            # Handle missing selling price
+            if selling_price <= 0:
+                logger.warning(f"⚠️ No selling price defined for {assembly_part_num}")
+                return {
+                    "assembly_part_num": assembly_part_num,
+                    "assembly_description": assembly_data.get("PartDescription", ""),
+                    "current_cost": round(current_cost, 4),
+                    "new_cost": round(current_cost + cost_increase, 4),
+                    "cost_increase": round(cost_increase, 4),
+                    "selling_price": 0,
+                    "current_margin_pct": 0,
+                    "new_margin_pct": 0,
+                    "margin_change_pct": 0,
+                    "risk_level": "unknown",
+                    "requires_review": True,
+                    "recommendation": "Cannot calculate margin - no selling price defined",
+                    "thresholds_used": margin_thresholds
+                }
+
+            # Calculate margins
+            new_cost = current_cost + cost_increase
+            current_margin = ((selling_price - current_cost) / selling_price) * 100
+            new_margin = ((selling_price - new_cost) / selling_price) * 100
+            margin_change = new_margin - current_margin
+
+            # Determine risk level based on NEW margin
+            if new_margin < margin_thresholds["critical"]:
+                risk_level = "critical"
+                recommendation = f"🚨 CRITICAL: Margin ({new_margin:.1f}%) below {margin_thresholds['critical']}%. Require executive approval or consider selling price increase."
+            elif new_margin < margin_thresholds["high"]:
+                risk_level = "high"
+                recommendation = f"⚠️ HIGH RISK: Margin ({new_margin:.1f}%) between {margin_thresholds['critical']}-{margin_thresholds['high']}%. Manager approval required."
+            elif new_margin < margin_thresholds["medium"]:
+                risk_level = "medium"
+                recommendation = f"ℹ️ REVIEW: Margin ({new_margin:.1f}%) between {margin_thresholds['high']}-{margin_thresholds['medium']}%. Monitor closely."
+            else:
+                risk_level = "low"
+                recommendation = f"✅ OK: Margin ({new_margin:.1f}%) above {margin_thresholds['medium']}%. Within acceptable range."
+
+            logger.info(f"   Selling price: ${selling_price:.4f}")
+            logger.info(f"   Current cost: ${current_cost:.4f} → New cost: ${new_cost:.4f}")
+            logger.info(f"   Margin: {current_margin:.1f}% → {new_margin:.1f}% (change: {margin_change:.1f}%)")
+            logger.info(f"   Risk level: {risk_level.upper()}")
+
+            return {
+                "assembly_part_num": assembly_part_num,
+                "assembly_description": assembly_data.get("PartDescription", ""),
+                "current_cost": round(current_cost, 4),
+                "new_cost": round(new_cost, 4),
+                "cost_increase": round(cost_increase, 4),
+                "selling_price": round(selling_price, 4),
+                "current_margin_pct": round(current_margin, 2),
+                "new_margin_pct": round(new_margin, 2),
+                "margin_change_pct": round(margin_change, 2),
+                "risk_level": risk_level,
+                "requires_review": risk_level in ["critical", "high"],
+                "recommendation": recommendation,
+                "thresholds_used": margin_thresholds
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Exception checking margin erosion for {assembly_part_num}: {e}")
+            return {
+                "assembly_part_num": assembly_part_num,
+                "error": str(e),
+                "risk_level": "unknown",
+                "requires_review": True,
+                "recommendation": f"Error analyzing margin: {str(e)}"
+            }
+
+    def analyze_price_change_impact(
+        self,
+        part_num: str,
+        old_price: float,
+        new_price: float,
+        weekly_demand_override: Optional[Dict[str, float]] = None,
+        margin_thresholds: Optional[Dict[str, float]] = None,
+        use_forecast: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Comprehensive BOM impact analysis for a component price change.
+
+        This method ties together all BOM impact analysis:
+        1. Find all affected assemblies (BOM implosion)
+        2. Calculate cost impact for each assembly
+        3. Check margin erosion risks for ALL affected assemblies
+        4. Estimate annual financial impact using Epicor forecast data
+        5. Generate summary and recommendations
+
+        Args:
+            part_num: Component part number with price change
+            old_price: Previous component price
+            new_price: New component price
+            weekly_demand_override: Optional dict mapping assembly_part_num to weekly demand
+                                   (overrides forecast data for specific assemblies)
+            margin_thresholds: Optional custom margin thresholds (uses env vars if not provided)
+            use_forecast: If True, automatically fetch forecast data from Epicor (default: True)
+
+        Returns:
+            Comprehensive impact analysis report (JSON-friendly for frontend):
+            - component_part_num: Component that changed
+            - old_price, new_price, price_delta, price_change_pct: Price change details
+            - summary: High-level statistics and risk counts
+            - impact_details: Detailed analysis for each affected assembly
+            - annual_impact: Annual financial impact estimates
+            - high_risk_assemblies: List of assemblies requiring review (critical/high)
+            - recommendation: Overall recommendation text
+            - thresholds_used: The margin thresholds applied
+        """
+        try:
+            logger.info("="*80)
+            logger.info("📊 BOM IMPACT ANALYSIS - COMPREHENSIVE REPORT")
+            logger.info("="*80)
+            logger.info(f"   Component: {part_num}")
+            logger.info(f"   Old Price: ${old_price:.4f}")
+            logger.info(f"   New Price: ${new_price:.4f}")
+
+            price_delta = new_price - old_price
+            price_change_pct = ((new_price - old_price) / old_price * 100) if old_price > 0 else 0
+
+            logger.info(f"   Price Delta: ${price_delta:.4f} ({price_change_pct:+.2f}%)")
+            logger.info("-"*80)
+
+            # Step 1: Find all affected assemblies
+            logger.info("📋 Step 1: Finding affected assemblies...")
+            affected_assemblies = self.find_all_affected_assemblies(part_num)
+
+            if not affected_assemblies:
+                logger.info("ℹ️ No affected assemblies found - component may be a top-level part")
+                return {
+                    "component_part_num": part_num,
+                    "old_price": old_price,
+                    "new_price": new_price,
+                    "price_delta": round(price_delta, 4),
+                    "price_change_pct": round(price_change_pct, 2),
+                    "summary": {
+                        "total_assemblies_affected": 0,
+                        "total_annual_cost_impact": 0,
+                        "risk_summary": {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0},
+                        "requires_approval": False
+                    },
+                    "impact_details": [],
+                    "annual_impact": {"total_annual_impact": 0},
+                    "recommendation": "ℹ️ No assemblies affected - this part is not used as a component in any BOMs."
+                }
+
+            logger.info("-"*80)
+
+            # Step 2 & 3: Calculate cost impact and check margins for each assembly
+            logger.info("📋 Step 2-3: Calculating cost impact and margin erosion...")
+            impact_details = []
+            risk_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
+
+            for assembly in affected_assemblies:
+                assembly_part = assembly["assembly_part_num"]
+                cumulative_qty = assembly.get("cumulative_qty", assembly.get("qty_per", 1.0))
+
+                # Calculate cost impact using cumulative qty
+                cost_increase = price_delta * cumulative_qty
+
+                # Check margin erosion
+                margin_check = self.check_margin_erosion(
+                    assembly_part_num=assembly_part,
+                    cost_increase=cost_increase,
+                    margin_thresholds=margin_thresholds
+                )
+
+                # Track risk counts
+                risk_level = margin_check.get("risk_level", "unknown")
+                risk_counts[risk_level] = risk_counts.get(risk_level, 0) + 1
+
+                # Build combined impact entry
+                impact_entry = {
+                    # From affected assembly
+                    "assembly_part_num": assembly_part,
+                    "revision": assembly.get("revision", ""),
+                    "bom_level": assembly.get("bom_level", 0),
+                    "qty_per": assembly.get("qty_per", 1.0),
+                    "cumulative_qty": cumulative_qty,
+                    "direct_parent_of": assembly.get("direct_parent_of", ""),
+                    "description": assembly.get("description", "") or margin_check.get("assembly_description", ""),
+                    # Cost impact
+                    "cost_increase_per_unit": round(cost_increase, 4),
+                    # From margin check
+                    "current_cost": margin_check.get("current_cost", 0),
+                    "new_cost": margin_check.get("new_cost", 0),
+                    "selling_price": margin_check.get("selling_price", 0),
+                    "current_margin_pct": margin_check.get("current_margin_pct", 0),
+                    "new_margin_pct": margin_check.get("new_margin_pct", 0),
+                    "margin_change_pct": margin_check.get("margin_change_pct", 0),
+                    "risk_level": risk_level,
+                    "requires_review": margin_check.get("requires_review", False),
+                    "recommendation": margin_check.get("recommendation", "")
+                }
+
+                impact_details.append(impact_entry)
+
+            logger.info("-"*80)
+
+            # Step 4: Calculate annual impact with forecast data
+            logger.info("📋 Step 4: Calculating annual financial impact...")
+            if use_forecast:
+                logger.info("   📈 Using Epicor forecast data for demand...")
+            annual_impact_result = self.calculate_annual_impact(
+                price_delta=price_delta,
+                affected_assemblies=affected_assemblies,
+                weekly_demand_override=weekly_demand_override,
+                use_forecast=use_forecast
+            )
+
+            # Merge annual impact data into impact_details
+            annual_by_assembly = {a["assembly_part_num"]: a for a in annual_impact_result.get("impact_by_assembly", [])}
+            for detail in impact_details:
+                assembly_part = detail["assembly_part_num"]
+                if assembly_part in annual_by_assembly:
+                    annual_data = annual_by_assembly[assembly_part]
+                    detail["weekly_demand"] = annual_data.get("weekly_demand", 0)
+                    detail["annual_demand"] = annual_data.get("annual_demand", 0)
+                    detail["annual_cost_impact"] = annual_data.get("annual_cost_impact", 0)
+                    detail["demand_source"] = annual_data.get("demand_source", "default")
+
+            # Sort by risk level (critical first) then by annual impact
+            risk_priority = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
+            impact_details.sort(key=lambda x: (
+                risk_priority.get(x.get("risk_level", "unknown"), 4),
+                -x.get("annual_cost_impact", 0)
+            ))
+
+            logger.info("-"*80)
+
+            # Build summary
+            total_annual_impact = annual_impact_result.get("total_annual_impact", 0)
+            requires_approval = risk_counts["critical"] > 0 or risk_counts["high"] > 0
+
+            # Get thresholds used (for transparency)
+            thresholds_used = margin_thresholds if margin_thresholds else self.margin_thresholds
+
+            # Calculate data quality metrics
+            assemblies_with_demand = annual_impact_result.get("assemblies_with_demand_data", 0)
+            assemblies_without_demand = len(affected_assemblies) - assemblies_with_demand
+            unknown_count = risk_counts.get("unknown", 0)
+
+            # Data quality warning flag - true if any assemblies have missing data
+            has_data_quality_issues = (unknown_count > 0 or assemblies_without_demand > 0)
+
+            summary = {
+                "total_assemblies_affected": len(affected_assemblies),
+                "total_annual_cost_impact": total_annual_impact,
+                "risk_summary": risk_counts,
+                "requires_approval": requires_approval,
+                "assemblies_with_demand_data": assemblies_with_demand,
+                "assemblies_without_demand_data": assemblies_without_demand,
+                "demand_from_forecast": annual_impact_result.get("demand_from_forecast", 0),
+                "assemblies_with_unknown_risk": unknown_count,
+                "has_data_quality_issues": has_data_quality_issues
+            }
+
+            # Extract high-risk assemblies (critical and high) for easy frontend access
+            high_risk_assemblies = [
+                {
+                    "assembly_part_num": d["assembly_part_num"],
+                    "description": d.get("description", ""),
+                    "risk_level": d["risk_level"],
+                    "current_margin_pct": d.get("current_margin_pct", 0),
+                    "new_margin_pct": d.get("new_margin_pct", 0),
+                    "margin_change_pct": d.get("margin_change_pct", 0),
+                    "annual_cost_impact": d.get("annual_cost_impact", 0),
+                    "recommendation": d.get("recommendation", "")
+                }
+                for d in impact_details
+                if d.get("risk_level") in ["critical", "high"]
+            ]
+
+            # Generate overall recommendation
+            recommendation = self._generate_impact_recommendation(risk_counts, total_annual_impact)
+
+            logger.info("="*80)
+            logger.info("📊 BOM IMPACT ANALYSIS COMPLETE")
+            logger.info("="*80)
+            logger.info(f"   Total assemblies affected: {len(affected_assemblies)}")
+            logger.info(f"   Risk breakdown: Critical={risk_counts['critical']}, High={risk_counts['high']}, Medium={risk_counts['medium']}, Low={risk_counts['low']}")
+            logger.info(f"   Total annual impact: ${total_annual_impact:,.2f}")
+            logger.info(f"   Requires approval: {requires_approval}")
+            logger.info(f"   High-risk assemblies: {len(high_risk_assemblies)}")
+            logger.info("="*80)
+
+            return {
+                "component_part_num": part_num,
+                "old_price": old_price,
+                "new_price": new_price,
+                "price_delta": round(price_delta, 4),
+                "price_change_pct": round(price_change_pct, 2),
+                "summary": summary,
+                "impact_details": impact_details,
+                "high_risk_assemblies": high_risk_assemblies,
+                "annual_impact": annual_impact_result,
+                "recommendation": recommendation,
+                "thresholds_used": thresholds_used
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Exception in analyze_price_change_impact: {e}")
+            return {
+                "component_part_num": part_num,
+                "old_price": old_price,
+                "new_price": new_price,
+                "price_delta": round(new_price - old_price, 4) if old_price and new_price else 0,
+                "error": str(e),
+                "summary": {
+                    "total_assemblies_affected": 0,
+                    "risk_summary": {},
+                    "requires_approval": True
+                },
+                "impact_details": [],
+                "recommendation": f"❌ Error during analysis: {str(e)}"
+            }
+
+    def _generate_impact_recommendation(
+        self,
+        risk_counts: Dict[str, int],
+        total_annual_impact: float
+    ) -> str:
+        """
+        Generate a human-readable recommendation based on impact analysis.
+
+        Args:
+            risk_counts: Dict with counts by risk level
+            total_annual_impact: Total annual financial impact
+
+        Returns:
+            Recommendation string
+        """
+        if risk_counts.get("critical", 0) > 0:
+            return (
+                f"🚨 CRITICAL: {risk_counts['critical']} assemblies have margin below 10%. "
+                f"Price update requires executive approval. Consider selling price adjustments. "
+                f"Total annual impact: ${total_annual_impact:,.2f}"
+            )
+        elif risk_counts.get("high", 0) > 0:
+            return (
+                f"⚠️ HIGH RISK: {risk_counts['high']} assemblies have margin between 10-15%. "
+                f"Manager approval required before proceeding. "
+                f"Total annual impact: ${total_annual_impact:,.2f}"
+            )
+        elif risk_counts.get("medium", 0) > 0:
+            return (
+                f"ℹ️ REVIEW: {risk_counts['medium']} assemblies approaching margin threshold (15-20%). "
+                f"Monitor closely after update. "
+                f"Total annual impact: ${total_annual_impact:,.2f}"
+            )
+        else:
+            low_count = risk_counts.get("low", 0)
+            unknown_count = risk_counts.get("unknown", 0)
+            if low_count > 0:
+                return (
+                    f"✅ LOW RISK: All {low_count} assemblies maintain healthy margins (>20%). "
+                    f"Safe to proceed with price update. "
+                    f"Total annual impact: ${total_annual_impact:,.2f}"
+                )
+            elif unknown_count > 0:
+                return (
+                    f"⚠️ UNKNOWN: {unknown_count} assemblies could not be analyzed (missing price/cost data). "
+                    f"Review manually before proceeding."
+                )
+            else:
+                return "ℹ️ No assemblies affected by this price change."
+
+    def process_supplier_price_change(
+        self,
+        part_num: str,
+        supplier_id: str,
+        old_price: float,
+        new_price: float,
+        effective_date: Optional[str] = None,
+        email_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Process a supplier price change email end-to-end.
+
+        This is the main orchestration method for the automated workflow:
+        1. Validates the component and supplier in Epicor
+        2. Finds all affected assemblies (BOM implosion)
+        3. Calculates annual cost impact using Epicor forecast data
+        4. Checks margin erosion for ALL affected assemblies
+        5. Generates a comprehensive JSON report for frontend display
+
+        Args:
+            part_num: Component part number from email
+            supplier_id: Supplier ID from email (e.g., "FAST1")
+            old_price: Previous price from email
+            new_price: New price from email
+            effective_date: Optional effective date from email (ISO format)
+            email_metadata: Optional dict with email info (subject, from, date, etc.)
+
+        Returns:
+            Comprehensive JSON-friendly report containing:
+            - status: "success", "warning", or "error"
+            - component: Validated component info from Epicor
+            - supplier: Validated supplier info from Epicor
+            - price_change: Price change details
+            - bom_impact: Results from analyze_price_change_impact
+            - actions_required: List of required actions based on risk levels
+            - processing_errors: List of any errors encountered (continues on errors)
+            - timestamp: ISO timestamp of when analysis was performed
+        """
+        from datetime import datetime
+
+        logger.info("="*80)
+        logger.info("🔄 PROCESSING SUPPLIER PRICE CHANGE")
+        logger.info("="*80)
+        logger.info(f"   Part: {part_num}")
+        logger.info(f"   Supplier: {supplier_id}")
+        logger.info(f"   Price Change: ${old_price:.4f} → ${new_price:.4f}")
+        if effective_date:
+            logger.info(f"   Effective Date: {effective_date}")
+
+        processing_errors = []
+        timestamp = datetime.utcnow().isoformat() + "Z"
+
+        # Initialize result structure
+        result = {
+            "status": "success",
+            "timestamp": timestamp,
+            "processing_errors": processing_errors,
+            "component": None,
+            "supplier": None,
+            "price_change": {
+                "part_num": part_num,
+                "supplier_id": supplier_id,
+                "old_price": old_price,
+                "new_price": new_price,
+                "price_delta": round(new_price - old_price, 4),
+                "price_change_pct": round(((new_price - old_price) / old_price * 100), 2) if old_price > 0 else 0,
+                "effective_date": effective_date
+            },
+            "email_metadata": email_metadata,
+            "bom_impact": None,
+            "actions_required": [],
+            "can_auto_approve": False
+        }
+
+        # Step 1: Validate component exists in Epicor
+        logger.info("-"*80)
+        logger.info("📋 Step 1: Validating component in Epicor...")
+        try:
+            component_data = self.get_part(part_num)
+            if component_data:
+                result["component"] = {
+                    "part_num": part_num,
+                    "description": component_data.get("PartDescription", ""),
+                    "type_code": component_data.get("TypeCode", ""),
+                    "uom": component_data.get("IUM", ""),
+                    "current_cost": component_data.get("StdCost") or component_data.get("AvgMaterialCost", 0),
+                    "validated": True
+                }
+                logger.info(f"   ✅ Component validated: {component_data.get('PartDescription', part_num)}")
+            else:
+                result["component"] = {"part_num": part_num, "validated": False, "error": "Part not found in Epicor"}
+                processing_errors.append(f"Component {part_num} not found in Epicor")
+                logger.warning(f"   ⚠️ Component {part_num} not found in Epicor")
+        except Exception as e:
+            result["component"] = {"part_num": part_num, "validated": False, "error": str(e)}
+            processing_errors.append(f"Error validating component: {str(e)}")
+            logger.error(f"   ❌ Error validating component: {e}")
+
+        # Step 2: Validate supplier exists in Epicor
+        logger.info("-"*80)
+        logger.info("📋 Step 2: Validating supplier in Epicor...")
+        try:
+            vendor_data = self.get_vendor_by_id(supplier_id)
+            if vendor_data:
+                result["supplier"] = {
+                    "supplier_id": supplier_id,
+                    "vendor_num": vendor_data.get("VendorNum"),
+                    "name": vendor_data.get("Name", ""),
+                    "validated": True
+                }
+                logger.info(f"   ✅ Supplier validated: {vendor_data.get('Name', supplier_id)}")
+            else:
+                result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": "Supplier not found"}
+                processing_errors.append(f"Supplier {supplier_id} not found in Epicor")
+                logger.warning(f"   ⚠️ Supplier {supplier_id} not found in Epicor")
+        except Exception as e:
+            result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": str(e)}
+            processing_errors.append(f"Error validating supplier: {str(e)}")
+            logger.error(f"   ❌ Error validating supplier: {e}")
+
+        # Step 3: Perform comprehensive BOM impact analysis
+        logger.info("-"*80)
+        logger.info("📋 Step 3: Performing BOM impact analysis...")
+        try:
+            bom_impact = self.analyze_price_change_impact(
+                part_num=part_num,
+                old_price=old_price,
+                new_price=new_price,
+                use_forecast=True  # Automatically use Epicor forecast data
+            )
+            result["bom_impact"] = bom_impact
+
+            if "error" in bom_impact:
+                processing_errors.append(f"BOM analysis error: {bom_impact['error']}")
+                logger.error(f"   ❌ BOM analysis error: {bom_impact['error']}")
+        except Exception as e:
+            result["bom_impact"] = {"error": str(e)}
+            processing_errors.append(f"Error in BOM analysis: {str(e)}")
+            logger.error(f"   ❌ Exception in BOM analysis: {e}")
+
+        # Step 4: Determine required actions based on analysis
+        logger.info("-"*80)
+        logger.info("📋 Step 4: Determining required actions...")
+        actions = []
+
+        if result["bom_impact"] and "summary" in result["bom_impact"]:
+            summary = result["bom_impact"]["summary"]
+            risk_summary = summary.get("risk_summary", {})
+
+            # Check for critical/high risk items
+            critical_count = risk_summary.get("critical", 0)
+            high_count = risk_summary.get("high", 0)
+            medium_count = risk_summary.get("medium", 0)
+
+            if critical_count > 0:
+                actions.append({
+                    "action": "EXECUTIVE_APPROVAL_REQUIRED",
+                    "priority": "critical",
+                    "description": f"{critical_count} assemblies have margins below {self.margin_thresholds['critical']}%",
+                    "assemblies_affected": critical_count
+                })
+
+            if high_count > 0:
+                actions.append({
+                    "action": "MANAGER_APPROVAL_REQUIRED",
+                    "priority": "high",
+                    "description": f"{high_count} assemblies have margins between {self.margin_thresholds['critical']}%-{self.margin_thresholds['high']}%",
+                    "assemblies_affected": high_count
+                })
+
+            if medium_count > 0:
+                actions.append({
+                    "action": "REVIEW_RECOMMENDED",
+                    "priority": "medium",
+                    "description": f"{medium_count} assemblies approaching margin threshold",
+                    "assemblies_affected": medium_count
+                })
+
+            # Check for assemblies with unknown risk (missing selling price data)
+            unknown_count = risk_summary.get("unknown", 0)
+            if unknown_count > 0:
+                actions.append({
+                    "action": "MANUAL_REVIEW_REQUIRED",
+                    "priority": "warning",
+                    "description": f"{unknown_count} assemblies have missing price data - cannot calculate margins",
+                    "assemblies_affected": unknown_count,
+                    "reason": "Missing selling price in Epicor"
+                })
+
+            # Check if price update can be auto-approved
+            # Prevent auto-approval when there are critical, high risk, OR unknown risk assemblies
+            can_auto_approve = (critical_count == 0 and high_count == 0 and unknown_count == 0)
+            result["can_auto_approve"] = can_auto_approve
+
+            if can_auto_approve:
+                actions.append({
+                    "action": "AUTO_APPROVE_ELIGIBLE",
+                    "priority": "low",
+                    "description": "All affected assemblies maintain healthy margins - eligible for automatic price update"
+                })
+
+            # Add price update action
+            actions.append({
+                "action": "UPDATE_EPICOR_PRICE",
+                "priority": "required",
+                "description": f"Update part {part_num} price from ${old_price:.4f} to ${new_price:.4f}",
+                "requires_approval": not can_auto_approve
+            })
+
+        result["actions_required"] = actions
+
+        # Step 5: Set overall status
+        if processing_errors:
+            if result["bom_impact"] and "summary" in result["bom_impact"]:
+                result["status"] = "warning"  # Partial success
+            else:
+                result["status"] = "error"  # Failed
+        else:
+            result["status"] = "success"
+
+        # Final logging
+        logger.info("="*80)
+        logger.info("🔄 SUPPLIER PRICE CHANGE PROCESSING COMPLETE")
+        logger.info("="*80)
+        logger.info(f"   Status: {result['status'].upper()}")
+        logger.info(f"   Processing errors: {len(processing_errors)}")
+        logger.info(f"   Actions required: {len(actions)}")
+        logger.info(f"   Can auto-approve: {result['can_auto_approve']}")
+        if result["bom_impact"] and "summary" in result["bom_impact"]:
+            logger.info(f"   Total assemblies affected: {result['bom_impact']['summary']['total_assemblies_affected']}")
+            logger.info(f"   Total annual impact: ${result['bom_impact']['summary']['total_annual_cost_impact']:,.2f}")
+        logger.info("="*80)
+
+        return result
 
     def get_vendor_by_id(self, vendor_id: str) -> Optional[Dict[str, Any]]:
         """

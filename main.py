@@ -1,5 +1,6 @@
 import os, json
 import asyncio
+import logging
 from auth.multi_graph import graph_client
 from utils.processors import save_attachment, process_all_content
 from services.extractor import extract_price_change_json
@@ -9,11 +10,112 @@ from database.config import SessionLocal
 from database.services.user_service import UserService
 from database.services.email_service import EmailService
 from database.services.email_state_service import EmailStateService
+from database.services.bom_impact_service import BomImpactService
+
+logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = "outputs"
 DOWNLOADS_DIR = "downloads"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+
+async def run_bom_impact_analysis(email_id: int, extraction_result: dict, supplier_info: dict):
+    """
+    Run BOM impact analysis for all products in an email and store results in database.
+
+    This runs in the background after AI extraction is complete.
+
+    Args:
+        email_id: Database ID of the email record
+        extraction_result: The AI extraction result containing affected_products
+        supplier_info: Supplier info from extraction (contains supplier_id)
+    """
+    from services.epicor_service import EpicorService
+
+    affected_products = extraction_result.get("affected_products", [])
+    if not affected_products:
+        logger.info("   ℹ️  No affected products to analyze for BOM impact")
+        return
+
+    supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
+
+    logger.info(f"\n📊 STAGE 3: BOM IMPACT ANALYSIS")
+    logger.info("-"*80)
+    logger.info(f"   Analyzing {len(affected_products)} product(s) for BOM impact...")
+
+    try:
+        epicor_service = EpicorService()
+
+        async with SessionLocal() as db:
+            # Delete any existing BOM impact results for this email (for re-processing)
+            await BomImpactService.delete_by_email_id(db, email_id)
+
+            for idx, product in enumerate(affected_products):
+                part_num = product.get("product_code", "")
+                old_price = product.get("old_price", 0)
+                new_price = product.get("new_price", 0)
+
+                if not part_num:
+                    logger.warning(f"   ⚠️  Product {idx}: Missing product_code, skipping")
+                    continue
+
+                logger.info(f"\n   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
+                logger.info(f"      Price: ${old_price:.4f} → ${new_price:.4f}")
+
+                try:
+                    # Run the BOM impact analysis
+                    impact_result = epicor_service.process_supplier_price_change(
+                        part_num=part_num,
+                        supplier_id=supplier_id,
+                        old_price=float(old_price) if old_price else 0,
+                        new_price=float(new_price) if new_price else 0,
+                        effective_date=extraction_result.get("price_change_summary", {}).get("effective_date"),
+                        email_metadata=None
+                    )
+
+                    # Store the result in database
+                    bom_impact = await BomImpactService.create(
+                        db,
+                        email_id=email_id,
+                        product_index=idx,
+                        impact_data=impact_result
+                    )
+
+                    # Log summary
+                    status = impact_result.get("status", "unknown")
+                    summary = impact_result.get("bom_impact", {}).get("summary", {})
+                    total_assemblies = summary.get("total_assemblies_affected", 0)
+                    risk_summary = summary.get("risk_summary", {})
+
+                    logger.info(f"      ✅ Analysis complete: {status}")
+                    logger.info(f"      📊 Assemblies affected: {total_assemblies}")
+                    if risk_summary:
+                        logger.info(f"      ⚠️  Risk: Critical={risk_summary.get('critical', 0)}, High={risk_summary.get('high', 0)}")
+
+                except Exception as e:
+                    logger.error(f"      ❌ Error analyzing product {part_num}: {e}")
+                    # Store error result
+                    error_result = {
+                        "status": "error",
+                        "processing_errors": [str(e)],
+                        "component": {"part_num": part_num, "validated": False},
+                        "supplier": {"supplier_id": supplier_id, "validated": False},
+                        "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
+                        "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                        "actions_required": [],
+                        "can_auto_approve": False
+                    }
+                    await BomImpactService.create(db, email_id=email_id, product_index=idx, impact_data=error_result)
+
+            await db.commit()
+
+        logger.info(f"\n   ✅ BOM Impact Analysis Complete")
+        logger.info("="*80)
+
+    except Exception as e:
+        logger.error(f"   ❌ BOM Impact Analysis failed: {e}")
+
 
 def process_user_message(msg, user_email, skip_verification=False):
     """Process a single email message for a specific user with data isolation
@@ -191,6 +293,7 @@ def process_user_message(msg, user_email, skip_verification=False):
                     state.is_price_change = True
 
                 await db.commit()
+                return email_record.id
 
         try:
             loop = asyncio.get_event_loop()
@@ -198,7 +301,7 @@ def process_user_message(msg, user_email, skip_verification=False):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        loop.run_until_complete(save_to_database())
+        email_id = loop.run_until_complete(save_to_database())
 
         print(f"✅ Stage 2 Complete: Data extracted successfully")
         print(f"   💾 Saved to: {output_filename}")
@@ -208,6 +311,18 @@ def process_user_message(msg, user_email, skip_verification=False):
         print("\n📋 Extracted Data Summary:")
         print_extraction_summary(result)
         print("="*80)
+
+        # ========== STAGE 3: BOM IMPACT ANALYSIS (Background) ==========
+        # Run BOM impact analysis for all products in the email
+        if email_id and result.get("affected_products"):
+            try:
+                loop.run_until_complete(run_bom_impact_analysis(
+                    email_id=email_id,
+                    extraction_result=result,
+                    supplier_info=result.get("supplier_info")
+                ))
+            except Exception as e:
+                print(f"   ⚠️  BOM Impact Analysis error (non-blocking): {e}")
 
         # Note: Epicor sync will happen when user clicks "Process" button in the UI
         print("\n💼 Email extracted and ready for processing")

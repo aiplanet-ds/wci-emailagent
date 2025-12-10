@@ -19,6 +19,7 @@ from database.services.user_service import UserService
 from database.services.email_service import EmailService
 from database.services.email_state_service import EmailStateService
 from database.services.epicor_sync_result_service import EpicorSyncResultService
+from database.services.bom_impact_service import BomImpactService
 
 # Legacy services
 from services.validation_service import validation_service
@@ -867,6 +868,74 @@ async def approve_and_process_email(
 
             await db.commit()
 
+            # ========== BOM IMPACT ANALYSIS ==========
+            # Run BOM impact analysis for all products after AI extraction
+            affected_products = result.get("affected_products", [])
+            supplier_info = result.get("supplier_info", {})
+            supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
+
+            if affected_products:
+                print(f"\n📊 Running BOM Impact Analysis for {len(affected_products)} products...")
+                try:
+                    epicor_service = EpicorAPIService()
+
+                    for idx, product in enumerate(affected_products):
+                        part_num = product.get("product_code") or product.get("part_number", "")
+                        old_price = product.get("old_price", 0)
+                        new_price = product.get("new_price", 0)
+
+                        if not part_num:
+                            print(f"   ⚠️ Product {idx + 1}: No part number, skipping")
+                            continue
+
+                        print(f"   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
+
+                        try:
+                            # Run the BOM impact analysis
+                            impact_result = epicor_service.process_supplier_price_change(
+                                part_num=part_num,
+                                supplier_id=supplier_id,
+                                old_price=float(old_price) if old_price else 0,
+                                new_price=float(new_price) if new_price else 0,
+                                effective_date=result.get("price_change_summary", {}).get("effective_date"),
+                                email_metadata=None
+                            )
+
+                            # Store the result in database
+                            await BomImpactService.create(
+                                db,
+                                email_id=email.id,
+                                product_index=idx,
+                                impact_data=impact_result
+                            )
+
+                            # Log summary
+                            status = impact_result.get("status", "unknown")
+                            summary = impact_result.get("bom_impact", {}).get("summary", {})
+                            total_assemblies = summary.get("total_assemblies_affected", 0)
+                            print(f"      ✅ Analysis: {status}, {total_assemblies} assemblies affected")
+
+                        except Exception as e:
+                            print(f"      ❌ Error analyzing {part_num}: {e}")
+                            # Store error result
+                            error_result = {
+                                "status": "error",
+                                "processing_errors": [str(e)],
+                                "component": {"part_num": part_num, "validated": False},
+                                "supplier": {"supplier_id": supplier_id, "validated": False},
+                                "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
+                                "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                                "actions_required": [],
+                                "can_auto_approve": False
+                            }
+                            await BomImpactService.create(db, email_id=email.id, product_index=idx, impact_data=error_result)
+
+                    await db.commit()
+                    print(f"   ✅ BOM Impact Analysis Complete")
+
+                except Exception as e:
+                    print(f"   ⚠️ BOM Impact Analysis error (non-blocking): {e}")
+
             # Reload email data from database
             await db.refresh(email)
             state = await EmailStateService.get_state_by_message_id(db, message_id)
@@ -1024,4 +1093,223 @@ async def refresh_vendor_cache(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to refresh vendor cache: {str(e)}"
+        )
+
+
+# ============================================================================
+# BOM IMPACT ANALYSIS ENDPOINTS
+# ============================================================================
+
+@router.get("/{message_id}/bom-impact")
+async def get_bom_impact(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get BOM impact analysis results for an email.
+
+    Returns all BOM impact results for each product in the email.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    return {
+        "email_id": email.id,
+        "message_id": message_id,
+        "total_products": len(impacts),
+        "impacts": [BomImpactService.to_dict(impact) for impact in impacts]
+    }
+
+
+class BomImpactApprovalRequest(BaseModel):
+    approval_notes: Optional[str] = None
+
+
+@router.post("/{message_id}/bom-impact/{product_index}/approve")
+async def approve_bom_impact(
+    message_id: str,
+    product_index: int,
+    approval_request: BomImpactApprovalRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Approve a specific product's BOM impact for Epicor sync.
+
+    This marks the product as approved for price update in Epicor.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    # Find the specific product
+    target_impact = None
+    for impact in impacts:
+        if impact.product_index == product_index:
+            target_impact = impact
+            break
+
+    if not target_impact:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BOM impact result not found for product index {product_index}"
+        )
+
+    if target_impact.approved:
+        raise HTTPException(
+            status_code=400,
+            detail="This product has already been approved"
+        )
+
+    # Approve the BOM impact
+    approved_impact = await BomImpactService.approve(
+        db,
+        impact_id=target_impact.id,
+        approved_by_id=user.id,
+        approval_notes=approval_request.approval_notes
+    )
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Product {target_impact.part_num} approved for Epicor sync",
+        "impact": BomImpactService.to_dict(approved_impact)
+    }
+
+
+@router.post("/{message_id}/bom-impact/approve-all")
+async def approve_all_bom_impacts(
+    message_id: str,
+    approval_request: BomImpactApprovalRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Approve all products in an email for Epicor sync.
+
+    This is a convenience endpoint to approve all products at once.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    if not impacts:
+        raise HTTPException(
+            status_code=404,
+            detail="No BOM impact results found for this email"
+        )
+
+    approved_count = 0
+    already_approved = 0
+
+    for impact in impacts:
+        if impact.approved:
+            already_approved += 1
+            continue
+
+        await BomImpactService.approve(
+            db,
+            impact_id=impact.id,
+            approved_by_id=user.id,
+            approval_notes=approval_request.approval_notes
+        )
+        approved_count += 1
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Approved {approved_count} product(s) for Epicor sync",
+        "approved_count": approved_count,
+        "already_approved": already_approved,
+        "total_products": len(impacts)
+    }
+
+
+@router.post("/{message_id}/reanalyze-bom-impact")
+async def reanalyze_bom_impact(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Re-run BOM impact analysis for an email.
+
+    This deletes existing results and runs the analysis again.
+    Useful if Epicor data has changed or if there was an error.
+    """
+    from database.services.bom_impact_service import BomImpactService
+    from main import run_bom_impact_analysis
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if email has affected products
+    if not email.affected_products:
+        raise HTTPException(
+            status_code=400,
+            detail="Email has no affected products to analyze"
+        )
+
+    # Build extraction result from email data
+    extraction_result = {
+        "affected_products": email.affected_products,
+        "price_change_summary": email.price_change_summary,
+        "supplier_info": email.supplier_info
+    }
+
+    try:
+        # Run BOM impact analysis (this will delete existing results first)
+        await run_bom_impact_analysis(
+            email_id=email.id,
+            extraction_result=extraction_result,
+            supplier_info=email.supplier_info
+        )
+
+        # Get updated results
+        impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+        return {
+            "success": True,
+            "message": f"BOM impact analysis completed for {len(impacts)} product(s)",
+            "impacts": [BomImpactService.to_dict(impact) for impact in impacts]
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"BOM impact analysis failed: {str(e)}"
         )

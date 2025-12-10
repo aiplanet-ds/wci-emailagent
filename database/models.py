@@ -129,6 +129,7 @@ class Email(Base):
     email_state = relationship("EmailState", back_populates="email", uselist=False, cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="email", cascade="all, delete-orphan")
     epicor_sync_results = relationship("EpicorSyncResult", back_populates="email", cascade="all, delete-orphan")
+    bom_impact_results = relationship("BomImpactResult", back_populates="email", cascade="all, delete-orphan")
 
     # Full-text search indexes
     __table_args__ = (
@@ -302,6 +303,83 @@ class AuditLog(Base):
 
     def __repr__(self):
         return f"<AuditLog(id={self.id}, action_type='{self.action_type}')>"
+
+
+class BomImpactResult(Base):
+    """BOM Impact Analysis results for each product in an email"""
+
+    __tablename__ = "bom_impact_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email_id = Column(Integer, ForeignKey("emails.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Product identification
+    product_index = Column(Integer, nullable=False)  # Index of product in affected_products array
+    part_num = Column(String(100), index=True)
+    product_name = Column(String(255))
+
+    # Price change info
+    old_price = Column(Numeric(18, 6))
+    new_price = Column(Numeric(18, 6))
+    price_delta = Column(Numeric(18, 6))
+    price_change_pct = Column(Numeric(10, 4))
+
+    # Component validation
+    component_validated = Column(Boolean, default=False)
+    component_description = Column(String(500))
+
+    # Supplier validation
+    supplier_id = Column(String(100))
+    supplier_validated = Column(Boolean, default=False)
+    supplier_name = Column(String(255))
+    vendor_num = Column(Integer)
+
+    # BOM impact summary (JSONB for flexibility)
+    summary = Column(JSONB)  # total_assemblies, risk_summary, annual_impact, etc.
+
+    # Impact details - list of affected assemblies
+    impact_details = Column(JSONB)  # Full array of assembly impacts
+
+    # High-risk assemblies (for quick access)
+    high_risk_assemblies = Column(JSONB)
+
+    # Annual impact calculation
+    annual_impact = Column(JSONB)  # Full annual impact breakdown
+    total_annual_cost_impact = Column(Numeric(18, 2))
+
+    # Actions and approval
+    actions_required = Column(JSONB)  # List of required actions
+    can_auto_approve = Column(Boolean, default=True)
+    recommendation = Column(Text)
+
+    # Thresholds used for analysis
+    thresholds_used = Column(JSONB)
+
+    # Processing status
+    status = Column(String(20), default="pending", index=True)  # 'pending', 'success', 'warning', 'error'
+    processing_errors = Column(JSONB, default=[])
+
+    # Approval tracking
+    approved = Column(Boolean, default=False, index=True)
+    approved_by_id = Column(Integer, ForeignKey("users.id"))
+    approved_at = Column(DateTime)
+    approval_notes = Column(Text)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    email = relationship("Email", back_populates="bom_impact_results")
+    approved_by = relationship("User")
+
+    # Compound index for quick lookup
+    __table_args__ = (
+        Index('ix_bom_impact_email_product', 'email_id', 'product_index'),
+    )
+
+    def __repr__(self):
+        return f"<BomImpactResult(id={self.id}, part_num='{self.part_num}', status='{self.status}')>"
 
 
 class OAuthToken(Base):

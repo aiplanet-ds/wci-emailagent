@@ -190,3 +190,154 @@ export interface VendorCacheStatus {
 
 // Filter types
 export type EmailFilter = 'all' | 'price_change' | 'non_price_change' | 'processed' | 'unprocessed' | 'pending_verification' | 'rejected';
+
+// ============================================================================
+// BOM IMPACT ANALYSIS TYPES
+// ============================================================================
+
+export type BomImpactRiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
+
+export interface BomImpactRiskSummary {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+}
+
+export interface BomImpactSummary {
+  total_assemblies_affected: number;
+  risk_summary: BomImpactRiskSummary;
+  total_annual_cost_impact: number;
+  assemblies_with_demand_data: number;
+  assemblies_without_demand_data: number;
+  demand_from_forecast: number;
+  assemblies_with_unknown_risk: number;
+  has_data_quality_issues: boolean;
+  requires_approval: boolean;
+}
+
+export interface BomImpactAssemblyDetail {
+  assembly_part_num: string;
+  assembly_description: string;
+  revision: string;
+  qty_per: number;
+  cumulative_qty: number;
+  level: number;
+  path: string[];
+  current_cost: number;
+  selling_price: number;
+  current_margin: number;
+  current_margin_pct: number;
+  new_cost: number;
+  new_margin: number;
+  new_margin_pct: number;
+  margin_erosion: number;
+  margin_erosion_pct: number;
+  risk_level: BomImpactRiskLevel;
+  weekly_demand: number;
+  annual_cost_impact: number;
+}
+
+export interface BomImpactAnnualImpact {
+  total_annual_cost_impact: number;
+  assemblies_with_demand: number;
+  assemblies_without_demand: number;
+  breakdown: {
+    assembly_part_num: string;
+    weekly_demand: number;
+    annual_demand: number;
+    cost_impact_per_unit: number;
+    annual_cost_impact: number;
+  }[];
+}
+
+export interface BomImpactThresholds {
+  critical: number;
+  high: number;
+  medium: number;
+}
+
+export type BomImpactActionType =
+  | 'EXECUTIVE_APPROVAL_REQUIRED'
+  | 'MANAGER_APPROVAL_REQUIRED'
+  | 'REVIEW_RECOMMENDED'
+  | 'AUTO_APPROVE_ELIGIBLE'
+  | 'MANUAL_REVIEW_REQUIRED';
+
+export interface BomImpactAction {
+  action: BomImpactActionType;
+  reason: string;
+  assemblies?: string[];
+}
+
+export interface BomImpactResult {
+  id: number;
+  email_id: number;
+  product_index: number;
+  part_num: string | null;
+  product_name: string | null;
+
+  // Price change info
+  old_price: number | null;
+  new_price: number | null;
+  price_delta: number | null;
+  price_change_pct: number | null;
+
+  // Component validation
+  component_validated: boolean;
+  component_description: string | null;
+
+  // Supplier validation
+  supplier_id: string | null;
+  supplier_validated: boolean;
+  supplier_name: string | null;
+  vendor_num: number | null;
+
+  // BOM impact analysis
+  summary: BomImpactSummary | null;
+  impact_details: BomImpactAssemblyDetail[];
+  high_risk_assemblies: BomImpactAssemblyDetail[];
+  annual_impact: BomImpactAnnualImpact | null;
+  total_annual_cost_impact: number;
+
+  // Actions and approval
+  actions_required: BomImpactAction[];
+  can_auto_approve: boolean;
+  recommendation: string | null;
+  thresholds_used: BomImpactThresholds | null;
+
+  // Processing status
+  status: 'pending' | 'success' | 'warning' | 'error';
+  processing_errors: string[];
+
+  // Approval tracking
+  approved: boolean;
+  approved_by_id: number | null;
+  approved_at: string | null;
+  approval_notes: string | null;
+
+  // Timestamps
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BomImpactResponse {
+  email_id: number;
+  message_id: string;
+  total_products: number;
+  impacts: BomImpactResult[];
+}
+
+export interface BomImpactApprovalRequest {
+  approval_notes?: string;
+}
+
+export interface BomImpactApprovalResponse {
+  success: boolean;
+  message: string;
+  impact?: BomImpactResult;
+  approved_count?: number;
+  already_approved?: number;
+  total_products?: number;
+}

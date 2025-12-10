@@ -1,14 +1,17 @@
 import axios from 'axios';
-import type {
-  EmailListResponse,
-  EmailDetailResponse,
-  FollowupRequest,
-  FollowupResponse,
-  UserInfo,
-  EmailFilter,
-  VendorCacheStatus
-} from '../types/email';
 import type { DashboardStats } from '../types/dashboard';
+import type {
+    BomImpactApprovalRequest,
+    BomImpactApprovalResponse,
+    BomImpactResponse,
+    EmailDetailResponse,
+    EmailFilter,
+    EmailListResponse,
+    FollowupRequest,
+    FollowupResponse,
+    UserInfo,
+    VendorCacheStatus
+} from '../types/email';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -108,6 +111,49 @@ export const emailApi = {
   // Get raw email content (body and attachments)
   async getRawEmailContent(messageId: string): Promise<any> {
     const { data } = await api.get(`/api/emails/${messageId}/raw`);
+    return data;
+  },
+
+  // ============================================================================
+  // BOM IMPACT ANALYSIS API
+  // ============================================================================
+
+  // Get BOM impact analysis results for an email
+  async getBomImpact(messageId: string): Promise<BomImpactResponse> {
+    const { data } = await api.get<BomImpactResponse>(`/api/emails/${messageId}/bom-impact`);
+    return data;
+  },
+
+  // Approve a specific product's BOM impact for Epicor sync
+  async approveBomImpact(
+    messageId: string,
+    productIndex: number,
+    request?: BomImpactApprovalRequest
+  ): Promise<BomImpactApprovalResponse> {
+    const { data } = await api.post<BomImpactApprovalResponse>(
+      `/api/emails/${messageId}/bom-impact/${productIndex}/approve`,
+      request || {}
+    );
+    return data;
+  },
+
+  // Approve all products in an email for Epicor sync
+  async approveAllBomImpacts(
+    messageId: string,
+    request?: BomImpactApprovalRequest
+  ): Promise<BomImpactApprovalResponse> {
+    const { data } = await api.post<BomImpactApprovalResponse>(
+      `/api/emails/${messageId}/bom-impact/approve-all`,
+      request || {}
+    );
+    return data;
+  },
+
+  // Re-run BOM impact analysis for an email
+  async reanalyzeBomImpact(messageId: string): Promise<BomImpactResponse> {
+    const { data } = await api.post<BomImpactResponse>(
+      `/api/emails/${messageId}/reanalyze-bom-impact`
+    );
     return data;
   },
 };
