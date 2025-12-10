@@ -1,5 +1,6 @@
-import { CheckCircle2, ChevronDown, Circle, Mail, Shield, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, Circle, Mail, Shield, X } from 'lucide-react';
 import { useState } from 'react';
+import { useBomImpact } from '../../hooks/useBomImpact';
 import { useEmailDetail, useGenerateFollowup, useRawEmailContent, useUpdateEmailProcessed } from '../../hooks/useEmails';
 import { formatDate } from '../../lib/utils';
 import type { MissingField } from '../../types/email';
@@ -32,6 +33,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
   const { data, isLoading } = useEmailDetail(messageId);
   const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(messageId);
+  const { data: bomImpactData } = useBomImpact(messageId);
   const updateProcessed = useUpdateEmailProcessed();
   const generateFollowup = useGenerateFollowup();
 
@@ -39,6 +41,16 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
   console.log('EmailDetailDrawer - is_price_change:', data?.state?.is_price_change, 'data.state:', data?.state);
 
   if (!messageId) return null;
+
+  // Check if all BOM impact products have been decided (approved or rejected)
+  const isPriceChange = data?.state?.is_price_change;
+  const hasBomImpacts = bomImpactData?.impacts && bomImpactData.impacts.length > 0;
+  const allBomImpactsDecided = hasBomImpacts
+    ? bomImpactData.impacts.every((i) => i.approved || i.rejected || i.status === 'error')
+    : true; // If no BOM impacts, consider it decided
+
+  // Disable "Mark as Processed" for price change emails until all products are approved/rejected
+  const canMarkAsProcessed = !isPriceChange || !hasBomImpacts || allBomImpactsDecided;
 
   const handleToggleProcessed = async (force = false) => {
     if (!data) return;
@@ -159,25 +171,34 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
               </div>
 
               {/* Actions */}
-              <div className="mt-4 flex gap-3">
-                <Button
-                  onClick={() => handleToggleProcessed()}
-                  variant={data.state.processed ? 'outline' : 'default'}
-                  disabled={updateProcessed.isPending}
-                  className="flex items-center gap-2"
-                >
-                  {data.state.processed ? (
-                    <>
-                      <Circle className="h-4 w-4" />
-                      Mark as Unprocessed
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      {updateProcessed.isPending ? 'Processing...' : 'Mark as Processed'}
-                    </>
-                  )}
-                </Button>
+              <div className="mt-4 flex flex-col gap-2">
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => handleToggleProcessed()}
+                    variant={data.state.processed ? 'outline' : 'default'}
+                    disabled={updateProcessed.isPending || (!data.state.processed && !canMarkAsProcessed)}
+                    className="flex items-center gap-2"
+                  >
+                    {data.state.processed ? (
+                      <>
+                        <Circle className="h-4 w-4" />
+                        Mark as Unprocessed
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        {updateProcessed.isPending ? 'Processing...' : 'Mark as Processed'}
+                      </>
+                    )}
+                  </Button>
+                </div>
+                {/* Warning message when button is disabled */}
+                {isPriceChange && hasBomImpacts && !allBomImpactsDecided && !data.state.processed && (
+                  <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Please approve or reject all products in BOM Impact Analysis before marking as processed</span>
+                  </div>
+                )}
               </div>
             </div>
 

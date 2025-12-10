@@ -317,6 +317,12 @@ export interface BomImpactResult {
   approved_at: string | null;
   approval_notes: string | null;
 
+  // Rejection tracking
+  rejected: boolean;
+  rejected_by_id: number | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+
   // Timestamps
   created_at: string | null;
   updated_at: string | null;
@@ -331,6 +337,10 @@ export interface BomImpactResponse {
 
 export interface BomImpactApprovalRequest {
   approval_notes?: string;
+}
+
+export interface BomImpactRejectionRequest {
+  rejection_reason?: string;
 }
 
 export interface BomImpactApprovalResponse {

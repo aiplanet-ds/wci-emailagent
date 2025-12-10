@@ -1136,6 +1136,10 @@ class BomImpactApprovalRequest(BaseModel):
     approval_notes: Optional[str] = None
 
 
+class BomImpactRejectionRequest(BaseModel):
+    rejection_reason: Optional[str] = None
+
+
 @router.post("/{message_id}/bom-impact/{product_index}/approve")
 async def approve_bom_impact(
     message_id: str,
@@ -1194,6 +1198,67 @@ async def approve_bom_impact(
         "success": True,
         "message": f"Product {target_impact.part_num} approved for Epicor sync",
         "impact": BomImpactService.to_dict(approved_impact)
+    }
+
+
+@router.post("/{message_id}/bom-impact/{product_index}/reject")
+async def reject_bom_impact(
+    message_id: str,
+    product_index: int,
+    rejection_request: BomImpactRejectionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reject a specific product's BOM impact (will not sync to Epicor).
+
+    This marks the product as rejected - the price change will not be applied in Epicor.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    # Find the specific product
+    target_impact = None
+    for impact in impacts:
+        if impact.product_index == product_index:
+            target_impact = impact
+            break
+
+    if not target_impact:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BOM impact result not found for product index {product_index}"
+        )
+
+    if target_impact.rejected:
+        raise HTTPException(
+            status_code=400,
+            detail="This product has already been rejected"
+        )
+
+    # Reject the BOM impact
+    rejected_impact = await BomImpactService.reject(
+        db,
+        impact_id=target_impact.id,
+        rejected_by_id=user.id,
+        rejection_reason=rejection_request.rejection_reason
+    )
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Product {target_impact.part_num} rejected - will not sync to Epicor",
+        "impact": BomImpactService.to_dict(rejected_impact)
     }
 
 

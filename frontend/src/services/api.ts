@@ -3,6 +3,7 @@ import type { DashboardStats } from '../types/dashboard';
 import type {
     BomImpactApprovalRequest,
     BomImpactApprovalResponse,
+    BomImpactRejectionRequest,
     BomImpactResponse,
     EmailDetailResponse,
     EmailFilter,
@@ -144,6 +145,19 @@ export const emailApi = {
   ): Promise<BomImpactApprovalResponse> {
     const { data } = await api.post<BomImpactApprovalResponse>(
       `/api/emails/${messageId}/bom-impact/approve-all`,
+      request || {}
+    );
+    return data;
+  },
+
+  // Reject a specific product's BOM impact (will not sync to Epicor)
+  async rejectBomImpact(
+    messageId: string,
+    productIndex: number,
+    request?: BomImpactRejectionRequest
+  ): Promise<BomImpactApprovalResponse> {
+    const { data } = await api.post<BomImpactApprovalResponse>(
+      `/api/emails/${messageId}/bom-impact/${productIndex}/reject`,
       request || {}
     );
     return data;

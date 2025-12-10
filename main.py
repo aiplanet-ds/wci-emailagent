@@ -31,7 +31,7 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
         extraction_result: The AI extraction result containing affected_products
         supplier_info: Supplier info from extraction (contains supplier_id)
     """
-    from services.epicor_service import EpicorService
+    from services.epicor_service import EpicorAPIService as EpicorService
 
     affected_products = extraction_result.get("affected_products", [])
     if not affected_products:

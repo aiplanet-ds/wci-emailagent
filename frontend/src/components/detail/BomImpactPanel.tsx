@@ -1,5 +1,6 @@
 import {
     AlertTriangle,
+    Ban,
     CheckCircle,
     ChevronDown,
     ChevronUp,
@@ -11,7 +12,7 @@ import {
     XCircle
 } from 'lucide-react';
 import { useState } from 'react';
-import { useApproveAllBomImpacts, useApproveBomImpact, useBomImpact, useReanalyzeBomImpact } from '../../hooks/useBomImpact';
+import { useApproveAllBomImpacts, useApproveBomImpact, useBomImpact, useReanalyzeBomImpact, useRejectBomImpact } from '../../hooks/useBomImpact';
 import type { BomImpactAssemblyDetail, BomImpactResult, BomImpactRiskLevel } from '../../types/email';
 import { Badge } from '../ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
@@ -41,19 +42,27 @@ const formatPercent = (value: number | null | undefined): string => {
   return `${value.toFixed(2)}%`;
 };
 
+// Check if a product has been decided (approved or rejected)
+const isDecided = (impact: BomImpactResult): boolean => impact.approved || impact.rejected;
+
 // Single product BOM impact card
 function ProductBomImpact({
   impact,
   onApprove,
+  onReject,
   isApproving,
+  isRejecting,
 }: {
   impact: BomImpactResult;
   onApprove: () => void;
+  onReject: () => void;
   isApproving: boolean;
+  isRejecting: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const summary = impact.summary;
   const riskSummary = summary?.risk_summary;
+  const decided = isDecided(impact);
 
   return (
     <Card className="mb-4">
@@ -72,16 +81,31 @@ function ProductBomImpact({
                 APPROVED
               </Badge>
             )}
+            {impact.rejected && (
+              <Badge variant="danger">
+                <Ban className="h-3 w-3 mr-1" />
+                REJECTED
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            {!impact.approved && impact.status !== 'error' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onApprove(); }}
-                disabled={isApproving}
-                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isApproving ? 'Approving...' : 'Approve'}
-              </button>
+            {!decided && impact.status !== 'error' && (
+              <>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onApprove(); }}
+                  disabled={isApproving || isRejecting}
+                  className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                >
+                  {isApproving ? 'Approving...' : 'Approve'}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onReject(); }}
+                  disabled={isApproving || isRejecting}
+                  className="px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                >
+                  {isRejecting ? 'Rejecting...' : 'Reject'}
+                </button>
+              </>
             )}
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </div>
@@ -305,6 +329,7 @@ function ProductBomImpact({
 export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
   const { data, isLoading, error, refetch } = useBomImpact(messageId);
   const approveMutation = useApproveBomImpact();
+  const rejectMutation = useRejectBomImpact();
   const approveAllMutation = useApproveAllBomImpacts();
   const reanalyzeMutation = useReanalyzeBomImpact();
 
@@ -376,8 +401,11 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
     );
   }
 
-  const allApproved = data.impacts.every((i) => i.approved);
-  const pendingCount = data.impacts.filter((i) => !i.approved && i.status !== 'error').length;
+  // Check if all products have been decided (approved or rejected)
+  const allDecided = data.impacts.every((i) => isDecided(i) || i.status === 'error');
+  const pendingCount = data.impacts.filter((i) => !isDecided(i) && i.status !== 'error').length;
+  const approvedCount = data.impacts.filter((i) => i.approved).length;
+  const rejectedCount = data.impacts.filter((i) => i.rejected).length;
 
   return (
     <div className="space-y-4">
@@ -401,15 +429,25 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
             <button
               onClick={() => approveAllMutation.mutate({ messageId })}
               disabled={approveAllMutation.isPending}
-              className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
             >
               {approveAllMutation.isPending ? 'Approving...' : `Approve All (${pendingCount})`}
             </button>
           )}
-          {allApproved && (
-            <Badge variant="success">
-              <CheckCircle className="h-3 w-3 mr-1" />
-              All Approved
+          {allDecided && (
+            <Badge variant={rejectedCount > 0 ? 'warning' : 'success'}>
+              {approvedCount > 0 && (
+                <span className="flex items-center">
+                  <CheckCircle className="h-3 w-3 mr-1" />
+                  {approvedCount} Approved
+                </span>
+              )}
+              {rejectedCount > 0 && (
+                <span className="flex items-center ml-2">
+                  <Ban className="h-3 w-3 mr-1" />
+                  {rejectedCount} Rejected
+                </span>
+              )}
             </Badge>
           )}
         </div>
@@ -421,7 +459,9 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
           key={impact.id}
           impact={impact}
           onApprove={() => approveMutation.mutate({ messageId, productIndex: impact.product_index })}
+          onReject={() => rejectMutation.mutate({ messageId, productIndex: impact.product_index })}
           isApproving={approveMutation.isPending}
+          isRejecting={rejectMutation.isPending}
         />
       ))}
     </div>

@@ -365,13 +365,20 @@ class BomImpactResult(Base):
     approved_at = Column(DateTime)
     approval_notes = Column(Text)
 
+    # Rejection tracking
+    rejected = Column(Boolean, default=False, index=True)
+    rejected_by_id = Column(Integer, ForeignKey("users.id"))
+    rejected_at = Column(DateTime)
+    rejection_reason = Column(Text)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     email = relationship("Email", back_populates="bom_impact_results")
-    approved_by = relationship("User")
+    approved_by = relationship("User", foreign_keys=[approved_by_id])
+    rejected_by = relationship("User", foreign_keys=[rejected_by_id])
 
     # Compound index for quick lookup
     __table_args__ = (

@@ -123,9 +123,34 @@ class BomImpactService:
             db,
             impact_id,
             approved=True,
+            rejected=False,  # Clear any prior rejection
             approved_by_id=approved_by_id,
             approved_at=datetime.utcnow(),
-            approval_notes=approval_notes
+            approval_notes=approval_notes,
+            rejected_by_id=None,
+            rejected_at=None,
+            rejection_reason=None
+        )
+
+    @staticmethod
+    async def reject(
+        db: AsyncSession,
+        impact_id: int,
+        rejected_by_id: int,
+        rejection_reason: Optional[str] = None
+    ) -> Optional[BomImpactResult]:
+        """Reject a BOM impact result (will not sync to Epicor)"""
+        return await BomImpactService.update(
+            db,
+            impact_id,
+            rejected=True,
+            approved=False,  # Clear any prior approval
+            rejected_by_id=rejected_by_id,
+            rejected_at=datetime.utcnow(),
+            rejection_reason=rejection_reason,
+            approved_by_id=None,
+            approved_at=None,
+            approval_notes=None
         )
 
     @staticmethod
@@ -187,6 +212,10 @@ class BomImpactService:
             "approved_by_id": impact.approved_by_id,
             "approved_at": impact.approved_at.isoformat() if impact.approved_at else None,
             "approval_notes": impact.approval_notes,
+            "rejected": impact.rejected,
+            "rejected_by_id": impact.rejected_by_id,
+            "rejected_at": impact.rejected_at.isoformat() if impact.rejected_at else None,
+            "rejection_reason": impact.rejection_reason,
             "created_at": impact.created_at.isoformat() if impact.created_at else None,
             "updated_at": impact.updated_at.isoformat() if impact.updated_at else None,
         }
