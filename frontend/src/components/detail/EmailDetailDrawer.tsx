@@ -44,13 +44,22 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
   // Check if all BOM impact products have been decided (approved or rejected)
   const isPriceChange = data?.state?.is_price_change;
+  const verificationStatus = data?.state?.verification_status;
   const hasBomImpacts = bomImpactData?.impacts && bomImpactData.impacts.length > 0;
   const allBomImpactsDecided = hasBomImpacts
     ? bomImpactData.impacts.every((i) => i.approved || i.rejected || i.status === 'error')
     : true; // If no BOM impacts, consider it decided
 
-  // Disable "Mark as Processed" for price change emails until all products are approved/rejected
-  const canMarkAsProcessed = !isPriceChange || !hasBomImpacts || allBomImpactsDecided;
+  // Determine why the button might be disabled
+  const isVerificationBlocking = verificationStatus === 'pending_verification' || verificationStatus === 'rejected';
+  const isNotPriceChange = isPriceChange === false;
+  const isBomImpactBlocking = isPriceChange && hasBomImpacts && !allBomImpactsDecided;
+
+  // Disable "Mark as Processed" when:
+  // 1. Verification is pending or rejected
+  // 2. Email is NOT a price change (only price change emails should be processed/synced)
+  // 3. For price change emails: BOM impacts not all decided
+  const canMarkAsProcessed = !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking;
 
   const handleToggleProcessed = async (force = false) => {
     if (!data) return;
@@ -192,8 +201,24 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                     )}
                   </Button>
                 </div>
-                {/* Warning message when button is disabled */}
-                {isPriceChange && hasBomImpacts && !allBomImpactsDecided && !data.state.processed && (
+                {/* Warning messages when button is disabled */}
+                {!data.state.processed && isVerificationBlocking && (
+                  <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>
+                      {verificationStatus === 'pending_verification'
+                        ? 'Email is pending vendor verification. Please verify or approve the vendor first.'
+                        : 'Email was rejected during vendor verification and cannot be processed.'}
+                    </span>
+                  </div>
+                )}
+                {!data.state.processed && !isVerificationBlocking && isNotPriceChange && (
+                  <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>This email is not a price change notification and does not require Epicor sync.</span>
+                  </div>
+                )}
+                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && isBomImpactBlocking && (
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
                     <AlertCircle className="h-4 w-4" />
                     <span>Please approve or reject all products in BOM Impact Analysis before marking as processed</span>

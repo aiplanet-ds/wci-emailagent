@@ -293,12 +293,16 @@ async def get_email_detail(
     # Build Epicor status response
     epicor_status = None
     if epicor_result:
+        # Extract details from results_summary for frontend compatibility
+        results_summary = epicor_result.results_summary or {}
         epicor_status = {
             "successful": epicor_result.successful_updates,
             "failed": epicor_result.failed_updates,
             "total": epicor_result.total_products,
+            "skipped": results_summary.get("skipped", 0),
             "status": epicor_result.sync_status,
-            "results": epicor_result.results_summary,
+            "details": results_summary.get("details", []),
+            "workflow_used": results_summary.get("workflow_used", ""),
             "synced_at": epicor_result.synced_at.isoformat() if epicor_result.synced_at else None
         }
 
@@ -517,10 +521,20 @@ async def update_email_state(
             )
 
             # Save epicor result to DATABASE (not JSON file)
-            sync_status = "success"
-            total_products = len(affected_products)
-            successful_updates = epicor_result.get("successful_updates", 0)
-            failed_updates = epicor_result.get("failed_updates", 0)
+            # Determine sync status based on results
+            successful_updates = epicor_result.get("successful", 0)
+            failed_updates = epicor_result.get("failed", 0)
+            total_products = epicor_result.get("total", len(affected_products))
+
+            # Set sync_status based on results
+            if failed_updates == 0 and successful_updates > 0:
+                sync_status = "success"
+            elif successful_updates > 0 and failed_updates > 0:
+                sync_status = "partial"
+            elif failed_updates > 0:
+                sync_status = "failed"
+            else:
+                sync_status = "success"
 
             # Create sync result record in database
             sync_result = await EpicorSyncResultService.create_sync_result(

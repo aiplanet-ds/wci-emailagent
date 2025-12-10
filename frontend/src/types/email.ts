@@ -234,6 +234,7 @@ export interface BomImpactAssemblyDetail {
   new_margin_pct: number;
   margin_erosion: number;
   margin_erosion_pct: number;
+  cost_increase_per_unit: number;
   risk_level: BomImpactRiskLevel;
   weekly_demand: number;
   annual_cost_impact: number;

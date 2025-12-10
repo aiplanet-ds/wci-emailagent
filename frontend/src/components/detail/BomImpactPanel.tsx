@@ -13,22 +13,13 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { useApproveAllBomImpacts, useApproveBomImpact, useBomImpact, useReanalyzeBomImpact, useRejectBomImpact } from '../../hooks/useBomImpact';
-import type { BomImpactAssemblyDetail, BomImpactResult, BomImpactRiskLevel } from '../../types/email';
+import type { BomImpactAssemblyDetail, BomImpactResult } from '../../types/email';
 import { Badge } from '../ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 
 interface BomImpactPanelProps {
   messageId: string;
 }
-
-// Risk level badge colors
-const riskBadgeVariant: Record<BomImpactRiskLevel, 'danger' | 'warning' | 'info' | 'success' | 'default'> = {
-  critical: 'danger',
-  high: 'warning',
-  medium: 'info',
-  low: 'success',
-  unknown: 'default',
-};
 
 // Format currency
 const formatCurrency = (value: number | null | undefined): string => {
@@ -206,9 +197,9 @@ function ProductBomImpact({
                     <tr>
                       <th className="px-2 py-1 text-left">Assembly</th>
                       <th className="px-2 py-1 text-right">Qty</th>
-                      <th className="px-2 py-1 text-right">Current Margin</th>
-                      <th className="px-2 py-1 text-right">New Margin</th>
-                      <th className="px-2 py-1 text-center">Risk</th>
+                      <th className="px-2 py-1 text-right">Cost Increase</th>
+                      <th className="px-2 py-1 text-right">Weekly Demand</th>
+                      <th className="px-2 py-1 text-right">Annual Impact</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -218,29 +209,26 @@ function ProductBomImpact({
                           <div className="font-medium">{detail.assembly_part_num}</div>
                           <div className="text-gray-500 truncate max-w-[200px]">{detail.assembly_description}</div>
                         </td>
-                        <td className="px-2 py-1 text-right">{detail.qty_per}</td>
+                        <td className="px-2 py-1 text-right">{detail.cumulative_qty || detail.qty_per}</td>
                         <td className="px-2 py-1 text-right">
-                          {detail.risk_level === 'unknown' ? (
-                            <span className="text-gray-400 italic">N/A</span>
-                          ) : (
-                            formatPercent(detail.current_margin_pct)
-                          )}
+                          {formatCurrency(detail.cost_increase_per_unit)}
                         </td>
+                        <td className="px-2 py-1 text-right">{detail.weekly_demand ?? 0}</td>
                         <td className="px-2 py-1 text-right">
-                          {detail.risk_level === 'unknown' ? (
-                            <span className="text-gray-400 italic">N/A</span>
-                          ) : (
-                            formatPercent(detail.new_margin_pct)
-                          )}
-                        </td>
-                        <td className="px-2 py-1 text-center">
-                          <Badge variant={riskBadgeVariant[detail.risk_level]}>
-                            {detail.risk_level.toUpperCase()}
-                          </Badge>
+                          {formatCurrency(detail.annual_cost_impact)}
                         </td>
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot className="bg-gray-100 font-semibold">
+                    <tr>
+                      <td className="px-2 py-2 text-left" colSpan={3}>Total</td>
+                      <td className="px-2 py-2 text-right">
+                        {impact.impact_details.reduce((sum, d) => sum + (d.weekly_demand ?? 0), 0)}
+                      </td>
+                      <td className="px-2 py-2 text-right">{formatCurrency(impact.total_annual_cost_impact)}</td>
+                    </tr>
+                  </tfoot>
                 </table>
                 {impact.impact_details.length > 10 && (
                   <p className="text-xs text-gray-500 mt-2">
