@@ -51,7 +51,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
     : true; // If no BOM impacts, consider it decided
 
   // Determine why the button might be disabled
-  const isVerificationBlocking = verificationStatus === 'pending_verification' || verificationStatus === 'rejected';
+  const isVerificationBlocking = verificationStatus === 'pending_review' || verificationStatus === 'rejected';
   const isNotPriceChange = isPriceChange === false;
   const isBomImpactBlocking = isPriceChange && hasBomImpacts && !allBomImpactsDecided;
 
@@ -206,7 +206,7 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
                     <AlertCircle className="h-4 w-4" />
                     <span>
-                      {verificationStatus === 'pending_verification'
+                      {verificationStatus === 'pending_review'
                         ? 'Email is pending vendor verification. Please verify or approve the vendor first.'
                         : 'Email was rejected during vendor verification and cannot be processed.'}
                     </span>
