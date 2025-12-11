@@ -285,7 +285,11 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
               </div>
 
               {/* Workflow Stepper - Shows 3-Stage Workflow */}
-              <WorkflowStepper hasEpicorSync={!!data.epicor_status} />
+              <WorkflowStepper
+                hasEpicorSync={!!data.epicor_status}
+                verificationStatus={data.state.verification_status}
+                llmDetectionPerformed={data.state.llm_detection_performed}
+              />
 
               {/* Vendor Verification Status */}
               {data.state.verification_status && (
