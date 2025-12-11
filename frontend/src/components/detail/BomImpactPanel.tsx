@@ -248,51 +248,41 @@ function ProductBomImpact({
             </div>
           )}
 
-          {/* Overall Recommendation */}
-          {impact.recommendation && (
+          {/* Unified Recommendations & Data Quality Notice Box */}
+          {(impact.recommendation || summary?.has_data_quality_issues) && (
             <div className="mt-4 p-3 bg-blue-50 rounded border border-blue-100">
               <div className="flex items-start gap-2">
                 <Info className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
-                <div>
-                  <h4 className="text-sm font-medium text-blue-800 mb-1">Recommendation</h4>
-                  <p className="text-sm text-blue-700">{impact.recommendation}</p>
+                <div className="flex-1 space-y-3">
+                  <h4 className="text-sm font-medium text-blue-800">Important Notices</h4>
+
+                  {/* Recommendations */}
+                  {impact.recommendation && (
+                    <div>
+                      <div className="text-xs font-medium text-blue-700 mb-1">Recommendation</div>
+                      <p className="text-sm text-blue-700">{impact.recommendation}</p>
+                    </div>
+                  )}
+
+                  {/* Data Quality Notices */}
+                  {summary?.has_data_quality_issues && (
+                    <div>
+                      <div className="flex items-center gap-1 text-xs font-medium text-orange-700 mb-1">
+                        <AlertTriangle className="h-3 w-3" />
+                        Data Quality Notice
+                      </div>
+                      <ul className="text-xs text-orange-700 space-y-1 ml-4">
+                        {(summary?.assemblies_with_unknown_risk || 0) > 0 && (
+                          <li>• {summary.assemblies_with_unknown_risk} assemblies have missing selling price data</li>
+                        )}
+                        {(summary?.assemblies_without_demand_data || 0) > 0 && (
+                          <li>• {summary.assemblies_without_demand_data} assemblies have no forecast demand data</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* Data Quality Warning */}
-          {summary?.has_data_quality_issues && (
-            <div className="mt-4 p-3 bg-orange-50 rounded border border-orange-100">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-orange-500 mt-0.5 flex-shrink-0" />
-                <div>
-                  <h4 className="text-sm font-medium text-orange-800 mb-1">Data Quality Notice</h4>
-                  <ul className="text-xs text-orange-700 space-y-1">
-                    {(summary?.assemblies_with_unknown_risk || 0) > 0 && (
-                      <li>• {summary.assemblies_with_unknown_risk} assemblies have missing selling price data</li>
-                    )}
-                    {(summary?.assemblies_without_demand_data || 0) > 0 && (
-                      <li>• {summary.assemblies_without_demand_data} assemblies have no forecast demand data</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Actions Required */}
-          {impact.actions_required && impact.actions_required.length > 0 && (
-            <div className="mt-4 p-3 bg-yellow-50 rounded">
-              <h4 className="text-sm font-medium text-yellow-800 mb-2">Actions Required</h4>
-              <ul className="space-y-1">
-                {impact.actions_required.map((action, idx) => (
-                  <li key={idx} className="text-xs text-yellow-700 flex items-start gap-2">
-                    <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
-                    <span>{action.reason}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
           )}
 
