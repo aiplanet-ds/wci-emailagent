@@ -39,8 +39,9 @@ app.add_middleware(
 app.include_router(emails.router)
 app.include_router(dashboard.router)
 
-# Mount static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Mount static files (only if directory exists) and templates
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # Helper function to get current user from session
