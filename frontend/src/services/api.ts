@@ -10,6 +10,8 @@ import type {
     EmailListResponse,
     FollowupRequest,
     FollowupResponse,
+    ThreadBomImpactResponse,
+    ThreadHistoryResponse,
     UserInfo,
     VendorCacheStatus
 } from '../types/email';
@@ -112,6 +114,24 @@ export const emailApi = {
   // Get raw email content (body and attachments)
   async getRawEmailContent(messageId: string): Promise<any> {
     const { data } = await api.get(`/api/emails/${messageId}/raw`);
+    return data;
+  },
+
+  // Get thread history for an email
+  async getThreadHistory(messageId: string): Promise<ThreadHistoryResponse> {
+    const { data } = await api.get<ThreadHistoryResponse>(`/api/emails/${messageId}/thread`);
+    return data;
+  },
+
+  // Get aggregated BOM impact for a thread
+  async getThreadBomImpact(messageId: string): Promise<ThreadBomImpactResponse> {
+    const { data } = await api.get<ThreadBomImpactResponse>(`/api/emails/${messageId}/thread/bom-impact`);
+    return data;
+  },
+
+  // Pin or unpin an email
+  async toggleEmailPin(messageId: string, pinned: boolean): Promise<{ success: boolean; message_id: string; pinned: boolean; pinned_at: string | null }> {
+    const { data } = await api.patch(`/api/emails/${messageId}/pin`, { pinned });
     return data;
   },
 

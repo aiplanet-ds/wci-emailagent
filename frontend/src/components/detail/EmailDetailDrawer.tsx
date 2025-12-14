@@ -1,7 +1,7 @@
-import { AlertCircle, CheckCircle2, ChevronDown, Circle, Mail, Shield, X } from 'lucide-react';
-import { useState } from 'react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Mail, MessageSquare, Pin, Reply, Shield, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { useBomImpact } from '../../hooks/useBomImpact';
-import { useEmailDetail, useGenerateFollowup, useRawEmailContent, useUpdateEmailProcessed } from '../../hooks/useEmails';
+import { useEmailDetail, useGenerateFollowup, useRawEmailContent, useThreadHistory, useToggleEmailPin, useUpdateEmailProcessed } from '../../hooks/useEmails';
 import { formatDate } from '../../lib/utils';
 import type { MissingField } from '../../types/email';
 import { AttachmentList } from '../email/AttachmentList';
@@ -17,14 +17,16 @@ import { MissingFieldsChecklist } from './MissingFieldsChecklist';
 import { PriceChangeSummary } from './PriceChangeSummary';
 import { ProductsTable } from './ProductsTable';
 import { SupplierInfo } from './SupplierInfo';
+import { ThreadTimeline } from './ThreadTimeline';
 import { WorkflowStepper } from './WorkflowStepper';
 
 interface EmailDetailDrawerProps {
   messageId: string | null;
   onClose: () => void;
+  onEmailSelect?: (messageId: string) => void;
 }
 
-export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps) {
+export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDetailDrawerProps) {
   const [showFollowupModal, setShowFollowupModal] = useState(false);
   const [followupDraft, setFollowupDraft] = useState('');
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -34,13 +36,36 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
   const { data, isLoading } = useEmailDetail(messageId);
   const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(messageId);
   const { data: bomImpactData } = useBomImpact(messageId);
+  const { data: threadData } = useThreadHistory(messageId);
   const updateProcessed = useUpdateEmailProcessed();
   const generateFollowup = useGenerateFollowup();
+  const togglePin = useToggleEmailPin();
+
+  // Thread navigation
+  const threadInfo = useMemo(() => {
+    if (!threadData || threadData.total_count <= 1) {
+      return { hasThread: false, currentIndex: -1, total: 0, prevId: null, nextId: null };
+    }
+    const currentIndex = threadData.emails.findIndex(e => e.message_id === messageId);
+    return {
+      hasThread: true,
+      currentIndex,
+      total: threadData.total_count,
+      prevId: currentIndex > 0 ? threadData.emails[currentIndex - 1].message_id : null,
+      nextId: currentIndex < threadData.emails.length - 1 ? threadData.emails[currentIndex + 1].message_id : null,
+    };
+  }, [threadData, messageId]);
 
   // Debug: Log is_price_change value
   console.log('EmailDetailDrawer - is_price_change:', data?.state?.is_price_change, 'data.state:', data?.state);
 
   if (!messageId) return null;
+
+  const handleEmailSelect = (newMessageId: string) => {
+    if (onEmailSelect) {
+      onEmailSelect(newMessageId);
+    }
+  };
 
   // Check if all BOM impact products have been decided (approved or rejected)
   const isPriceChange = data?.state?.is_price_change;
@@ -129,6 +154,47 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
           </div>
         ) : data ? (
           <>
+            {/* Thread Indicator Banner */}
+            {threadInfo.hasThread && (
+              <div className="bg-blue-50 border-b border-blue-200 px-6 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-blue-700">
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="font-medium">Part of a conversation thread</span>
+                  <span className="text-blue-500">
+                    ({threadInfo.currentIndex + 1} of {threadInfo.total})
+                  </span>
+                </div>
+                {onEmailSelect && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => threadInfo.prevId && handleEmailSelect(threadInfo.prevId)}
+                      disabled={!threadInfo.prevId}
+                      className={`p-1 rounded ${
+                        threadInfo.prevId
+                          ? 'text-blue-600 hover:bg-blue-100'
+                          : 'text-blue-300 cursor-not-allowed'
+                      }`}
+                      title="Previous email in thread"
+                    >
+                      <ChevronLeft className="h-5 w-5" />
+                    </button>
+                    <button
+                      onClick={() => threadInfo.nextId && handleEmailSelect(threadInfo.nextId)}
+                      disabled={!threadInfo.nextId}
+                      className={`p-1 rounded ${
+                        threadInfo.nextId
+                          ? 'text-blue-600 hover:bg-blue-100'
+                          : 'text-blue-300 cursor-not-allowed'
+                      }`}
+                      title="Next email in thread"
+                    >
+                      <ChevronRight className="h-5 w-5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Header */}
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 z-10">
               <div className="flex items-start justify-between">
@@ -171,17 +237,28 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={onClose}
-                  className="text-gray-400 hover:text-gray-600 ml-4 flex-shrink-0"
-                >
-                  <X className="h-6 w-6" />
-                </button>
+                <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                  <button
+                    onClick={() => messageId && togglePin.mutate({ messageId, pinned: !data.state.pinned })}
+                    className={`p-1.5 rounded hover:bg-gray-100 transition-colors ${
+                      data.state.pinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                    title={data.state.pinned ? 'Unpin email' : 'Pin email'}
+                  >
+                    <Pin className="h-5 w-5" fill={data.state.pinned ? 'currentColor' : 'none'} />
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-6 w-6" />
+                  </button>
+                </div>
               </div>
 
               {/* Actions */}
               <div className="mt-4 flex flex-col gap-2">
-                <div className="flex gap-3">
+                <div className="flex gap-3 flex-wrap">
                   <Button
                     onClick={() => handleToggleProcessed()}
                     variant={data.state.processed ? 'outline' : 'default'}
@@ -200,6 +277,22 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                       </>
                     )}
                   </Button>
+                  {/* Reply to Thread button */}
+                  {threadInfo.hasThread && (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        // Open email client with reply-all to thread
+                        const subject = `Re: ${data.email_data.email_metadata.subject}`;
+                        const to = data.email_data.email_metadata.sender;
+                        window.open(`mailto:${to}?subject=${encodeURIComponent(subject)}`, '_blank');
+                      }}
+                      className="flex items-center gap-2"
+                    >
+                      <Reply className="h-4 w-4" />
+                      Reply to Thread
+                    </Button>
+                  )}
                 </div>
                 {/* Warning messages when button is disabled */}
                 {!data.state.processed && isVerificationBlocking && (
@@ -278,6 +371,15 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                 <div className="border border-gray-200 rounded-lg p-3">
                   <div className="text-sm text-gray-500">Loading email content...</div>
                 </div>
+              )}
+
+              {/* Thread Timeline - Show conversation history */}
+              {threadInfo.hasThread && onEmailSelect && (
+                <ThreadTimeline
+                  messageId={messageId}
+                  currentMessageId={messageId}
+                  onEmailSelect={handleEmailSelect}
+                />
               )}
 
               <div className="border-t border-gray-200 pt-4">

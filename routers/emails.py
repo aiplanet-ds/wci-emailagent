@@ -206,6 +206,9 @@ async def get_all_price_change_emails_from_db(
             "is_reply": email.is_reply if email.is_reply is not None else False,
             "is_forward": email.is_forward if email.is_forward is not None else False,
             "thread_subject": email.thread_subject,
+            # Pinning fields
+            "pinned": state.pinned if state and state.pinned else False,
+            "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None,
         })
 
     return emails
@@ -293,7 +296,9 @@ async def get_email_detail(
         "flagged_reason": state.flagged_reason if state else None,
         "is_price_change": state.is_price_change if state else None,
         "llm_confidence": state.llm_confidence if state else None,
-        "llm_reasoning": state.llm_reasoning if state else None
+        "llm_reasoning": state.llm_reasoning if state else None,
+        "pinned": state.pinned if state and state.pinned else False,
+        "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None
     }
 
     # Build Epicor status response
@@ -382,6 +387,162 @@ async def get_email_thread(
         "thread_subject": email.thread_subject or email.subject,
         "emails": thread_data,
         "total_count": len(thread_data)
+    }
+
+
+@router.get("/{message_id}/thread/bom-impact")
+async def get_thread_bom_impact(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get aggregated BOM impact analysis for all emails in a conversation thread.
+
+    Combines impact data from multiple emails affecting the same parts to show
+    cumulative thread-level impact.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get the email to find its conversation_id
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # If no conversation_id, just return single email's BOM impact
+    if not email.conversation_id:
+        impacts = await BomImpactService.get_by_email_id(db, email.id)
+        return {
+            "conversation_id": None,
+            "thread_subject": email.thread_subject or email.subject,
+            "total_emails": 1,
+            "emails_with_bom_data": 1 if impacts else 0,
+            "aggregated_impacts": {},
+            "total_annual_impact": sum(i.total_annual_cost_impact or 0 for i in impacts),
+            "total_parts_affected": len(impacts),
+            "impacts_by_email": [{
+                "message_id": email.message_id,
+                "subject": email.subject,
+                "impacts": [BomImpactService.to_dict(i) for i in impacts]
+            }]
+        }
+
+    # Get all emails in thread
+    thread_emails = await EmailService.get_emails_by_conversation_id(
+        db, email.conversation_id, user.id
+    )
+
+    # Collect BOM impacts from all emails
+    impacts_by_email = []
+    aggregated_by_part = {}  # part_num -> aggregated data
+    total_annual_impact = 0
+
+    for thread_email in thread_emails:
+        impacts = await BomImpactService.get_by_email_id(db, thread_email.id)
+        if impacts:
+            email_impacts = []
+            for impact in impacts:
+                impact_dict = BomImpactService.to_dict(impact)
+                email_impacts.append(impact_dict)
+                total_annual_impact += impact.total_annual_cost_impact or 0
+
+                # Aggregate by part number
+                part_num = impact.part_num
+                if part_num:
+                    if part_num not in aggregated_by_part:
+                        aggregated_by_part[part_num] = {
+                            "part_num": part_num,
+                            "product_name": impact.product_name,
+                            "emails_count": 0,
+                            "total_annual_impact": 0,
+                            "total_assemblies_affected": 0,
+                            "latest_old_price": None,
+                            "latest_new_price": None,
+                            "price_updates": [],
+                            "approval_status": "pending"
+                        }
+                    aggregated_by_part[part_num]["emails_count"] += 1
+                    aggregated_by_part[part_num]["total_annual_impact"] += impact.total_annual_cost_impact or 0
+                    if impact.summary:
+                        aggregated_by_part[part_num]["total_assemblies_affected"] = max(
+                            aggregated_by_part[part_num]["total_assemblies_affected"],
+                            impact.summary.get("total_assemblies_affected", 0) if isinstance(impact.summary, dict) else 0
+                        )
+                    aggregated_by_part[part_num]["latest_old_price"] = impact.old_price
+                    aggregated_by_part[part_num]["latest_new_price"] = impact.new_price
+                    aggregated_by_part[part_num]["price_updates"].append({
+                        "email_id": thread_email.id,
+                        "message_id": thread_email.message_id,
+                        "old_price": impact.old_price,
+                        "new_price": impact.new_price,
+                        "received_at": thread_email.received_at.isoformat() if thread_email.received_at else None
+                    })
+                    # Track approval status
+                    if impact.approved:
+                        aggregated_by_part[part_num]["approval_status"] = "approved"
+                    elif impact.rejected:
+                        aggregated_by_part[part_num]["approval_status"] = "rejected"
+
+            impacts_by_email.append({
+                "message_id": thread_email.message_id,
+                "subject": thread_email.subject,
+                "received_at": thread_email.received_at.isoformat() if thread_email.received_at else None,
+                "impacts": email_impacts
+            })
+
+    return {
+        "conversation_id": email.conversation_id,
+        "thread_subject": email.thread_subject or email.subject,
+        "total_emails": len(thread_emails),
+        "emails_with_bom_data": len(impacts_by_email),
+        "aggregated_impacts": aggregated_by_part,
+        "total_annual_impact": total_annual_impact,
+        "total_parts_affected": len(aggregated_by_part),
+        "impacts_by_email": impacts_by_email
+    }
+
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+
+@router.patch("/{message_id}/pin")
+async def toggle_email_pin(
+    message_id: str,
+    pin_request: PinRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Pin or unpin an email (bookmark for important threads).
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
+
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Update pin status
+    pinned_at = datetime.utcnow() if pin_request.pinned else None
+    await EmailStateService.update_state(
+        db=db,
+        message_id=message_id,
+        pinned=pin_request.pinned,
+        pinned_at=pinned_at
+    )
+
+    return {
+        "success": True,
+        "message_id": message_id,
+        "pinned": pin_request.pinned,
+        "pinned_at": pinned_at.isoformat() if pinned_at else None
     }
 
 

@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { emailApi } from '../services/api';
 import type { EmailFilter, FollowupRequest } from '../types/email';
 
@@ -59,5 +59,27 @@ export function useRawEmailContent(messageId: string | null) {
     queryFn: () => emailApi.getRawEmailContent(messageId!),
     enabled: !!messageId, // Only run if messageId is provided
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+}
+
+export function useThreadHistory(messageId: string | null) {
+  return useQuery({
+    queryKey: ['thread', messageId],
+    queryFn: () => emailApi.getThreadHistory(messageId!),
+    enabled: !!messageId,
+    staleTime: 2 * 60 * 1000, // Cache for 2 minutes
+  });
+}
+
+export function useToggleEmailPin() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ messageId, pinned }: { messageId: string; pinned: boolean }) =>
+      emailApi.toggleEmailPin(messageId, pinned),
+    onSuccess: () => {
+      // Invalidate email list to reflect pin status
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+    },
   });
 }

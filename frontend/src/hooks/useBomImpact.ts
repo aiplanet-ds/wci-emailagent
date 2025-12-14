@@ -103,3 +103,15 @@ export function useReanalyzeBomImpact() {
   });
 }
 
+/**
+ * Hook to fetch aggregated BOM impact for all emails in a thread
+ */
+export function useThreadBomImpact(messageId: string | null) {
+  return useQuery({
+    queryKey: ['threadBomImpact', messageId],
+    queryFn: () => emailApi.getThreadBomImpact(messageId!),
+    enabled: !!messageId,
+    staleTime: 60 * 1000, // 1 minute
+    refetchOnWindowFocus: false,
+  });
+}

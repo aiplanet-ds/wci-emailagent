@@ -1,12 +1,15 @@
-import { Search, Filter } from 'lucide-react';
-import { Input } from '../ui/Input';
+import { Filter, List, MessageSquare, Search } from 'lucide-react';
 import type { EmailFilter } from '../../types/email';
+import { Input } from '../ui/Input';
+import type { ViewMode } from './InboxTable';
 
 interface InboxFiltersProps {
   filter: EmailFilter;
   onFilterChange: (filter: EmailFilter) => void;
   search: string;
   onSearchChange: (search: string) => void;
+  viewMode?: ViewMode;
+  onViewModeChange?: (mode: ViewMode) => void;
 }
 
 const filters: { value: EmailFilter; label: string }[] = [
@@ -19,9 +22,16 @@ const filters: { value: EmailFilter; label: string }[] = [
   { value: 'rejected', label: 'Rejected' },
 ];
 
-export function InboxFilters({ filter, onFilterChange, search, onSearchChange }: InboxFiltersProps) {
+export function InboxFilters({
+  filter,
+  onFilterChange,
+  search,
+  onSearchChange,
+  viewMode = 'thread',
+  onViewModeChange
+}: InboxFiltersProps) {
   return (
-    <div className="flex flex-col sm:flex-row gap-4">
+    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
       {/* Filter Dropdown */}
       <div className="relative">
         <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
@@ -49,6 +59,36 @@ export function InboxFilters({ filter, onFilterChange, search, onSearchChange }:
           className="pl-10"
         />
       </div>
+
+      {/* View Mode Toggle */}
+      {onViewModeChange && (
+        <div className="flex items-center gap-1 bg-gray-100 rounded-md p-1">
+          <button
+            onClick={() => onViewModeChange('thread')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+              viewMode === 'thread'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+            title="Thread View - Group emails by conversation"
+          >
+            <MessageSquare className="h-4 w-4" />
+            <span className="hidden sm:inline">Threads</span>
+          </button>
+          <button
+            onClick={() => onViewModeChange('flat')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+              viewMode === 'flat'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+            title="Flat View - Show all emails individually"
+          >
+            <List className="h-4 w-4" />
+            <span className="hidden sm:inline">Flat</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

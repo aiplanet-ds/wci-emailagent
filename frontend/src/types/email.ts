@@ -92,6 +92,9 @@ export interface EmailState {
   flagged_reason: string | null;
   epicor_synced: boolean;
   llm_detection_performed: boolean;
+  // Pinning
+  pinned?: boolean;
+  pinned_at?: string | null;
 }
 
 export interface EpicorUpdateDetail {
@@ -154,6 +157,9 @@ export interface EmailListItem {
   is_forward?: boolean;
   thread_subject?: string | null;
   thread_count?: number;  // Number of emails in this thread
+  // Pinning fields
+  pinned?: boolean;
+  pinned_at?: string | null;
 }
 
 export interface EmailListResponse {
@@ -376,4 +382,43 @@ export interface BomImpactApprovalResponse {
   approved_count?: number;
   already_approved?: number;
   total_products?: number;
+}
+
+// Thread-level BOM impact aggregation
+export interface ThreadBomPartPriceUpdate {
+  email_id: number;
+  message_id: string;
+  old_price: number | null;
+  new_price: number | null;
+  received_at: string | null;
+}
+
+export interface ThreadBomAggregatedPart {
+  part_num: string;
+  product_name: string | null;
+  emails_count: number;
+  total_annual_impact: number;
+  total_assemblies_affected: number;
+  latest_old_price: number | null;
+  latest_new_price: number | null;
+  price_updates: ThreadBomPartPriceUpdate[];
+  approval_status: 'pending' | 'approved' | 'rejected';
+}
+
+export interface ThreadBomEmailImpact {
+  message_id: string;
+  subject: string;
+  received_at: string | null;
+  impacts: BomImpactResult[];
+}
+
+export interface ThreadBomImpactResponse {
+  conversation_id: string | null;
+  thread_subject: string;
+  total_emails: number;
+  emails_with_bom_data: number;
+  aggregated_impacts: Record<string, ThreadBomAggregatedPart>;
+  total_annual_impact: number;
+  total_parts_affected: number;
+  impacts_by_email: ThreadBomEmailImpact[];
 }

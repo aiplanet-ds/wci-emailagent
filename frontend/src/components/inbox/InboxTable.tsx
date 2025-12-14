@@ -1,15 +1,19 @@
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Mail, MessageSquare, Package } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Mail, MessageSquare, Package, Pin } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
+import { useToggleEmailPin } from '../../hooks/useEmails';
 import { formatDate } from '../../lib/utils';
 import type { EmailListItem } from '../../types/email';
 import { Badge } from '../ui/Badge';
 import { PriceChangeBadge } from '../ui/PriceChangeBadge';
 import { VerificationBadge } from '../ui/VerificationBadge';
 
+export type ViewMode = 'thread' | 'flat';
+
 interface InboxTableProps {
   emails: EmailListItem[];
   selectedEmailId: string | null;
   onEmailSelect: (emailId: string) => void;
+  viewMode?: ViewMode;
 }
 
 interface ThreadGroup {
@@ -17,6 +21,35 @@ interface ThreadGroup {
   threadSubject: string;
   emails: EmailListItem[];
   latestDate: string;
+}
+
+// Get thread status summary for aggregated display
+function getThreadStatusSummary(emails: EmailListItem[]): { text: string; variant: 'success' | 'warning' | 'danger' | 'info' | 'default' } {
+  const statusCounts: Record<string, number> = {};
+
+  emails.forEach(e => {
+    const status = e.verification_status || 'unknown';
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+  });
+
+  const total = emails.length;
+  const verified = (statusCounts['verified'] || 0) + (statusCounts['manually_approved'] || 0);
+  const pending = statusCounts['pending_review'] || 0;
+  const rejected = statusCounts['rejected'] || 0;
+
+  if (verified === total) {
+    return { text: 'All verified', variant: 'success' };
+  }
+  if (rejected > 0 && rejected === total) {
+    return { text: 'All rejected', variant: 'danger' };
+  }
+  if (pending > 0) {
+    return { text: `${pending} pending`, variant: 'warning' };
+  }
+  if (verified > 0) {
+    return { text: `${verified}/${total} verified`, variant: 'info' };
+  }
+  return { text: 'Mixed status', variant: 'default' };
 }
 
 // Group emails by conversation_id
@@ -65,12 +98,20 @@ function groupEmailsByThread(emails: EmailListItem[]): ThreadGroup[] {
   return groups;
 }
 
-export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTableProps) {
+export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 'thread' }: InboxTableProps) {
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
+  const togglePin = useToggleEmailPin();
 
   const threadGroups = useMemo(() => groupEmailsByThread(emails), [emails]);
 
-  const toggleThread = (conversationId: string) => {
+  // Get all conversation IDs for expand/collapse all
+  const allConversationIds = useMemo(() => {
+    return threadGroups
+      .filter(g => g.conversationId && g.emails.length > 1)
+      .map(g => g.conversationId as string);
+  }, [threadGroups]);
+
+  const toggleThread = useCallback((conversationId: string) => {
     setExpandedThreads((prev) => {
       const next = new Set(prev);
       if (next.has(conversationId)) {
@@ -80,7 +121,18 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
       }
       return next;
     });
-  };
+  }, []);
+
+  const expandAll = useCallback(() => {
+    setExpandedThreads(new Set(allConversationIds));
+  }, [allConversationIds]);
+
+  const collapseAll = useCallback(() => {
+    setExpandedThreads(new Set());
+  }, []);
+
+  const hasThreads = allConversationIds.length > 0;
+  const allExpanded = hasThreads && expandedThreads.size === allConversationIds.length;
 
   if (emails.length === 0) {
     return (
@@ -92,6 +144,11 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
     );
   }
 
+  const handlePinClick = (e: React.MouseEvent, messageId: string, isPinned: boolean) => {
+    e.stopPropagation();
+    togglePin.mutate({ messageId, pinned: !isPinned });
+  };
+
   const renderEmailRow = (email: EmailListItem, isThreadChild: boolean = false) => (
     <tr
       key={email.message_id}
@@ -100,6 +157,17 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
         selectedEmailId === email.message_id ? 'bg-blue-50' : ''
       } ${isThreadChild ? 'bg-gray-50/50' : ''}`}
     >
+      <td className="px-2 py-4 w-10">
+        <button
+          onClick={(e) => handlePinClick(e, email.message_id, email.pinned || false)}
+          className={`p-1 rounded hover:bg-gray-200 transition-colors ${
+            email.pinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+          }`}
+          title={email.pinned ? 'Unpin email' : 'Pin email'}
+        >
+          <Pin className="h-4 w-4" fill={email.pinned ? 'currentColor' : 'none'} />
+        </button>
+      </td>
       <td className="px-6 py-4">
         <div className="flex items-center gap-2">
           {isThreadChild && <div className="w-4" />}
@@ -163,26 +231,61 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
     </tr>
   );
 
+  // Flat view - render all emails without grouping
+  if (viewMode === 'flat') {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="w-10 px-2 py-3"></th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sender</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Info</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {emails.map((email) => renderEmailRow(email, false))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      {/* Expand/Collapse All Controls */}
+      {hasThreads && (
+        <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-end gap-2">
+          <button
+            onClick={allExpanded ? collapseAll : expandAll}
+            className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900 transition-colors"
+          >
+            {allExpanded ? (
+              <>
+                <ChevronsDownUp className="h-4 w-4" />
+                <span>Collapse All</span>
+              </>
+            ) : (
+              <>
+                <ChevronsUpDown className="h-4 w-4" />
+                <span>Expand All</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
       <table className="w-full">
         <thead className="bg-gray-50 border-b border-gray-200">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Subject
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Sender
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Date
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Status
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Info
-            </th>
+            <th className="w-10 px-2 py-3"></th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sender</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Info</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200">
@@ -192,22 +295,34 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
             const latestEmail = group.emails[group.emails.length - 1];
 
             if (!isThread) {
-              // Single email - render normally
               return renderEmailRow(group.emails[0]);
             }
 
-            // Thread group - render with expand/collapse
+            const statusSummary = getThreadStatusSummary(group.emails);
+
+            // Check if any email in thread is pinned
+            const isThreadPinned = group.emails.some(e => e.pinned);
+
             return (
-              <>
-                {/* Thread header row */}
+              <React.Fragment key={`thread-${group.conversationId}`}>
                 <tr
-                  key={`thread-${group.conversationId}`}
                   className="cursor-pointer hover:bg-gray-50 transition-colors bg-gray-50/30"
                   onClick={(e) => {
                     e.stopPropagation();
                     toggleThread(group.conversationId!);
                   }}
                 >
+                  <td className="px-2 py-4 w-10">
+                    <button
+                      onClick={(e) => handlePinClick(e, latestEmail.message_id, isThreadPinned)}
+                      className={`p-1 rounded hover:bg-gray-200 transition-colors ${
+                        isThreadPinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+                      }`}
+                      title={isThreadPinned ? 'Unpin thread' : 'Pin thread'}
+                    >
+                      <Pin className="h-4 w-4" fill={isThreadPinned ? 'currentColor' : 'none'} />
+                    </button>
+                  </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       {isExpanded ? (
@@ -216,36 +331,27 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect }: InboxTabl
                         <ChevronRight className="h-4 w-4 text-gray-500" />
                       )}
                       <MessageSquare className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                      <span className="text-sm font-medium text-gray-900 line-clamp-2">
-                        {group.threadSubject}
-                      </span>
-                      <Badge variant="info" className="text-xs">
-                        {group.emails.length} emails
-                      </Badge>
+                      <span className="text-sm font-medium text-gray-900 line-clamp-2">{group.threadSubject}</span>
+                      <Badge variant="info" className="text-xs">{group.emails.length} emails</Badge>
                     </div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm text-gray-900">{latestEmail.sender}</div>
                     <div className="text-xs text-gray-500">{latestEmail.supplier_name}</div>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">
-                    {formatDate(latestEmail.date)}
-                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{formatDate(latestEmail.date)}</td>
                   <td className="px-6 py-4">
-                    <div className="text-xs text-gray-500">Click to expand</div>
+                    <Badge variant={statusSummary.variant} className="text-xs">{statusSummary.text}</Badge>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-1 text-xs text-gray-500">
                       <Package className="h-4 w-4" />
-                      <span>
-                        {group.emails.reduce((sum, e) => sum + e.products_count, 0)} products
-                      </span>
+                      <span>{group.emails.reduce((sum, e) => sum + e.products_count, 0)} products</span>
                     </div>
                   </td>
                 </tr>
-                {/* Thread child emails (when expanded) */}
                 {isExpanded && group.emails.map((email) => renderEmailRow(email, true))}
-              </>
+              </React.Fragment>
             );
           })}
         </tbody>

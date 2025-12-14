@@ -189,6 +189,10 @@ class EmailState(Base):
     manually_approved_at = Column(DateTime)
     flagged_reason = Column(Text)
 
+    # Thread pinning
+    pinned = Column(Boolean, default=False, index=True)
+    pinned_at = Column(DateTime)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
