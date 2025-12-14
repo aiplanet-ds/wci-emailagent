@@ -107,6 +107,13 @@ class Email(Base):
     received_at = Column(DateTime, index=True)
     has_attachments = Column(Boolean, default=False)
 
+    # Threading fields (Microsoft Graph conversation tracking)
+    conversation_id = Column(String(255), index=True, nullable=True)  # Microsoft Graph conversationId
+    conversation_index = Column(Text, nullable=True)  # Microsoft Graph conversationIndex for thread hierarchy
+    is_reply = Column(Boolean, default=False)  # Indicates if email is a reply
+    is_forward = Column(Boolean, default=False)  # Indicates if email is a forward
+    thread_subject = Column(Text, nullable=True)  # Subject with Re:/Fwd: prefixes stripped for grouping
+
     # Email content
     body_text = Column(Text)
     body_html = Column(Text)

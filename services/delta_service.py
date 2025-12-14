@@ -25,6 +25,7 @@ from database.services.email_state_service import EmailStateService as DBEmailSt
 # Import LLM-powered detection service
 from services.llm_detector import llm_is_price_change_email
 from utils.processors import process_all_content
+from utils.thread_detection import extract_thread_info
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -439,6 +440,9 @@ class DeltaEmailService:
         if body_data:
             email_body = body_data.get("content", "")
 
+        # Extract thread information from the message
+        thread_info = extract_thread_info(msg)
+
         # Save minimal email record to database (no AI extraction yet)
         async with SessionLocal() as db:
             # Get user
@@ -461,11 +465,19 @@ class DeltaEmailService:
                     price_change_summary={"reason": "Awaiting verification and LLM detection"},
                     affected_products=[],
                     additional_details={"notes": "This email requires manual approval. LLM detection and AI extraction will run after approval."},
-                    raw_email_data=msg
+                    raw_email_data=msg,
+                    # Thread information
+                    conversation_id=thread_info.conversation_id,
+                    conversation_index=thread_info.conversation_index,
+                    is_reply=thread_info.is_reply,
+                    is_forward=thread_info.is_forward,
+                    thread_subject=thread_info.thread_subject,
                 )
                 await db.commit()
 
         logger.info(f"   💾 Saved flagged email metadata to database (email_id: {email_record.id})")
+        if thread_info.conversation_id:
+            logger.info(f"   🧵 Thread info: conversation_id={thread_info.conversation_id[:20]}..., is_reply={thread_info.is_reply}, is_forward={thread_info.is_forward}")
 
     async def poll_user_emails(self, user_email: str):
         """Poll emails for a specific user"""

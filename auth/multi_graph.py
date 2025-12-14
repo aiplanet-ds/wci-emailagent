@@ -22,7 +22,7 @@ class MultiUserGraphClient:
         url = f"{GRAPH_BASE}/me/messages"
         params = {
             "$top": top,
-            "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead"
+            "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex,isReply"
         }
 
         print(f"📧 Fetching messages for {user_email}")
@@ -67,16 +67,20 @@ class MultiUserGraphClient:
     def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
         """Get delta messages for user - tracks changes since last query"""
         headers = self._get_headers(user_email)
-        
+
         if delta_token:
             # Use existing delta token to get changes
             url = delta_token
             response = requests.get(url, headers=headers)
         else:
             # Initial delta query - use inbox folder delta for better compatibility
+            # Include threading fields: conversationId, conversationIndex, isReply
             url = f"{GRAPH_BASE}/me/mailFolders/inbox/messages/delta"
-            response = requests.get(url, headers=headers)
-        
+            params = {
+                "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex,isReply"
+            }
+            response = requests.get(url, headers=headers, params=params)
+
         response.raise_for_status()
         data = response.json()
         

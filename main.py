@@ -3,6 +3,7 @@ import asyncio
 import logging
 from auth.multi_graph import graph_client
 from utils.processors import save_attachment, process_all_content
+from utils.thread_detection import extract_thread_info
 from services.extractor import extract_price_change_json
 
 # Database imports
@@ -139,6 +140,9 @@ def process_user_message(msg, user_email, skip_verification=False):
     date_received = msg.get("receivedDateTime", "(no date)")
     message_id = msg.get("id", "")
 
+    # Extract thread information from the message
+    thread_info = extract_thread_info(msg)
+
     print("\n" + "="*80)
     print(f"🚀 EMAIL INTELLIGENCE SYSTEM - 3-STAGE WORKFLOW")
     print("="*80)
@@ -269,7 +273,13 @@ def process_user_message(msg, user_email, skip_verification=False):
                         price_change_summary=result.get("price_change_summary"),
                         affected_products=result.get("affected_products"),
                         additional_details=result.get("additional_details"),
-                        raw_email_data=msg
+                        raw_email_data=msg,
+                        # Thread information
+                        conversation_id=thread_info.conversation_id,
+                        conversation_index=thread_info.conversation_index,
+                        is_reply=thread_info.is_reply,
+                        is_forward=thread_info.is_forward,
+                        thread_subject=thread_info.thread_subject,
                     )
                 else:
                     # Update existing record
@@ -277,6 +287,13 @@ def process_user_message(msg, user_email, skip_verification=False):
                     email_record.price_change_summary = result.get("price_change_summary")
                     email_record.affected_products = result.get("affected_products")
                     email_record.additional_details = result.get("additional_details")
+                    # Update thread info if not already set
+                    if not email_record.conversation_id and thread_info.conversation_id:
+                        email_record.conversation_id = thread_info.conversation_id
+                        email_record.conversation_index = thread_info.conversation_index
+                        email_record.is_reply = thread_info.is_reply
+                        email_record.is_forward = thread_info.is_forward
+                        email_record.thread_subject = thread_info.thread_subject
 
                 # Update email state
                 state = await EmailStateService.get_state_by_message_id(db, message_id)

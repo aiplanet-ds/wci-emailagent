@@ -199,7 +199,13 @@ async def get_all_price_change_emails_from_db(
             "epicor_synced": state.epicor_synced if state else False,
             "llm_detection_performed": state.llm_detection_performed if state else False,
             "received_time": email.received_at.isoformat() if email.received_at else None,
-            "email_id": email.id
+            "email_id": email.id,
+            # Threading fields
+            "conversation_id": email.conversation_id,
+            "conversation_index": email.conversation_index,
+            "is_reply": email.is_reply if email.is_reply is not None else False,
+            "is_forward": email.is_forward if email.is_forward is not None else False,
+            "thread_subject": email.thread_subject,
         })
 
     return emails
@@ -312,6 +318,71 @@ async def get_email_detail(
         validation=validation,
         epicor_status=epicor_status
     )
+
+
+@router.get("/{message_id}/thread")
+async def get_email_thread(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get all emails in the same conversation thread as the specified email.
+
+    Returns emails sorted by received_at in chronological order.
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get the email to find its conversation_id
+    email = await get_email_from_db(db, message_id)
+
+    # Verify email belongs to user
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # If no conversation_id, return just this email
+    if not email.conversation_id:
+        return {
+            "conversation_id": None,
+            "thread_subject": email.thread_subject or email.subject,
+            "emails": [{
+                "message_id": email.message_id,
+                "subject": email.subject,
+                "sender": email.sender_email,
+                "received_at": email.received_at.isoformat() if email.received_at else None,
+                "verification_status": None,
+                "is_reply": email.is_reply or False,
+                "is_forward": email.is_forward or False,
+            }],
+            "total_count": 1
+        }
+
+    # Get all emails in the same conversation thread
+    thread_emails = await EmailService.get_emails_by_conversation_id(
+        db, email.conversation_id, user.id
+    )
+
+    # Get states for all emails in thread
+    thread_data = []
+    for thread_email in thread_emails:
+        state = await EmailStateService.get_state_by_message_id(db, thread_email.message_id)
+        thread_data.append({
+            "message_id": thread_email.message_id,
+            "subject": thread_email.subject,
+            "sender": thread_email.sender_email,
+            "received_at": thread_email.received_at.isoformat() if thread_email.received_at else None,
+            "verification_status": state.verification_status if state else None,
+            "is_reply": thread_email.is_reply or False,
+            "is_forward": thread_email.is_forward or False,
+        })
+
+    return {
+        "conversation_id": email.conversation_id,
+        "thread_subject": email.thread_subject or email.subject,
+        "emails": thread_data,
+        "total_count": len(thread_data)
+    }
 
 
 @router.get("/{message_id}/raw")

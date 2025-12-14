@@ -147,11 +147,36 @@ export interface EmailListItem {
   received_time?: string;
   epicor_synced: boolean;
   llm_detection_performed: boolean;
+  // Threading fields
+  conversation_id?: string | null;
+  conversation_index?: string | null;
+  is_reply?: boolean;
+  is_forward?: boolean;
+  thread_subject?: string | null;
+  thread_count?: number;  // Number of emails in this thread
 }
 
 export interface EmailListResponse {
   emails: EmailListItem[];
   total: number;
+}
+
+// Thread-related types
+export interface ThreadEmail {
+  message_id: string;
+  subject: string;
+  sender: string;
+  received_at: string;
+  verification_status: string;
+  is_reply: boolean;
+  is_forward: boolean;
+}
+
+export interface ThreadHistoryResponse {
+  conversation_id: string;
+  thread_subject: string;
+  emails: ThreadEmail[];
+  total_count: number;
 }
 
 export interface EmailDetailResponse {
