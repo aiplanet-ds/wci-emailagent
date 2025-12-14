@@ -92,12 +92,16 @@ class DeltaEmailService:
         try:
             async with SessionLocal() as db:
                 user, created = await UserService.get_or_create_user(db, user_email)
-                if not user.is_active:
+                if created:
+                    # Commit the newly created user
+                    await db.commit()
+                    logger.info(f"✅ New user created and added to monitoring: {user_email}")
+                elif not user.is_active:
                     await UserService.activate_user(db, user.id)
                     await db.commit()
-                    logger.info(f"✅ User added to monitoring list")
+                    logger.info(f"✅ User reactivated for monitoring: {user_email}")
                 else:
-                    logger.info(f"ℹ️  User already in monitoring list")
+                    logger.info(f"ℹ️  User already in monitoring list: {user_email}")
 
                 # Count active users
                 active_users = await UserService.get_all_users(db, active_only=True)
