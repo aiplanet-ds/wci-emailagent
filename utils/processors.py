@@ -1,5 +1,5 @@
 import os, pandas as pd, base64
-from PyPDF2 import PdfReader
+import pdfplumber
 from docx import Document
 import re
 from typing import List, Dict, Any
@@ -36,20 +36,81 @@ def save_attachment(attachment):
         print(f"❌ Error saving attachment {filename}: {e}")
         return None
 
+def _format_table_as_text(table: list) -> str:
+    """Convert a table (list of rows) to pipe-delimited text format"""
+    if not table:
+        return ""
+
+    formatted_rows = []
+    for row in table:
+        # Clean each cell: replace None with empty string, strip whitespace
+        cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
+        formatted_rows.append(" | ".join(cleaned_row))
+
+    return "\n".join(formatted_rows)
+
+
 def extract_text_from_pdf(path: str) -> str:
-    """Extract text from PDF files, handling multi-page documents"""
+    """
+    Extract text from PDF files with enhanced table extraction using pdfplumber.
+
+    This function:
+    1. Attempts to detect and extract tables from each page
+    2. Extracts remaining non-table text
+    3. Combines both into a structured format that's easier for AI to parse
+    """
     try:
-        reader = PdfReader(path)
         extracted_text = []
-        
-        for page_num, page in enumerate(reader.pages):
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                extracted_text.append(f"=== PAGE {page_num + 1} ===\n{page_text}")
-        
+
+        with pdfplumber.open(path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                page_content = []
+                page_content.append(f"=== PAGE {page_num + 1} ===")
+
+                # Try to extract tables from this page
+                tables = page.extract_tables(table_settings={
+                    "vertical_strategy": "lines",
+                    "horizontal_strategy": "lines",
+                    "snap_tolerance": 3,
+                    "join_tolerance": 3,
+                    "edge_min_length": 3,
+                    "min_words_vertical": 1,
+                    "min_words_horizontal": 1,
+                })
+
+                # If no tables found with lines strategy, try text-based detection
+                if not tables:
+                    tables = page.extract_tables(table_settings={
+                        "vertical_strategy": "text",
+                        "horizontal_strategy": "text",
+                        "snap_tolerance": 3,
+                        "join_tolerance": 3,
+                    })
+
+                if tables:
+                    # Extract and format tables
+                    for table_idx, table in enumerate(tables, 1):
+                        if table and len(table) > 0:
+                            table_text = _format_table_as_text(table)
+                            if table_text.strip():
+                                page_content.append(f"=== TABLE {table_idx} ===")
+                                page_content.append(table_text)
+
+                # Also extract regular text (for content outside tables)
+                page_text = page.extract_text() or ""
+                if page_text.strip():
+                    # If we have tables, label the text section
+                    if tables:
+                        page_content.append("=== TEXT CONTENT ===")
+                    page_content.append(page_text)
+
+                if len(page_content) > 1:  # More than just the page header
+                    extracted_text.append("\n".join(page_content))
+
         full_text = "\n\n".join(extracted_text)
-        print(f"✅ Extracted text from PDF: {len(full_text)} characters")
+        print(f"✅ Extracted text from PDF using pdfplumber: {len(full_text)} characters")
         return full_text
+
     except Exception as e:
         print(f"❌ Error extracting PDF text from {path}: {e}")
         return ""

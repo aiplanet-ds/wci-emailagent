@@ -17,29 +17,35 @@ PRICE_CHANGE_EXTRACTION_PROMPT = """
 You are a specialized JSON extractor for supplier price change emails. Extract information from the following email content and convert it into structured JSON.
 
 **IMPORTANT INSTRUCTIONS:**
-1. Extract ALL available information, even if incomplete
-2. For missing fields, use null (not empty strings)
-3. For arrays like affected_products, extract as many products as you can find
-4. Look for price information in various formats (currency symbols, numbers, percentages)
-5. Pay attention to dates (effective dates, deadlines, notification dates)
-6. Extract supplier information from email signatures, letterheads, or content
-7. Identify change types: "increase", "decrease", "adjustment", "currency_change", "discount_removed"
-8. **CRITICAL - PART NUMBERS**: For each product, extract "product_id" which is the EXACT Part Number used in ERP systems
-   - **PRESERVE ALL SPECIAL CHARACTERS**: Include #, -, /, spaces, and any other characters EXACTLY as they appear
-   - Examples: "#FFH06-12SAE F", "TEST-001", "PART/ABC-123", "12.345.67-A"
-   - DO NOT remove or modify any characters from the part number
-   - If you see "Part Number: #FFH06-12SAE F", extract it as "#FFH06-12SAE F" (with the # and space)
-9. "product_id" and "product_code" may be the same value - extract the part number/SKU/item code as "product_id"
-10. **SUPPLIER ID**: Extract "supplier_id" which is the supplier's external identifier/vendor code (e.g., "FAST1", "USUI-001", "SUP123"). This may appear as "Vendor ID", "Supplier Code", "Vendor Code", or similar in the email.
+
+**MULTI-PRODUCT EXTRACTION (CRITICAL):**
+1. Price change emails frequently contain MULTIPLE PRODUCTS in a single notification - often dozens or even hundreds. Extract ALL products listed.
+2. Look for tabular data with columns like: Description, Part Number, Part#, Price, Effective Date
+3. Scan for bulleted lists, numbered lists, or repeated patterns that indicate multiple product price changes
+4. For PDF attachments with price lists, extract EVERY product row from ALL tables and ALL pages
+5. Products may be grouped by category/section (e.g., "Size O-95 Stroke Control Blocks", "Size B Parts") - extract products from ALL sections
+6. If a price shows "-" or is blank, use null for that price value
+
+**DATA EXTRACTION:**
+7. Extract ALL available information, even if incomplete
+8. For missing fields, use null (not empty strings)
+9. Look for price information in various formats (currency symbols like $, numbers with decimals)
+10. Pay attention to effective dates - may appear in column headers (e.g., "Effective 01/01/2026") or per-product
+11. Extract supplier information from email signatures, letterheads, company headers, or content
+12. Identify change types: "increase", "decrease", "adjustment", "currency_change", "discount_removed"
+
+**PART NUMBER HANDLING (CRITICAL):**
+13. For each product, extract "product_id" which is the EXACT Part Number used in ERP systems
+    - **PRESERVE ALL SPECIAL CHARACTERS**: Include #, -, /, spaces, and any other characters EXACTLY as they appear
+    - Examples: "#FFH06-12SAE F", "O950050", "BB0025", "KO9601", "1/2" O-95"
+    - DO NOT remove or modify any characters from the part number
+    - If multiple part number columns exist (e.g., "PART" and "Company Part#"), prefer the customer/company part number for product_id
+
+**SUPPLIER ID:**
+14. Extract "supplier_id" which is the supplier's external identifier/vendor code (e.g., "FAST1", "USUI-001", "SUP123"). This may appear as "Vendor ID", "Supplier Code", "Vendor Code", or similar in the email.
 
 **Expected JSON Schema:**
 {
-  "email_metadata": {
-    "subject": string,
-    "sender": string,
-    "date": string,
-    "message_id": string
-  },
   "supplier_info": {
     "supplier_id": string,
     "supplier_name": string,
@@ -50,7 +56,6 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
   "price_change_summary": {
     "change_type": string,
     "effective_date": string,
-    "notification_date": string,
     "reason": string,
     "overall_impact": string
   },
@@ -58,27 +63,18 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
     {
       "product_name": string,
       "product_id": string,
-      "product_code": string,
       "old_price": number,
       "new_price": number,
-      "price_change_amount": number,
-      "price_change_percentage": number,
       "currency": string,
       "unit_of_measure": string
     }
-  ],
-  "additional_details": {
-    "terms_and_conditions": string,
-    "payment_terms": string,
-    "minimum_order_quantity": string,
-    "notes": string
-  }
+  ]
 }
 
 **Email Content:**
 {{content}}
 
-**Email Metadata:**
+**Email Metadata (for context only):**
 {{metadata}}
 
 Return ONLY valid JSON with no additional text or explanations.
@@ -147,34 +143,55 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
 
 def post_process_extraction(data: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Post-process extracted data to ensure consistency and add computed fields
+    Post-process extracted data to ensure consistency and add computed fields.
+
+    This function:
+    1. Populates email_metadata from source metadata (not extracted by LLM to save tokens)
+    2. Computes price_change_amount and price_change_percentage from old_price/new_price
+    3. Ensures backwards compatibility with downstream code expecting certain fields
     """
-    # Ensure email_metadata exists
-    if "email_metadata" not in data:
-        data["email_metadata"] = {}
+    # Populate email_metadata from source metadata (not extracted by LLM to save tokens)
+    data["email_metadata"] = {
+        "subject": metadata.get("subject"),
+        "sender": metadata.get("sender"),
+        "date": metadata.get("date"),
+        "message_id": metadata.get("message_id")
+    }
 
-    # Fill in metadata from source if missing
-    data["email_metadata"]["subject"] = data["email_metadata"].get("subject") or metadata.get("subject")
-    data["email_metadata"]["sender"] = data["email_metadata"].get("sender") or metadata.get("sender")
-    data["email_metadata"]["date"] = data["email_metadata"].get("date") or metadata.get("date")
-    data["email_metadata"]["message_id"] = data["email_metadata"].get("message_id") or metadata.get("message_id")
+    # Ensure supplier_info exists with all expected fields
+    if "supplier_info" not in data:
+        data["supplier_info"] = {}
 
-    # Calculate price changes if not present
-    if "affected_products" in data and isinstance(data["affected_products"], list):
+    # Ensure price_change_summary exists with all expected fields
+    if "price_change_summary" not in data:
+        data["price_change_summary"] = {}
+
+    # Ensure affected_products exists
+    if "affected_products" not in data:
+        data["affected_products"] = []
+
+    # Compute price_change_amount and price_change_percentage for each product
+    if isinstance(data["affected_products"], list):
         for product in data["affected_products"]:
-            if "old_price" in product and "new_price" in product:
-                old_price = product.get("old_price")
-                new_price = product.get("new_price")
+            old_price = product.get("old_price")
+            new_price = product.get("new_price")
 
-                if old_price and new_price and isinstance(old_price, (int, float)) and isinstance(new_price, (int, float)):
+            if old_price is not None and new_price is not None:
+                if isinstance(old_price, (int, float)) and isinstance(new_price, (int, float)):
                     # Calculate change amount
-                    if "price_change_amount" not in product or product["price_change_amount"] is None:
-                        product["price_change_amount"] = round(new_price - old_price, 2)
+                    product["price_change_amount"] = round(new_price - old_price, 2)
 
                     # Calculate percentage change
-                    if "price_change_percentage" not in product or product["price_change_percentage"] is None:
-                        if old_price != 0:
-                            product["price_change_percentage"] = round(((new_price - old_price) / old_price) * 100, 2)
+                    if old_price != 0:
+                        product["price_change_percentage"] = round(((new_price - old_price) / old_price) * 100, 2)
+                    else:
+                        product["price_change_percentage"] = None
+                else:
+                    product["price_change_amount"] = None
+                    product["price_change_percentage"] = None
+            else:
+                product["price_change_amount"] = None
+                product["price_change_percentage"] = None
 
     return data
 

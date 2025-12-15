@@ -2583,8 +2583,7 @@ class EpicorAPIService:
             logger.info(f"🔄 Using LEGACY workflow: PartSvc (direct part price update)")
 
         for product in products:
-            # Try product_id first, fallback to product_code for backward compatibility
-            part_num = product.get("product_id") or product.get("product_code")
+            part_num = product.get("product_id")
             new_price_str = product.get("new_price")
 
             # Validate data

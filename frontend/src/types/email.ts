@@ -18,7 +18,6 @@ export interface SupplierInfo {
 export interface PriceChangeSummary {
   change_type: string | null;
   effective_date: string | null;
-  notification_date: string | null;
   reason: string | null;
   overall_impact: string | null;
 }
@@ -26,28 +25,21 @@ export interface PriceChangeSummary {
 export interface AffectedProduct {
   product_name: string | null;
   product_id: string | null;
-  product_code: string | null;
   old_price: number | null;
   new_price: number | null;
+  // Computed fields (populated by post_process_extraction, not extracted by LLM)
   price_change_amount: number | null;
   price_change_percentage: number | null;
   currency: string | null;
   unit_of_measure: string | null;
 }
 
-export interface AdditionalDetails {
-  terms_and_conditions: string | null;
-  payment_terms: string | null;
-  minimum_order_quantity: string | null;
-  notes: string | null;
-}
-
 export interface EmailData {
+  // email_metadata is populated from source metadata, not extracted by LLM
   email_metadata: EmailMetadata;
   supplier_info: SupplierInfo;
   price_change_summary: PriceChangeSummary;
   affected_products: AffectedProduct[];
-  additional_details: AdditionalDetails;
 }
 
 export interface MissingField {

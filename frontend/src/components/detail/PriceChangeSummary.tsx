@@ -1,8 +1,7 @@
-import { TrendingUp, TrendingDown, Calendar, FileText } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
-import { Badge } from '../ui/Badge';
-import { formatDate } from '../../lib/utils';
+import { Calendar, FileText, TrendingDown, TrendingUp } from 'lucide-react';
 import type { PriceChangeSummary as PriceChangeSummaryType } from '../../types/email';
+import { Badge } from '../ui/Badge';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 
 interface PriceChangeSummaryProps {
   summary: PriceChangeSummaryType;
@@ -55,16 +54,6 @@ export function PriceChangeSummary({ summary }: PriceChangeSummaryProps) {
               </p>
             </div>
           </div>
-
-          {summary.notification_date && (
-            <div className="flex items-start gap-2">
-              <Calendar className="h-3.5 w-3.5 text-gray-400 mt-0.5" />
-              <div className="flex-1">
-                <p className="text-xs text-gray-500">Notification Date</p>
-                <p className="text-sm text-gray-900">{formatDate(summary.notification_date)}</p>
-              </div>
-            </div>
-          )}
 
           {summary.reason && (
             <div className="flex items-start gap-2">

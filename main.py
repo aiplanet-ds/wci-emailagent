@@ -53,12 +53,12 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
             await BomImpactService.delete_by_email_id(db, email_id)
 
             for idx, product in enumerate(affected_products):
-                part_num = product.get("product_code", "")
+                part_num = product.get("product_id", "")
                 old_price = product.get("old_price", 0)
                 new_price = product.get("new_price", 0)
 
                 if not part_num:
-                    logger.warning(f"   ⚠️  Product {idx}: Missing product_code, skipping")
+                    logger.warning(f"   ⚠️  Product {idx}: Missing product_id, skipping")
                     continue
 
                 logger.info(f"\n   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")

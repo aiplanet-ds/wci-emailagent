@@ -13,8 +13,7 @@ class ValidationService:
         "supplier_id": "Supplier ID",
         "supplier_name": "Supplier Name",
         "effective_date": "Effective Date",
-        "product_code": "Product Code",
-        "product_id": "Product ID",
+        "product_id": "Product ID / Part Number",
         "new_price": "New Price",
         "currency": "Currency",
         "contact_email": "Contact Email",
@@ -104,14 +103,11 @@ class ValidationService:
             for idx, product in enumerate(affected_products):
                 product_prefix = f"product_{idx}"
 
-                # Product code OR product_id required
-                has_product_code = not cls._is_empty(product.get("product_code"))
-                has_product_id = not cls._is_empty(product.get("product_id"))
-
-                if not has_product_code and not has_product_id:
+                # Product ID (part number) required
+                if cls._is_empty(product.get("product_id")):
                     missing_fields.append({
-                        "field": f"{product_prefix}_product_code",
-                        "label": f"{cls.FIELD_LABELS['product_code']} (Product {idx + 1})",
+                        "field": f"{product_prefix}_product_id",
+                        "label": f"{cls.FIELD_LABELS['product_id']} (Product {idx + 1})",
                         "section": "affected_products",
                         "product_index": idx
                     })
@@ -197,11 +193,8 @@ class ValidationService:
         else:
             # BLOCKER: Each product must have minimum required data
             for idx, product in enumerate(affected_products):
-                has_product_code = not cls._is_empty(product.get("product_code"))
-                has_product_id = not cls._is_empty(product.get("product_id"))
-
-                if not has_product_code and not has_product_id:
-                    blockers.append(f"Product {idx + 1} is missing product code/ID")
+                if cls._is_empty(product.get("product_id")):
+                    blockers.append(f"Product {idx + 1} is missing product ID (part number)")
 
                 if cls._is_empty(product.get("new_price")):
                     blockers.append(f"Product {idx + 1} is missing new price")

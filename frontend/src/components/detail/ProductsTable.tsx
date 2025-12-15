@@ -1,7 +1,7 @@
-import { Package, TrendingUp, TrendingDown } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
+import { Package, TrendingDown, TrendingUp } from 'lucide-react';
 import { formatCurrency, formatPercentage } from '../../lib/utils';
 import type { AffectedProduct } from '../../types/email';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 
 interface ProductsTableProps {
   products: AffectedProduct[];
@@ -59,7 +59,7 @@ export function ProductsTable({ products }: ProductsTableProps) {
                     </td>
                     <td className="px-3 py-2">
                       <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {product.product_code || product.product_id || 'N/A'}
+                        {product.product_id || 'N/A'}
                       </code>
                     </td>
                     <td className="px-3 py-2 text-right text-gray-600">
