@@ -21,18 +21,104 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 
+def _process_single_product_bom(
+    epicor_service,
+    idx: int,
+    product: dict,
+    supplier_id: str,
+    effective_date: str | None,
+    total_products: int
+) -> dict:
+    """
+    Process BOM impact analysis for a single product (runs in thread pool).
+
+    This is a synchronous function designed to run in a ThreadPoolExecutor.
+    Returns a dict with the result or error information.
+    """
+    part_num = product.get("product_id", "")
+    old_price = product.get("old_price", 0)
+    new_price = product.get("new_price", 0)
+
+    if not part_num:
+        logger.warning(f"   ⚠️  Product {idx}: Missing product_id, skipping")
+        return {
+            "idx": idx,
+            "part_num": part_num,
+            "skipped": True,
+            "result": None
+        }
+
+    logger.info(f"   🔄 Starting Product {idx + 1}/{total_products}: {part_num} (${old_price:.4f} → ${new_price:.4f})")
+
+    try:
+        # Run the BOM impact analysis (synchronous Epicor API call)
+        impact_result = epicor_service.process_supplier_price_change(
+            part_num=part_num,
+            supplier_id=supplier_id,
+            old_price=float(old_price) if old_price else 0,
+            new_price=float(new_price) if new_price else 0,
+            effective_date=effective_date,
+            email_metadata=None
+        )
+
+        # Log summary
+        status = impact_result.get("status", "unknown")
+        summary = impact_result.get("bom_impact", {}).get("summary", {})
+        total_assemblies = summary.get("total_assemblies_affected", 0)
+        risk_summary = summary.get("risk_summary", {})
+
+        logger.info(f"   ✅ Product {idx + 1}/{total_products} ({part_num}): {status}, {total_assemblies} assemblies")
+        if risk_summary and (risk_summary.get('critical', 0) > 0 or risk_summary.get('high', 0) > 0):
+            logger.info(f"      ⚠️  Risk: Critical={risk_summary.get('critical', 0)}, High={risk_summary.get('high', 0)}")
+
+        return {
+            "idx": idx,
+            "part_num": part_num,
+            "skipped": False,
+            "error": None,
+            "result": impact_result
+        }
+
+    except Exception as e:
+        logger.error(f"   ❌ Product {idx + 1}/{total_products} ({part_num}): Error - {e}")
+        # Return error result
+        error_result = {
+            "status": "error",
+            "processing_errors": [str(e)],
+            "component": {"part_num": part_num, "validated": False},
+            "supplier": {"supplier_id": supplier_id, "validated": False},
+            "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
+            "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+            "actions_required": [],
+            "can_auto_approve": False
+        }
+        return {
+            "idx": idx,
+            "part_num": part_num,
+            "skipped": False,
+            "error": str(e),
+            "result": error_result
+        }
+
+
 async def run_bom_impact_analysis(email_id: int, extraction_result: dict, supplier_info: dict):
     """
     Run BOM impact analysis for all products in an email and store results in database.
 
     This runs in the background after AI extraction is complete.
+    Uses concurrent processing with ThreadPoolExecutor to analyze multiple products in parallel.
 
     Args:
         email_id: Database ID of the email record
         extraction_result: The AI extraction result containing affected_products
         supplier_info: Supplier info from extraction (contains supplier_id)
     """
+    import concurrent.futures
+    import asyncio
     from services.epicor_service import EpicorAPIService as EpicorService
+
+    # Configuration for concurrent processing
+    MAX_WORKERS = 5  # Limit concurrent Epicor API calls to avoid overwhelming the server
 
     affected_products = extraction_result.get("affected_products", [])
     if not affected_products:
@@ -40,78 +126,103 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
         return
 
     supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
+    effective_date = extraction_result.get("price_change_summary", {}).get("effective_date")
+    total_products = len(affected_products)
 
-    logger.info(f"\n📊 STAGE 3: BOM IMPACT ANALYSIS")
+    logger.info(f"\n📊 STAGE 3: BOM IMPACT ANALYSIS (CONCURRENT)")
     logger.info("-"*80)
-    logger.info(f"   Analyzing {len(affected_products)} product(s) for BOM impact...")
+    logger.info(f"   Analyzing {total_products} product(s) for BOM impact...")
+    logger.info(f"   Using {MAX_WORKERS} concurrent workers")
 
     try:
         epicor_service = EpicorService()
+
+        # Run concurrent BOM analysis in thread pool
+        logger.info(f"\n   🚀 Starting concurrent BOM analysis...")
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Submit all tasks
+            future_to_idx = {
+                executor.submit(
+                    _process_single_product_bom,
+                    epicor_service,
+                    idx,
+                    product,
+                    supplier_id,
+                    effective_date,
+                    total_products
+                ): idx
+                for idx, product in enumerate(affected_products)
+            }
+
+            # Collect results as they complete
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_idx):
+                completed += 1
+                try:
+                    result = future.result()
+                    results.append(result)
+                    logger.info(f"   📊 Progress: {completed}/{total_products} products processed")
+                except Exception as e:
+                    idx = future_to_idx[future]
+                    logger.error(f"   ❌ Unexpected error for product {idx}: {e}")
+                    # Create error result for unexpected failures
+                    product = affected_products[idx]
+                    results.append({
+                        "idx": idx,
+                        "part_num": product.get("product_id", ""),
+                        "skipped": False,
+                        "error": str(e),
+                        "result": {
+                            "status": "error",
+                            "processing_errors": [f"Unexpected error: {str(e)}"],
+                            "component": {"part_num": product.get("product_id", ""), "validated": False},
+                            "supplier": {"supplier_id": supplier_id, "validated": False},
+                            "price_change": {
+                                "part_num": product.get("product_id", ""),
+                                "old_price": product.get("old_price", 0),
+                                "new_price": product.get("new_price", 0)
+                            },
+                            "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                            "actions_required": [],
+                            "can_auto_approve": False
+                        }
+                    })
+
+        # Store results in database (async context)
+        logger.info(f"\n   💾 Storing {len(results)} results in database...")
 
         async with SessionLocal() as db:
             # Delete any existing BOM impact results for this email (for re-processing)
             await BomImpactService.delete_by_email_id(db, email_id)
 
-            for idx, product in enumerate(affected_products):
-                part_num = product.get("product_id", "")
-                old_price = product.get("old_price", 0)
-                new_price = product.get("new_price", 0)
+            # Store all results
+            success_count = 0
+            error_count = 0
+            skipped_count = 0
 
-                if not part_num:
-                    logger.warning(f"   ⚠️  Product {idx}: Missing product_id, skipping")
+            for result in sorted(results, key=lambda r: r["idx"]):
+                if result["skipped"]:
+                    skipped_count += 1
                     continue
 
-                logger.info(f"\n   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
-                logger.info(f"      Price: ${old_price:.4f} → ${new_price:.4f}")
+                await BomImpactService.create(
+                    db,
+                    email_id=email_id,
+                    product_index=result["idx"],
+                    impact_data=result["result"]
+                )
 
-                try:
-                    # Run the BOM impact analysis
-                    impact_result = epicor_service.process_supplier_price_change(
-                        part_num=part_num,
-                        supplier_id=supplier_id,
-                        old_price=float(old_price) if old_price else 0,
-                        new_price=float(new_price) if new_price else 0,
-                        effective_date=extraction_result.get("price_change_summary", {}).get("effective_date"),
-                        email_metadata=None
-                    )
-
-                    # Store the result in database
-                    bom_impact = await BomImpactService.create(
-                        db,
-                        email_id=email_id,
-                        product_index=idx,
-                        impact_data=impact_result
-                    )
-
-                    # Log summary
-                    status = impact_result.get("status", "unknown")
-                    summary = impact_result.get("bom_impact", {}).get("summary", {})
-                    total_assemblies = summary.get("total_assemblies_affected", 0)
-                    risk_summary = summary.get("risk_summary", {})
-
-                    logger.info(f"      ✅ Analysis complete: {status}")
-                    logger.info(f"      📊 Assemblies affected: {total_assemblies}")
-                    if risk_summary:
-                        logger.info(f"      ⚠️  Risk: Critical={risk_summary.get('critical', 0)}, High={risk_summary.get('high', 0)}")
-
-                except Exception as e:
-                    logger.error(f"      ❌ Error analyzing product {part_num}: {e}")
-                    # Store error result
-                    error_result = {
-                        "status": "error",
-                        "processing_errors": [str(e)],
-                        "component": {"part_num": part_num, "validated": False},
-                        "supplier": {"supplier_id": supplier_id, "validated": False},
-                        "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
-                        "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
-                        "actions_required": [],
-                        "can_auto_approve": False
-                    }
-                    await BomImpactService.create(db, email_id=email_id, product_index=idx, impact_data=error_result)
+                if result.get("error"):
+                    error_count += 1
+                else:
+                    success_count += 1
 
             await db.commit()
 
         logger.info(f"\n   ✅ BOM Impact Analysis Complete")
+        logger.info(f"      Success: {success_count}, Errors: {error_count}, Skipped: {skipped_count}")
         logger.info("="*80)
 
     except Exception as e:
