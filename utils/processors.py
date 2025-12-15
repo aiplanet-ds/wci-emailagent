@@ -4,6 +4,15 @@ from docx import Document
 import re
 from typing import List, Dict, Any
 
+# OCR imports (optional - for scanned/image-based PDFs)
+try:
+    import pytesseract
+    from pdf2image import convert_from_path
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    print("⚠️  OCR not available. Install pytesseract and pdf2image for scanned PDF support.")
+
 DOWNLOADS_DIR = "downloads"
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
@@ -50,14 +59,51 @@ def _format_table_as_text(table: list) -> str:
     return "\n".join(formatted_rows)
 
 
+def _extract_text_with_ocr(path: str) -> str:
+    """
+    Extract text from image-based/scanned PDF using OCR.
+    Requires: pytesseract, pdf2image, and Tesseract OCR installed.
+    """
+    if not OCR_AVAILABLE:
+        print("⚠️  OCR libraries not installed. Cannot process scanned PDF.")
+        return ""
+
+    try:
+        print("🔍 Attempting OCR extraction for scanned PDF...")
+        extracted_text = []
+
+        # Convert PDF pages to images
+        images = convert_from_path(path, dpi=300)
+
+        for page_num, image in enumerate(images, 1):
+            page_content = [f"=== PAGE {page_num} (OCR) ==="]
+
+            # Run OCR on the image
+            page_text = pytesseract.image_to_string(image, lang='eng')
+
+            if page_text.strip():
+                page_content.append(page_text)
+                extracted_text.append("\n".join(page_content))
+
+        full_text = "\n\n".join(extracted_text)
+        print(f"✅ Extracted text from PDF using OCR: {len(full_text)} characters")
+        return full_text
+
+    except Exception as e:
+        print(f"❌ OCR extraction failed: {e}")
+        return ""
+
+
 def extract_text_from_pdf(path: str) -> str:
     """
     Extract text from PDF files with enhanced table extraction using pdfplumber.
+    Falls back to OCR for scanned/image-based PDFs.
 
     This function:
-    1. Attempts to detect and extract tables from each page
+    1. Attempts to detect and extract tables from each page using pdfplumber
     2. Extracts remaining non-table text
-    3. Combines both into a structured format that's easier for AI to parse
+    3. If no text extracted (scanned PDF), falls back to OCR
+    4. Combines all into a structured format that's easier for AI to parse
     """
     try:
         extracted_text = []
@@ -109,11 +155,18 @@ def extract_text_from_pdf(path: str) -> str:
 
         full_text = "\n\n".join(extracted_text)
         print(f"✅ Extracted text from PDF using pdfplumber: {len(full_text)} characters")
+
+        # If pdfplumber extracted no text, try OCR (for scanned/image PDFs)
+        if len(full_text.strip()) == 0:
+            print("⚠️  No text extracted with pdfplumber. PDF may be scanned/image-based.")
+            full_text = _extract_text_with_ocr(path)
+
         return full_text
 
     except Exception as e:
         print(f"❌ Error extracting PDF text from {path}: {e}")
-        return ""
+        # Try OCR as last resort
+        return _extract_text_with_ocr(path)
 
 def extract_text_from_excel(path: str) -> str:
     """Extract text from Excel files, handling multiple sheets"""
