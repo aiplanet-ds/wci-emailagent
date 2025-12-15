@@ -103,11 +103,12 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
         prompt = prompt.replace("{{metadata}}", json.dumps(safe_metadata, indent=2))
 
         # Make API call to Azure OpenAI
+        # Using higher max_tokens to handle large price lists from OCR-extracted PDFs
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=3000
+            max_tokens=16000
         )
 
         content_response = response.choices[0].message.content.strip()
