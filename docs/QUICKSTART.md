@@ -64,7 +64,7 @@ python scripts/migrate_json_to_db.py
 **Option A: Run Locally (with Docker PostgreSQL)**
 ```bash
 # PostgreSQL runs in Docker, app runs locally
-python start.py
+python main.py
 ```
 
 **Option B: Run Everything in Docker**
@@ -139,7 +139,7 @@ wci-emailagent/
 ```bash
 # Run app locally with Docker PostgreSQL
 docker-compose up -d postgres
-python start.py
+python main.py
 
 # View database logs
 docker-compose logs -f postgres
@@ -326,8 +326,8 @@ The following services should be updated to use the database:
 1. **services/email_state_service.py** - Replace with `database.services.email_state_service`
 2. **services/vendor_verification_service.py** - Use `database.services.vendor_service`
 3. **services/delta_service.py** - Use `database.services.delta_service`
-4. **main.py** - Update email processing to save to database
-5. **start.py** - Add database session management
+4. **email_processor.py** - Update email processing to save to database
+5. **main.py** - Add database session management
 
 ### FastAPI Integration
 

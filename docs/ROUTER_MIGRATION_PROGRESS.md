@@ -260,9 +260,9 @@ async def approve_and_process_email(
             reasoning=detection_result["reasoning"]
         )
 
-    # If price change, process with main.process_user_message()
+    # If price change, process with email_processor.process_user_message()
     if state.is_price_change:
-        from main import process_user_message
+        from email_processor import process_user_message
         full_message = graph_client.get_user_message_by_id(user_email, message_id)
         await asyncio.to_thread(process_user_message, full_message, user_email, skip_verification=True)
 

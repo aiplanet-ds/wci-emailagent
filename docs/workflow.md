@@ -394,7 +394,7 @@ REDIRECT_URI=http://localhost:8000/callback
 
 ### Key Configuration Options
 
-- **Email Polling Interval**: 60 seconds (configurable in `start.py`)
+- **Email Polling Interval**: 60 seconds (configurable in `main.py`)
 - **Default Price List**: UNA1 (Unassigned Bill-To)
 - **Default UOM**: EA (Each)
 - **AI Temperature**: 0 (deterministic extraction)
@@ -441,7 +441,7 @@ EFFECTIVE DATE: October 20, 2025
 ## 🚀 Getting Started
 
 1. **Configure environment variables** in `.env`
-2. **Start the application**: `python start.py`
+2. **Start the application**: `python main.py`
 3. **Login via OAuth**: Navigate to `http://localhost:8000`
 4. **Send test email** to monitored inbox
 5. **Monitor dashboard** for automatic processing

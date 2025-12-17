@@ -1579,7 +1579,7 @@ async def reanalyze_bom_impact(
     Useful if Epicor data has changed or if there was an error.
     """
     from database.services.bom_impact_service import BomImpactService
-    from main import run_bom_impact_analysis
+    from email_processor import run_bom_impact_analysis
 
     user_email = get_user_from_session(request)
     user = await get_user_from_db(db, user_email)

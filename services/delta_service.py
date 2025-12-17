@@ -233,7 +233,7 @@ class DeltaEmailService:
 
     async def process_user_messages(self, user_email: str, messages: List[Dict]):
         """Process new messages for a user with vendor verification and liberal price change filtering"""
-        from main import process_user_message
+        from email_processor import process_user_message
         from services.vendor_verification_service import vendor_verification_service
 
         processed_count = 0
