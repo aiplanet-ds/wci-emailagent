@@ -281,6 +281,11 @@ async def shutdown_event():
     logger.info("=" * 80)
     delta_service.stop_polling()
     logger.info("Automated monitoring service stopped")
+
+    # Close database connection pool
+    from database.config import close_db
+    await close_db()
+    logger.info("Database connections closed")
     logger.info("=" * 80)
 
 # Run the server when executed directly
