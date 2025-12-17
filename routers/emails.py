@@ -571,7 +571,7 @@ async def get_raw_email_content(
     try:
         # Fetch full email from Microsoft Graph API
         graph_client = MultiUserGraphClient()
-        msg = graph_client.get_user_message_by_id(user_email, message_id)
+        msg = await graph_client.get_user_message_by_id(user_email, message_id)
 
         # Extract email body
         body_data = msg.get("body", {})
@@ -581,7 +581,7 @@ async def get_raw_email_content(
         # Get attachment metadata if email has attachments
         attachments_meta = []
         if msg.get("hasAttachments", False):
-            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+            attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
             for att in attachments:
                 if att.get("@odata.type", "").endswith("fileAttachment"):
@@ -631,7 +631,7 @@ async def download_attachment(
     try:
         # Get attachment from Microsoft Graph API
         graph_client = MultiUserGraphClient()
-        attachments = graph_client.get_user_message_attachments(user_email, message_id)
+        attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
         # Find the specific attachment
         target_attachment = None
@@ -746,7 +746,7 @@ async def update_email_state(
             affected_products = email_data.get("affected_products", [])
 
             # Perform batch update
-            epicor_result = epicor_service.batch_update_prices(
+            epicor_result = await epicor_service.batch_update_prices(
                 products=affected_products,
                 supplier_id=supplier_info.get("supplier_id"),
                 effective_date=price_summary.get("effective_date")
@@ -894,8 +894,8 @@ async def generate_followup(
         )
 
     try:
-        # Generate follow-up email
-        followup_draft = generate_followup_email(
+        # Generate follow-up email (async)
+        followup_draft = await generate_followup_email(
             email_data=email_data,
             missing_fields=followup_request.missing_fields
         )
@@ -999,7 +999,7 @@ async def approve_and_process_email(
     try:
         # Get original message from Graph API
         graph_client = MultiUserGraphClient()
-        msg = graph_client.get_user_message_by_id(user_email, message_id)
+        msg = await graph_client.get_user_message_by_id(user_email, message_id)
 
         # STEP 1: Run LLM Price Change Detection
         from services.llm_detector import llm_is_price_change_email
@@ -1015,7 +1015,7 @@ async def approve_and_process_email(
         # Process attachments (if any)
         attachment_paths = []
         if msg.get("hasAttachments", False):
-            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+            attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
             # Create user-specific downloads directory
             safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
@@ -1059,9 +1059,9 @@ async def approve_and_process_email(
             'has_attachments': msg.get('hasAttachments', False)
         }
 
-        # Run LLM detection
-        print(f"🤖 Running LLM price change detection for approved email...")
-        detection_result = llm_is_price_change_email(combined_content, metadata)
+        # Run LLM detection (async)
+        print(f"Running LLM price change detection for approved email...")
+        detection_result = await llm_is_price_change_email(combined_content, metadata)
 
         # Update email state with detection result in database
         await EmailStateService.update_state(
@@ -1084,14 +1084,14 @@ async def approve_and_process_email(
             # Run AI extraction inline (async)
             from services.extractor import extract_price_change_json
 
-            print(f"\n🤖 STAGE 2: AI ENTITY EXTRACTION")
+            print(f"\nSTAGE 2: AI ENTITY EXTRACTION")
             print("-" * 80)
-            print(f"🔄 Azure OpenAI GPT-4.1 Processing...")
+            print(f"Azure OpenAI GPT-4.1 Processing...")
 
             # Extract entities using AI (combined_content and metadata already prepared above)
-            result = extract_price_change_json(combined_content, metadata)
+            result = await extract_price_change_json(combined_content, metadata)
 
-            print(f"✅ AI Extraction Complete")
+            print(f"AI Extraction Complete")
 
             # Save extracted data to database
             await EmailService.update_email(
@@ -1137,8 +1137,8 @@ async def approve_and_process_email(
                         print(f"   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
 
                         try:
-                            # Run the BOM impact analysis
-                            impact_result = epicor_service.process_supplier_price_change(
+                            # Run the BOM impact analysis (async)
+                            impact_result = await epicor_service.process_supplier_price_change(
                                 part_num=part_num,
                                 supplier_id=supplier_id,
                                 old_price=float(old_price) if old_price else 0,

@@ -101,7 +101,7 @@ class MultiUserAuth:
         )
         return auth_url
     
-    def exchange_code_for_token(self, authorization_code: str, redirect_uri: str) -> Dict[str, Any]:
+    async def exchange_code_for_token(self, authorization_code: str, redirect_uri: str) -> Dict[str, Any]:
         """Exchange authorization code for access token and return user info"""
         # Use a temporary app to exchange the code
         app = ConfidentialClientApplication(
@@ -139,9 +139,10 @@ class MultiUserAuth:
                 logger.debug(f"   Could not decode token: {e}")
 
             # Get user info from the token
-            import requests
+            import httpx
             headers = {"Authorization": f"Bearer {result['access_token']}"}
-            user_response = requests.get("https://graph.microsoft.com/v1.0/me", headers=headers)
+            async with httpx.AsyncClient() as client:
+                user_response = await client.get("https://graph.microsoft.com/v1.0/me", headers=headers)
             if user_response.status_code == 200:
                 user_info = user_response.json()
                 user_email = user_info.get("mail") or user_info.get("userPrincipalName")

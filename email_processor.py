@@ -21,7 +21,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 
-def _process_single_product_bom(
+async def _process_single_product_bom(
     epicor_service,
     idx: int,
     product: dict,
@@ -30,9 +30,8 @@ def _process_single_product_bom(
     total_products: int
 ) -> dict:
     """
-    Process BOM impact analysis for a single product (runs in thread pool).
+    Process BOM impact analysis for a single product (async).
 
-    This is a synchronous function designed to run in a ThreadPoolExecutor.
     Returns a dict with the result or error information.
     """
     part_num = product.get("product_id", "")
@@ -51,8 +50,8 @@ def _process_single_product_bom(
     logger.info(f"   Starting Product {idx + 1}/{total_products}: {part_num} (${old_price:.4f} -> ${new_price:.4f})")
 
     try:
-        # Run the BOM impact analysis (synchronous Epicor API call)
-        impact_result = epicor_service.process_supplier_price_change(
+        # Run the BOM impact analysis (async Epicor API call)
+        impact_result = await epicor_service.process_supplier_price_change(
             part_num=part_num,
             supplier_id=supplier_id,
             old_price=float(old_price) if old_price else 0,
@@ -106,19 +105,17 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
     Run BOM impact analysis for all products in an email and store results in database.
 
     This runs in the background after AI extraction is complete.
-    Uses concurrent processing with ThreadPoolExecutor to analyze multiple products in parallel.
+    Uses asyncio.gather() for concurrent processing of multiple products.
 
     Args:
         email_id: Database ID of the email record
         extraction_result: The AI extraction result containing affected_products
         supplier_info: Supplier info from extraction (contains supplier_id)
     """
-    import concurrent.futures
-    import asyncio
     from services.epicor_service import EpicorAPIService as EpicorService
 
     # Configuration for concurrent processing
-    MAX_WORKERS = 5  # Limit concurrent Epicor API calls to avoid overwhelming the server
+    MAX_CONCURRENT = 5  # Limit concurrent Epicor API calls to avoid overwhelming the server
 
     affected_products = extraction_result.get("affected_products", [])
     if not affected_products:
@@ -132,63 +129,68 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
     logger.info("STAGE 3: BOM IMPACT ANALYSIS (CONCURRENT)")
     logger.info("-" * 80)
     logger.info(f"   Analyzing {total_products} product(s) for BOM impact...")
-    logger.info(f"   Using {MAX_WORKERS} concurrent workers")
+    logger.info(f"   Using up to {MAX_CONCURRENT} concurrent tasks")
 
     try:
         epicor_service = EpicorService()
 
-        # Run concurrent BOM analysis in thread pool
+        # Run concurrent BOM analysis using asyncio
         logger.info("   Starting concurrent BOM analysis...")
 
-        results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Submit all tasks
-            future_to_idx = {
-                executor.submit(
-                    _process_single_product_bom,
+        # Use semaphore to limit concurrency
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+        async def process_with_semaphore(idx: int, product: dict):
+            async with semaphore:
+                return await _process_single_product_bom(
                     epicor_service,
                     idx,
                     product,
                     supplier_id,
                     effective_date,
                     total_products
-                ): idx
-                for idx, product in enumerate(affected_products)
-            }
+                )
 
-            # Collect results as they complete
-            completed = 0
-            for future in concurrent.futures.as_completed(future_to_idx):
-                completed += 1
-                try:
-                    result = future.result()
-                    results.append(result)
-                    logger.info(f"   Progress: {completed}/{total_products} products processed")
-                except Exception as e:
-                    idx = future_to_idx[future]
-                    logger.error(f"   Unexpected error for product {idx}: {e}")
-                    # Create error result for unexpected failures
-                    product = affected_products[idx]
-                    results.append({
-                        "idx": idx,
-                        "part_num": product.get("product_id", ""),
-                        "skipped": False,
-                        "error": str(e),
-                        "result": {
-                            "status": "error",
-                            "processing_errors": [f"Unexpected error: {str(e)}"],
-                            "component": {"part_num": product.get("product_id", ""), "validated": False},
-                            "supplier": {"supplier_id": supplier_id, "validated": False},
-                            "price_change": {
-                                "part_num": product.get("product_id", ""),
-                                "old_price": product.get("old_price", 0),
-                                "new_price": product.get("new_price", 0)
-                            },
-                            "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
-                            "actions_required": [],
-                            "can_auto_approve": False
-                        }
-                    })
+        # Create tasks for all products
+        tasks = [
+            process_with_semaphore(idx, product)
+            for idx, product in enumerate(affected_products)
+        ]
+
+        # Run all tasks concurrently and collect results
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results, handling any exceptions
+        processed_results = []
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"   Unexpected error for product {idx}: {result}")
+                product = affected_products[idx]
+                processed_results.append({
+                    "idx": idx,
+                    "part_num": product.get("product_id", ""),
+                    "skipped": False,
+                    "error": str(result),
+                    "result": {
+                        "status": "error",
+                        "processing_errors": [f"Unexpected error: {str(result)}"],
+                        "component": {"part_num": product.get("product_id", ""), "validated": False},
+                        "supplier": {"supplier_id": supplier_id, "validated": False},
+                        "price_change": {
+                            "part_num": product.get("product_id", ""),
+                            "old_price": product.get("old_price", 0),
+                            "new_price": product.get("new_price", 0)
+                        },
+                        "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                        "actions_required": [],
+                        "can_auto_approve": False
+                    }
+                })
+            else:
+                processed_results.append(result)
+
+        logger.info(f"   Progress: {len(processed_results)}/{total_products} products processed")
+        results = processed_results
 
         # Store results in database (async context)
         logger.info(f"   Storing {len(results)} results in database...")
@@ -229,7 +231,7 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
         logger.error(f"   BOM Impact Analysis failed: {e}")
 
 
-def process_user_message(msg, user_email, skip_verification=False):
+async def process_user_message(msg, user_email, skip_verification=False):
     """Process a single email message for a specific user with data isolation
 
     Args:
@@ -287,7 +289,7 @@ def process_user_message(msg, user_email, skip_verification=False):
         logger.info("Processing attachments...")
         # Import here to avoid circular import issues
         from auth.multi_graph import graph_client
-        attachments = graph_client.get_user_message_attachments(user_email, message_id)
+        attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
         for att in attachments:
             if att.get("@odata.type", "").endswith("fileAttachment"):
@@ -323,18 +325,8 @@ def process_user_message(msg, user_email, skip_verification=False):
     # ========== PRE-STAGE 2: VENDOR VERIFICATION CHECK ==========
     if not skip_verification:
         # Check email state in database
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        async def check_verification_status():
-            async with SessionLocal() as db:
-                state = await EmailStateService.get_state_by_message_id(db, message_id)
-                return state
-
-        state = loop.run_until_complete(check_verification_status())
+        async with SessionLocal() as db:
+            state = await EmailStateService.get_state_by_message_id(db, message_id)
 
         if state and state.verification_status == 'pending_review':
             logger.warning("EMAIL FLAGGED FOR VERIFICATION")
@@ -360,76 +352,68 @@ def process_user_message(msg, user_email, skip_verification=False):
     try:
         # Note: Email has already been validated as price change by LLM detector in delta_service
         # This extraction focuses solely on extracting structured data
-        result = extract_price_change_json(combined_content, email_metadata)
+        result = await extract_price_change_json(combined_content, email_metadata)
 
         # Save to database (JSON file writes removed - database is now the primary storage)
-        async def save_to_database():
-            async with SessionLocal() as db:
-                # Get or create user
-                user, _ = await UserService.get_or_create_user(db, user_email)
+        email_id = None
+        async with SessionLocal() as db:
+            # Get or create user
+            user, _ = await UserService.get_or_create_user(db, user_email)
 
-                # Create or update email record
-                email_record = await EmailService.get_email_by_message_id(db, message_id)
-                if not email_record:
-                    email_record = await EmailService.create_email(
-                        db,
-                        message_id=message_id,
-                        user_id=user.id,
-                        subject=subject,
-                        sender_email=sender,
-                        received_at=date_received,
-                        has_attachments=has_attachments,
-                        body_text=email_body,
-                        supplier_info=result.get("supplier_info"),
-                        price_change_summary=result.get("price_change_summary"),
-                        affected_products=result.get("affected_products"),
-                        additional_details=result.get("additional_details"),
-                        raw_email_data=msg,
-                        # Thread information
-                        conversation_id=thread_info.conversation_id,
-                        conversation_index=thread_info.conversation_index,
-                        is_reply=thread_info.is_reply,
-                        is_forward=thread_info.is_forward,
-                        thread_subject=thread_info.thread_subject,
-                    )
-                else:
-                    # Update existing record
-                    email_record.supplier_info = result.get("supplier_info")
-                    email_record.price_change_summary = result.get("price_change_summary")
-                    email_record.affected_products = result.get("affected_products")
-                    email_record.additional_details = result.get("additional_details")
-                    # Update thread info if not already set
-                    if not email_record.conversation_id and thread_info.conversation_id:
-                        email_record.conversation_id = thread_info.conversation_id
-                        email_record.conversation_index = thread_info.conversation_index
-                        email_record.is_reply = thread_info.is_reply
-                        email_record.is_forward = thread_info.is_forward
-                        email_record.thread_subject = thread_info.thread_subject
+            # Create or update email record
+            email_record = await EmailService.get_email_by_message_id(db, message_id)
+            if not email_record:
+                email_record = await EmailService.create_email(
+                    db,
+                    message_id=message_id,
+                    user_id=user.id,
+                    subject=subject,
+                    sender_email=sender,
+                    received_at=date_received,
+                    has_attachments=has_attachments,
+                    body_text=email_body,
+                    supplier_info=result.get("supplier_info"),
+                    price_change_summary=result.get("price_change_summary"),
+                    affected_products=result.get("affected_products"),
+                    additional_details=result.get("additional_details"),
+                    raw_email_data=msg,
+                    # Thread information
+                    conversation_id=thread_info.conversation_id,
+                    conversation_index=thread_info.conversation_index,
+                    is_reply=thread_info.is_reply,
+                    is_forward=thread_info.is_forward,
+                    thread_subject=thread_info.thread_subject,
+                )
+            else:
+                # Update existing record
+                email_record.supplier_info = result.get("supplier_info")
+                email_record.price_change_summary = result.get("price_change_summary")
+                email_record.affected_products = result.get("affected_products")
+                email_record.additional_details = result.get("additional_details")
+                # Update thread info if not already set
+                if not email_record.conversation_id and thread_info.conversation_id:
+                    email_record.conversation_id = thread_info.conversation_id
+                    email_record.conversation_index = thread_info.conversation_index
+                    email_record.is_reply = thread_info.is_reply
+                    email_record.is_forward = thread_info.is_forward
+                    email_record.thread_subject = thread_info.thread_subject
 
-                # Update email state
-                state = await EmailStateService.get_state_by_message_id(db, message_id)
-                if not state:
-                    state = await EmailStateService.create_state(
-                        db,
-                        message_id=message_id,
-                        user_id=user.id,
-                        email_id=email_record.id,
-                        is_price_change=True
-                    )
-                else:
-                    state.email_id = email_record.id
-                    state.is_price_change = True
+            # Update email state
+            state = await EmailStateService.get_state_by_message_id(db, message_id)
+            if not state:
+                state = await EmailStateService.create_state(
+                    db,
+                    message_id=message_id,
+                    user_id=user.id,
+                    email_id=email_record.id,
+                    is_price_change=True
+                )
+            else:
+                state.email_id = email_record.id
+                state.is_price_change = True
 
-                await db.commit()
-                return email_record.id
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        email_id = loop.run_until_complete(save_to_database())
+            await db.commit()
+            email_id = email_record.id
 
         logger.info("Stage 2 Complete: Data extracted successfully")
         logger.info("   Saved to database")
@@ -443,11 +427,11 @@ def process_user_message(msg, user_email, skip_verification=False):
         # Run BOM impact analysis for all products in the email
         if email_id and result.get("affected_products"):
             try:
-                loop.run_until_complete(run_bom_impact_analysis(
+                await run_bom_impact_analysis(
                     email_id=email_id,
                     extraction_result=result,
                     supplier_info=result.get("supplier_info")
-                ))
+                )
             except Exception as e:
                 logger.warning(f"   BOM Impact Analysis error (non-blocking): {e}")
 

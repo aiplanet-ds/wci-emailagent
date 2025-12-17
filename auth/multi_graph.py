@@ -1,7 +1,8 @@
-import requests
+import httpx
 import logging
 from typing import List, Dict, Any, Optional
 from auth.oauth import multi_auth
+from utils.http_client import HTTPClientManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -11,7 +12,7 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 class MultiUserGraphClient:
     def __init__(self):
         self.auth = multi_auth
-    
+
     def _get_headers(self, user_email: str) -> Dict[str, str]:
         """Get authorization headers for user"""
         token = self.auth.get_user_token(user_email)
@@ -19,8 +20,8 @@ class MultiUserGraphClient:
             raise ValueError(f"No valid token for user {user_email}")
         logger.debug(f"Using token for {user_email}: {token[:50]}...")
         return {"Authorization": f"Bearer {token}"}
-    
-    def get_user_messages(self, user_email: str, top: int = 10) -> List[Dict[str, Any]]:
+
+    async def get_user_messages(self, user_email: str, top: int = 10) -> List[Dict[str, Any]]:
         """Get messages for specific user"""
         headers = self._get_headers(user_email)
         url = f"{GRAPH_BASE}/me/messages"
@@ -32,7 +33,8 @@ class MultiUserGraphClient:
         logger.debug(f"Fetching messages for {user_email}")
         logger.debug(f"   URL: {url}")
 
-        response = requests.get(url, headers=headers, params=params)
+        client = await HTTPClientManager.get_graph_client()
+        response = await client.get(url, headers=headers, params=params)
 
         if response.status_code != 200:
             logger.error(f"Graph API error: {response.status_code}")
@@ -40,42 +42,46 @@ class MultiUserGraphClient:
 
         response.raise_for_status()
         return response.json().get("value", [])
-    
-    def get_user_message_by_id(self, user_email: str, message_id: str) -> Dict[str, Any]:
+
+    async def get_user_message_by_id(self, user_email: str, message_id: str) -> Dict[str, Any]:
         """Get specific message for user"""
         headers = self._get_headers(user_email)
         url = f"{GRAPH_BASE}/me/messages/{message_id}"
-        
-        response = requests.get(url, headers=headers)
+
+        client = await HTTPClientManager.get_graph_client()
+        response = await client.get(url, headers=headers)
         response.raise_for_status()
         return response.json()
-    
-    def get_user_message_attachments(self, user_email: str, message_id: str) -> List[Dict[str, Any]]:
+
+    async def get_user_message_attachments(self, user_email: str, message_id: str) -> List[Dict[str, Any]]:
         """Get attachments for specific message"""
         headers = self._get_headers(user_email)
         url = f"{GRAPH_BASE}/me/messages/{message_id}/attachments"
-        
-        response = requests.get(url, headers=headers)
+
+        client = await HTTPClientManager.get_graph_client()
+        response = await client.get(url, headers=headers)
         response.raise_for_status()
         return response.json().get("value", [])
-    
-    def get_user_profile(self, user_email: str) -> Dict[str, Any]:
+
+    async def get_user_profile(self, user_email: str) -> Dict[str, Any]:
         """Get user profile information"""
         headers = self._get_headers(user_email)
         url = f"{GRAPH_BASE}/me"
-        
-        response = requests.get(url, headers=headers)
+
+        client = await HTTPClientManager.get_graph_client()
+        response = await client.get(url, headers=headers)
         response.raise_for_status()
         return response.json()
-    
-    def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
+
+    async def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
         """Get delta messages for user - tracks changes since last query"""
         headers = self._get_headers(user_email)
+        client = await HTTPClientManager.get_graph_client()
 
         if delta_token:
             # Use existing delta token to get changes
             url = delta_token
-            response = requests.get(url, headers=headers)
+            response = await client.get(url, headers=headers)
         else:
             # Initial delta query - use inbox folder delta for better compatibility
             # Include threading fields: conversationId, conversationIndex, isReply
@@ -83,26 +89,26 @@ class MultiUserGraphClient:
             params = {
                 "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex,isReply"
             }
-            response = requests.get(url, headers=headers, params=params)
+            response = await client.get(url, headers=headers, params=params)
 
         response.raise_for_status()
         data = response.json()
-        
+
         # Extract messages and next delta link
         messages = data.get("value", [])
         delta_link = None
-        
+
         # Look for delta link in @odata.deltaLink or @odata.nextLink
         if "@odata.deltaLink" in data:
             delta_link = data["@odata.deltaLink"]
         elif "@odata.nextLink" in data:
             delta_link = data["@odata.nextLink"]
-        
+
         return {
             "messages": messages,
             "delta_token": delta_link
         }
-    
+
     def is_user_authenticated(self, user_email: str) -> bool:
         """Check if user has valid authentication"""
         try:

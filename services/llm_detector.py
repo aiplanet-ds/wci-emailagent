@@ -16,13 +16,13 @@ import os
 import json
 import logging
 from typing import Dict, Any, List
-from openai import AzureOpenAI
+from openai import AsyncAzureOpenAI
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Initialize Azure OpenAI client
-client = AzureOpenAI(
+# Initialize Azure OpenAI async client
+async_client = AsyncAzureOpenAI(
     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
     azure_endpoint=os.getenv("AZURE_OPENAI_API_ENDPOINT")
@@ -78,7 +78,7 @@ Rules:
 """
 
 
-def llm_is_price_change_email(
+async def llm_is_price_change_email(
     email_content: str,
     metadata: Dict[str, Any],
     confidence_threshold: float = None
@@ -104,13 +104,14 @@ def llm_is_price_change_email(
         - meets_threshold (bool): Whether confidence exceeds threshold
 
     Example:
-        >>> result = llm_is_price_change_email(email_text, metadata)
+        >>> result = await llm_is_price_change_email(email_text, metadata)
         >>> if result["meets_threshold"]:
         ...     print(f"Price change detected with {result['confidence']} confidence")
     """
     if confidence_threshold is None:
         confidence_threshold = CONFIDENCE_THRESHOLD
 
+    response_text = ""
     try:
         # Prepare the prompt with email content and metadata
         prompt = PRICE_CHANGE_DETECTION_PROMPT.replace("{{content}}", email_content[:15000])  # Limit content length
@@ -118,8 +119,8 @@ def llm_is_price_change_email(
 
         logger.info(f"Calling LLM for price change detection on email: {metadata.get('subject', 'No subject')}")
 
-        # Call Azure OpenAI API
-        response = client.chat.completions.create(
+        # Call Azure OpenAI API (async)
+        response = await async_client.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,  # Low temperature for consistent, deterministic responses
@@ -181,7 +182,7 @@ def llm_is_price_change_email(
         }
 
 
-def batch_detect_price_changes(
+async def batch_detect_price_changes(
     emails: List[Dict[str, Any]],
     confidence_threshold: float = None
 ) -> List[Dict[str, Any]]:
@@ -197,7 +198,7 @@ def batch_detect_price_changes(
     """
     results = []
     for email in emails:
-        result = llm_is_price_change_email(
+        result = await llm_is_price_change_email(
             email.get("content", ""),
             email.get("metadata", {}),
             confidence_threshold

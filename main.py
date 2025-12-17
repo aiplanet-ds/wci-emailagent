@@ -127,9 +127,9 @@ async def auth_callback(request: Request, code: str = None, state: str = None, e
         })
     
     try:
-        # Exchange code for token
+        # Exchange code for token (async)
         redirect_uri = str(request.url_for("auth_callback"))
-        result = multi_auth.exchange_code_for_token(code, redirect_uri)
+        result = await multi_auth.exchange_code_for_token(code, redirect_uri)
         
         if "access_token" not in result:
             return templates.TemplateResponse("error.html", {
@@ -281,6 +281,11 @@ async def shutdown_event():
     logger.info("=" * 80)
     delta_service.stop_polling()
     logger.info("Automated monitoring service stopped")
+
+    # Close HTTP client connections
+    from utils.http_client import HTTPClientManager
+    await HTTPClientManager.close_all()
+    logger.info("HTTP client connections closed")
 
     # Close database connection pool
     from database.config import close_db

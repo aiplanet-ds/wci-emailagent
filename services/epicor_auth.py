@@ -4,13 +4,14 @@ Automatically generates and refreshes Bearer tokens with database persistence
 """
 
 import os
-import requests
+import httpx
 import time
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 import logging
+from utils.http_client import HTTPClientManager
 
 load_dotenv()
 
@@ -51,16 +52,16 @@ class EpicorAuthService:
         else:
             logger.info("⚠️ Epicor OAuth Service initialized (no credentials configured)")
     
-    def _request_token_with_client_credentials(self) -> Dict[str, Any]:
+    async def _request_token_with_client_credentials(self) -> Dict[str, Any]:
         """
         Request Bearer token using client credentials (Client Credentials Grant).
-        This is a synchronous HTTP call - database storage is handled separately.
+        This is an async HTTP call - database storage is handled separately.
 
         Returns:
             Dictionary with token information
         """
         try:
-            logger.info("🔐 Requesting Bearer token with client credentials...")
+            logger.info("Requesting Bearer token with client credentials...")
 
             # Prepare token request for client_credentials grant
             data = {
@@ -71,18 +72,19 @@ class EpicorAuthService:
             }
 
             # Request token
-            response = requests.post(
+            client = await HTTPClientManager.get_general_client()
+            response = await client.post(
                 self.token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=30
+                timeout=30.0
             )
 
             if response.status_code == 200:
                 token_data = response.json()
                 expires_in = token_data.get("expires_in", 3600)
 
-                logger.info(f"✅ Bearer token obtained successfully via client_credentials (expires in {expires_in}s)")
+                logger.info(f"Bearer token obtained successfully via client_credentials (expires in {expires_in}s)")
 
                 return {
                     "status": "success",
@@ -94,7 +96,7 @@ class EpicorAuthService:
                     "scope": self.scope_client_credentials
                 }
             else:
-                logger.error(f"❌ Client credentials token request failed: {response.status_code}")
+                logger.error(f"Client credentials token request failed: {response.status_code}")
                 logger.error(f"   Response: {response.text}")
                 return {
                     "status": "error",
@@ -104,23 +106,23 @@ class EpicorAuthService:
                 }
 
         except Exception as e:
-            logger.error(f"❌ Client credentials token request error: {e}")
+            logger.error(f"Client credentials token request error: {e}")
             return {
                 "status": "error",
                 "message": str(e),
                 "grant_type": "client_credentials"
             }
 
-    def _request_token_with_password(self) -> Dict[str, Any]:
+    async def _request_token_with_password(self) -> Dict[str, Any]:
         """
         Request Bearer token using username/password (Resource Owner Password Credentials Grant).
-        This is a synchronous HTTP call - database storage is handled separately.
+        This is an async HTTP call - database storage is handled separately.
 
         Returns:
             Dictionary with token information
         """
         try:
-            logger.info("🔐 Requesting Bearer token with username/password...")
+            logger.info("Requesting Bearer token with username/password...")
 
             # Prepare token request
             data = {
@@ -136,18 +138,19 @@ class EpicorAuthService:
                 data["client_secret"] = self.client_secret
 
             # Request token
-            response = requests.post(
+            client = await HTTPClientManager.get_general_client()
+            response = await client.post(
                 self.token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10
+                timeout=10.0
             )
 
             if response.status_code == 200:
                 token_data = response.json()
                 expires_in = token_data.get("expires_in", 3600)
 
-                logger.info(f"✅ Bearer token obtained successfully via password (expires in {expires_in}s)")
+                logger.info(f"Bearer token obtained successfully via password (expires in {expires_in}s)")
 
                 return {
                     "status": "success",
@@ -159,7 +162,7 @@ class EpicorAuthService:
                     "scope": self.scope_password
                 }
             else:
-                logger.error(f"❌ Password token request failed: {response.status_code}")
+                logger.error(f"Password token request failed: {response.status_code}")
                 return {
                     "status": "error",
                     "message": f"HTTP {response.status_code}: {response.text}",
@@ -168,23 +171,23 @@ class EpicorAuthService:
                 }
 
         except Exception as e:
-            logger.error(f"❌ Password token request error: {e}")
+            logger.error(f"Password token request error: {e}")
             return {
                 "status": "error",
                 "message": str(e),
                 "grant_type": "password"
             }
     
-    def _request_refresh_token(self, refresh_token: str) -> Dict[str, Any]:
+    async def _request_refresh_token(self, refresh_token: str) -> Dict[str, Any]:
         """
         Request new token using refresh token.
-        This is a synchronous HTTP call - database storage is handled separately.
+        This is an async HTTP call - database storage is handled separately.
 
         Returns:
             Dictionary with new token information
         """
         try:
-            logger.info("🔄 Refreshing Bearer token...")
+            logger.info("Refreshing Bearer token...")
 
             data = {
                 "grant_type": "refresh_token",
@@ -196,18 +199,19 @@ class EpicorAuthService:
             if self.client_secret:
                 data["client_secret"] = self.client_secret
 
-            response = requests.post(
+            client = await HTTPClientManager.get_general_client()
+            response = await client.post(
                 self.token_url,
                 data=data,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10
+                timeout=10.0
             )
 
             if response.status_code == 200:
                 token_data = response.json()
                 expires_in = token_data.get("expires_in", 3600)
 
-                logger.info(f"✅ Bearer token refreshed successfully (expires in {expires_in}s)")
+                logger.info(f"Bearer token refreshed successfully (expires in {expires_in}s)")
 
                 return {
                     "status": "success",
@@ -218,7 +222,7 @@ class EpicorAuthService:
                     "scope": self.scope_password
                 }
             else:
-                logger.error(f"❌ Token refresh failed: {response.status_code}")
+                logger.error(f"Token refresh failed: {response.status_code}")
                 return {
                     "status": "error",
                     "message": f"HTTP {response.status_code}: {response.text}",
@@ -226,16 +230,16 @@ class EpicorAuthService:
                 }
 
         except Exception as e:
-            logger.error(f"❌ Token refresh error: {e}")
+            logger.error(f"Token refresh error: {e}")
             return {
                 "status": "error",
                 "message": str(e),
                 "grant_type": "refresh_token"
             }
 
-    def _request_new_token(self) -> Dict[str, Any]:
+    async def _request_new_token(self) -> Dict[str, Any]:
         """
-        Request a new token using the best available method (sync).
+        Request a new token using the best available method (async).
         Tries client_credentials first, then falls back to password grant.
 
         Returns:
@@ -243,14 +247,14 @@ class EpicorAuthService:
         """
         # Try client_credentials first if we have a client_secret
         if self.client_secret:
-            result = self._request_token_with_client_credentials()
+            result = await self._request_token_with_client_credentials()
             if result["status"] == "success":
                 return result
-            logger.warning("⚠️ Client credentials failed, trying password grant...")
+            logger.warning("Client credentials failed, trying password grant...")
 
         # Fall back to password grant if we have username/password
         if self.username and self.password:
-            return self._request_token_with_password()
+            return await self._request_token_with_password()
 
         return {
             "status": "error",
@@ -313,7 +317,7 @@ class EpicorAuthService:
             Valid Bearer token or None
         """
         if not self.auto_token_enabled:
-            logger.warning("⚠️ Auto-token disabled - no credentials configured")
+            logger.warning("Auto-token disabled - no credentials configured")
             return None
 
         # Load from database if not already loaded
@@ -325,22 +329,22 @@ class EpicorAuthService:
             return self._access_token
 
         # Token expired or doesn't exist
-        logger.info("⏰ Token expired or missing, obtaining new token...")
+        logger.info("Token expired or missing, obtaining new token...")
 
         # Try to refresh if we have a refresh token
         if self._refresh_token:
-            result = self._request_refresh_token(self._refresh_token)
+            result = await self._request_refresh_token(self._refresh_token)
             if result["status"] == "success":
                 await self._save_token_to_db(db, result)
                 return self._access_token
 
         # Get new token
-        result = self._request_new_token()
+        result = await self._request_new_token()
         if result["status"] == "success":
             await self._save_token_to_db(db, result)
             return self._access_token
 
-        logger.error("❌ Failed to obtain valid token")
+        logger.error("Failed to obtain valid token")
         return None
 
     async def initialize_token_async(self, db) -> bool:
@@ -354,28 +358,28 @@ class EpicorAuthService:
         Returns:
             True if a valid token is available
         """
-        logger.info("🚀 Initializing Epicor OAuth token...")
+        logger.info("Initializing Epicor OAuth token...")
 
         if not self.auto_token_enabled:
-            logger.warning("⚠️ Auto-token disabled - no credentials configured")
+            logger.warning("Auto-token disabled - no credentials configured")
             return False
 
         # Try to load existing token from database
         if await self._load_token_from_db(db):
             # Check if loaded token is still valid
             if time.time() < (self._token_expires_at - 300):
-                logger.info("✅ Existing token is valid")
+                logger.info("Existing token is valid")
                 return True
             else:
-                logger.info("⏰ Existing token expired, refreshing...")
+                logger.info("Existing token expired, refreshing...")
 
         # Get new token
-        result = self._request_new_token()
+        result = await self._request_new_token()
         if result["status"] == "success":
             await self._save_token_to_db(db, result)
             return True
 
-        logger.error("❌ Failed to initialize Epicor token")
+        logger.error("Failed to initialize Epicor token")
         return False
 
     async def get_token_info_async(self, db) -> Dict[str, Any]:
@@ -390,12 +394,12 @@ class EpicorAuthService:
             "message": "No token available in database"
         }
 
-    # ==================== SYNC WRAPPER FOR COMPATIBILITY ====================
+    # ==================== ASYNC WRAPPER (NO DB) ====================
 
-    def get_valid_token(self) -> Optional[str]:
+    async def get_valid_token(self) -> Optional[str]:
         """
-        Synchronous wrapper to get a valid token.
-        Uses the in-memory cache, does NOT access database.
+        Get a valid token without database access.
+        Uses the in-memory cache only.
 
         For database-backed token management, use get_valid_token_async().
 
@@ -409,18 +413,18 @@ class EpicorAuthService:
         if self._access_token and time.time() < (self._token_expires_at - 300):
             return self._access_token
 
-        # Token expired or doesn't exist - try to get new one synchronously
-        logger.info("⏰ Token expired or missing, obtaining new token...")
-        result = self._request_new_token()
+        # Token expired or doesn't exist - try to get new one
+        logger.info("Token expired or missing, obtaining new token...")
+        result = await self._request_new_token()
 
         if result["status"] == "success":
-            # Update memory cache only (no DB in sync mode)
+            # Update memory cache only (no DB in this mode)
             self._access_token = result["access_token"]
             self._refresh_token = result.get("refresh_token")
             self._token_expires_at = time.time() + result.get("expires_in", 3600)
             return self._access_token
 
-        logger.error("❌ Failed to obtain valid token")
+        logger.error("Failed to obtain valid token")
         return None
 
     def is_token_valid(self) -> bool:

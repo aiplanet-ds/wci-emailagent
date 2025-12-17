@@ -1,12 +1,12 @@
-﻿import os, json
-from openai import AzureOpenAI
+import os, json
+from openai import AsyncAzureOpenAI
 from dotenv import load_dotenv
 from typing import Dict, Any, List
 
 load_dotenv()
 
-# Azure OpenAI configuration
-client = AzureOpenAI(
+# Azure OpenAI async configuration
+async_client = AsyncAzureOpenAI(
     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
     azure_endpoint=os.getenv("AZURE_OPENAI_API_ENDPOINT")
@@ -80,7 +80,7 @@ You are a specialized JSON extractor for supplier price change emails. Extract i
 Return ONLY valid JSON with no additional text or explanations.
 """
 
-def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+async def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extract structured data from price change email using Azure OpenAI.
 
@@ -102,9 +102,9 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
         prompt = PRICE_CHANGE_EXTRACTION_PROMPT.replace("{{content}}", content)
         prompt = prompt.replace("{{metadata}}", json.dumps(safe_metadata, indent=2))
 
-        # Make API call to Azure OpenAI
+        # Make API call to Azure OpenAI (async)
         # Using higher max_tokens to handle large price lists from OCR-extracted PDFs
-        response = client.chat.completions.create(
+        response = await async_client.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
@@ -129,8 +129,8 @@ def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> Dict[st
             return extracted_data
 
         except json.JSONDecodeError as e:
-            print(f"❌ JSON Parse Error: {e}")
-            print(f"📄 Raw response (first 1000 chars):\n{content_response[:1000]}")
+            print(f"JSON Parse Error: {e}")
+            print(f"Raw response (first 1000 chars):\n{content_response[:1000]}")
             return {
                 "error": f"Failed to parse AI response as JSON: {str(e)}",
                 "raw_response": content_response[:500]
@@ -196,7 +196,7 @@ def post_process_extraction(data: Dict[str, Any], metadata: Dict[str, Any]) -> D
 
     return data
 
-def extract_from_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
+async def extract_from_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Main entry point for email extraction
 
@@ -215,10 +215,10 @@ def extract_from_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
         "attachments": email_data.get("attachments", [])
     }
 
-    return extract_price_change_json(content, metadata)
+    return await extract_price_change_json(content, metadata)
 
 
-def generate_followup_email(
+async def generate_followup_email(
     email_data: Dict[str, Any],
     missing_fields: List[Dict[str, Any]],
     original_email_content: str = None
@@ -316,8 +316,8 @@ Write ONLY the email body text, ready to send.
             missing_fields_list=missing_fields_list
         )
 
-        # Call Azure OpenAI
-        response = client.chat.completions.create(
+        # Call Azure OpenAI (async)
+        response = await async_client.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,  # Slightly higher for more natural language

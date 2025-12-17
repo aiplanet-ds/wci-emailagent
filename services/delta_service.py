@@ -135,12 +135,12 @@ class DeltaEmailService:
     async def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
         """Get delta messages for a user"""
         try:
-            return self.graph_client.get_user_delta_messages(user_email, delta_token)
+            return await self.graph_client.get_user_delta_messages(user_email, delta_token)
         except Exception as e:
             logger.error(f"Error getting delta messages for {user_email}: {e}")
             return {"messages": [], "delta_token": delta_token}
     
-    def is_price_change_email(self, user_email: str, message: Dict) -> Dict[str, Any]:
+    async def is_price_change_email(self, user_email: str, message: Dict) -> Dict[str, Any]:
         """
         Determine if an email is a price change notification using LLM-powered detection.
 
@@ -170,8 +170,8 @@ class DeltaEmailService:
             }
 
             # Get full message content with attachments
-            logger.info(f"   🤖 Fetching full email content for LLM analysis...")
-            full_message = self.graph_client.get_user_message_by_id(user_email, message_id)
+            logger.info(f"   Fetching full email content for LLM analysis...")
+            full_message = await self.graph_client.get_user_message_by_id(user_email, message_id)
 
             # Extract email body
             email_body = ""
@@ -182,7 +182,7 @@ class DeltaEmailService:
             # Process attachments (if any)
             attachment_paths = []  # Empty list if no attachments
             if full_message.get("hasAttachments", False):
-                attachments = self.graph_client.get_user_message_attachments(user_email, message_id)
+                attachments = await self.graph_client.get_user_message_attachments(user_email, message_id)
 
                 # Create user-specific downloads directory for temp attachment storage
                 safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
@@ -207,21 +207,21 @@ class DeltaEmailService:
                                     f.write(decoded_content)
 
                                 attachment_paths.append(path)
-                                logger.info(f"   📎 Saved attachment for analysis: {filename}")
+                                logger.info(f"   Saved attachment for analysis: {filename}")
                             except Exception as e:
-                                logger.warning(f"   ⚠️  Could not save attachment {filename}: {e}")
+                                logger.warning(f"   Could not save attachment {filename}: {e}")
 
             # Process all content (body + attachments)
             combined_content = process_all_content(email_body, attachment_paths)
 
-            # Call LLM detector
-            logger.info(f"   🤖 Analyzing with LLM detector...")
-            detection_result = llm_is_price_change_email(combined_content, metadata)
+            # Call LLM detector (async)
+            logger.info(f"   Analyzing with LLM detector...")
+            detection_result = await llm_is_price_change_email(combined_content, metadata)
 
             return detection_result
 
         except Exception as e:
-            logger.error(f"   ❌ Error in LLM price change detection: {e}")
+            logger.error(f"   Error in LLM price change detection: {e}")
             # Return negative result on error to avoid false positives
             return {
                 "is_price_change": False,
@@ -280,8 +280,8 @@ class DeltaEmailService:
                         logger.info(f"   ✅ VERIFIED VENDOR ({method})")
 
                         # STEP 2: LLM DETECTION (only for verified vendors)
-                        logger.info(f"   🤖 Running LLM price change detection...")
-                        detection_result = self.is_price_change_email(user_email, message)
+                        logger.info(f"   Running LLM price change detection...")
+                        detection_result = await self.is_price_change_email(user_email, message)
 
                         if detection_result.get("meets_threshold", False):
                             confidence = detection_result.get("confidence", 0.0)
@@ -290,10 +290,10 @@ class DeltaEmailService:
                             logger.info(f"   💡 Reasoning: {reasoning}")
 
                             # Get full message details (we'll need it for processing)
-                            full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                            full_message = await self.graph_client.get_user_message_by_id(user_email, message['id'])
 
                             # STEP 3: AI EXTRACTION
-                            await asyncio.to_thread(process_user_message, full_message, user_email)
+                            await process_user_message(full_message, user_email)
 
                             # Mark as vendor verified and processed
                             async with SessionLocal() as db:
@@ -333,7 +333,7 @@ class DeltaEmailService:
                         logger.info(f"   💰 Token savings: Skipping LLM detection until approved")
 
                         # Get full message for metadata
-                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                        full_message = await self.graph_client.get_user_message_by_id(user_email, message['id'])
 
                         # Save minimal email metadata WITHOUT LLM detection or extraction
                         await self._save_flagged_email_metadata(full_message, user_email)
@@ -375,31 +375,31 @@ class DeltaEmailService:
 
                 else:
                     # Verification disabled - run LLM detection and process normally
-                    logger.info(f"   ℹ️  Vendor verification disabled")
+                    logger.info(f"   Vendor verification disabled")
 
                     # STEP 2: LLM DETECTION
-                    logger.info(f"   🤖 Running LLM price change detection...")
-                    detection_result = self.is_price_change_email(user_email, message)
+                    logger.info(f"   Running LLM price change detection...")
+                    detection_result = await self.is_price_change_email(user_email, message)
 
                     if detection_result.get("meets_threshold", False):
                         confidence = detection_result.get("confidence", 0.0)
                         reasoning = detection_result.get("reasoning", "N/A")
-                        logger.info(f"   ✅ PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
-                        logger.info(f"   💡 Reasoning: {reasoning}")
+                        logger.info(f"   PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
+                        logger.info(f"   Reasoning: {reasoning}")
 
                         # Get full message details
-                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                        full_message = await self.graph_client.get_user_message_by_id(user_email, message['id'])
 
                         # STEP 3: AI EXTRACTION
-                        await asyncio.to_thread(process_user_message, full_message, user_email)
+                        await process_user_message(full_message, user_email)
                         processed_count += 1
                     else:
                         # Not a price change email
                         confidence = detection_result.get("confidence", 0.0)
                         reasoning = detection_result.get("reasoning", "N/A")
                         skipped_count += 1
-                        logger.info(f"   ⏭️  Not a price change email - SKIPPED (Confidence: {confidence:.2f})")
-                        logger.info(f"   💡 Reasoning: {reasoning}")
+                        logger.info(f"   Not a price change email - SKIPPED (Confidence: {confidence:.2f})")
+                        logger.info(f"   Reasoning: {reasoning}")
 
                 # Small delay to avoid overwhelming the system
                 await asyncio.sleep(1)
