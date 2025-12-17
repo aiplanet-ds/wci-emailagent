@@ -13,7 +13,7 @@ function App() {
   // Redirect to login if not authenticated
   useEffect(() => {
     if (user && !user.authenticated) {
-      window.location.href = 'http://localhost:8000/login';
+      window.location.href = import.meta.env.VITE_LOGIN_URL || 'http://localhost:8000/login';
     }
   }, [user]);
 
@@ -32,7 +32,7 @@ function App() {
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Not Authenticated</h2>
           <p className="text-gray-600 mb-4">Please log in to continue</p>
           <a
-            href="http://localhost:8000/login"
+            href={import.meta.env.VITE_LOGIN_URL || 'http://localhost:8000/login'}
             className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
           >
             Log In

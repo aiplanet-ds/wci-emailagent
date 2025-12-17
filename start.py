@@ -9,20 +9,25 @@ from auth.multi_graph import graph_client
 from services.delta_service import delta_service
 from services.epicor_service import epicor_service
 from routers import emails, dashboard
+from dotenv import load_dotenv
 import os
 import secrets
 import json
 
+load_dotenv()
+
 app = FastAPI(title="WCI Email Agent API", version="1.0.0")
+
+# Load CORS origins from environment variable (comma-separated)
+cors_origins = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,http://localhost:8000"
+).split(",")
 
 # Add CORS middleware for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Alternative React dev server
-        "http://localhost:8000",  # Same origin
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

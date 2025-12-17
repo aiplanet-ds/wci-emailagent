@@ -1,6 +1,14 @@
 import os
+from dotenv import load_dotenv
 from openai import AzureOpenAI
-client = AzureOpenAI(    api_version="2024-12-01-preview",    azure_endpoint="https://akkodisai.openai.azure.com/",    api_key="CqpbS6BuNg5LEO4vuVq0RCyRMcVFe545bfGRGfu0J9nSJvAHAvS9JQQJ99BIACYeBjFXJ3w3AAABACOGkJU6")
+
+load_dotenv()
+
+client = AzureOpenAI(
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_API_ENDPOINT"),
+    api_key=os.getenv("AZURE_OPENAI_API_KEY")
+)
 try:
         completion = client.chat.completions.create(
             model="gpt-4.1",

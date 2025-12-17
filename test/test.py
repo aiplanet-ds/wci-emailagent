@@ -1,15 +1,17 @@
 import openai
 import os
+from dotenv import load_dotenv
 
-# Set your Azure OpenAI API key and endpoint
-# It's recommended to load these from environment variables for security
-openai.api_key = "CqpbS6BuNg5LEO4vuVq0RCyRMcVFe545bfGRGfu0J9nSJvAHAvS9JQQJ99BIACYeBjFXJ3w3AAABACOGkJU6" 
-openai.api_base = "https://akkodisai.openai.azure.com/" 
+load_dotenv()
+
+# Load Azure OpenAI configuration from environment variables
+openai.api_key = os.getenv("AZURE_OPENAI_API_KEY")
+openai.api_base = os.getenv("AZURE_OPENAI_API_ENDPOINT")
 openai.api_type = "azure"
-openai.api_version = "2024-12-01-preview"
+openai.api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 
 # Set your deployment name
-deployment_name = "gpt-4.1" # Replace with your actual deployment name
+deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1")
 
 try:
     response = client.chat.completions.create(
