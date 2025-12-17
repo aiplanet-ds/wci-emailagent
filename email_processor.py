@@ -35,8 +35,8 @@ async def _process_single_product_bom(
     Returns a dict with the result or error information.
     """
     part_num = product.get("product_id", "")
-    old_price = product.get("old_price", 0)
-    new_price = product.get("new_price", 0)
+    old_price = product.get("old_price") or 0
+    new_price = product.get("new_price") or 0
 
     if not part_num:
         logger.warning(f"   Product {idx}: Missing product_id, skipping")
