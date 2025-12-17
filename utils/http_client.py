@@ -45,7 +45,9 @@ class HTTPClientManager:
                         max_connections=20,
                         keepalive_expiry=30.0
                     ),
-                    http2=True
+                    # HTTP/2 disabled - requires optional 'h2' package
+                    # HTTP/1.1 is sufficient for Epicor API calls
+                    http2=False
                 )
                 logger.info("Epicor HTTP client initialized with connection pooling")
             return cls._epicor_client

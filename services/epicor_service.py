@@ -67,7 +67,9 @@ class EpicorAPIService:
         }
 
         # Get valid Bearer token (automatically refreshes if expired)
-        bearer_token = await epicor_auth.get_valid_token_async()
+        # Uses get_valid_token() which works without DB session (in-memory cache)
+        # The token is initialized with DB on app startup, then cached in memory
+        bearer_token = await epicor_auth.get_valid_token()
 
         if bearer_token:
             headers["Authorization"] = f"Bearer {bearer_token}"

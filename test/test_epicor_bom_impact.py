@@ -96,9 +96,9 @@ def epicor():
 
 
 @pytest.fixture(scope="module")
-def connection_verified(epicor):
+async def connection_verified(epicor):
     """Verify Epicor connection before running tests"""
-    result = epicor.test_connection()
+    result = await epicor.test_connection()
     if result["status"] != "success":
         pytest.skip(f"Epicor connection failed: {result.get('message')}")
     return True
@@ -111,7 +111,7 @@ def connection_verified(epicor):
 class TestEpicorConnection:
     """Test Epicor API connectivity"""
 
-    def test_connection(self, epicor):
+    async def test_connection(self, epicor):
         """
         Test basic connection to Epicor API.
         This should pass before any other tests can run.
@@ -120,7 +120,7 @@ class TestEpicorConnection:
         print("🔌 Testing Epicor API Connection")
         print("="*80)
 
-        result = epicor.test_connection()
+        result = await epicor.test_connection()
 
         print(f"   Status: {result['status']}")
         print(f"   Message: {result['message']}")
@@ -137,7 +137,7 @@ class TestGetPartWhereUsed:
     """Tests for the get_part_where_used() method - finds direct parent assemblies"""
 
     @pytest.mark.integration
-    def test_get_part_where_used_with_valid_component(self, epicor, connection_verified):
+    async def test_get_part_where_used_with_valid_component(self, epicor, connection_verified):
         """
         Test finding direct parent assemblies for a component that IS used in assemblies.
 
@@ -151,7 +151,7 @@ class TestGetPartWhereUsed:
         part_num = TEST_DATA["COMPONENT_PART"]
         print(f"   Component Part: {part_num}")
 
-        result = epicor.get_part_where_used(part_num)
+        result = await epicor.get_part_where_used(part_num)
 
         print(f"\n   Result Type: {type(result)}")
         print(f"   Parent Assemblies Found: {len(result) if result else 0}")
@@ -179,7 +179,7 @@ class TestGetPartWhereUsed:
             pytest.skip(f"No parent assemblies found for test part {part_num}")
 
     @pytest.mark.integration
-    def test_get_part_where_used_with_top_level_part(self, epicor, connection_verified):
+    async def test_get_part_where_used_with_top_level_part(self, epicor, connection_verified):
         """
         Test finding parent assemblies for a top-level part (finished good).
 
@@ -192,7 +192,7 @@ class TestGetPartWhereUsed:
         part_num = TEST_DATA["TOP_LEVEL_PART"]
         print(f"   Top-Level Part: {part_num}")
 
-        result = epicor.get_part_where_used(part_num)
+        result = await epicor.get_part_where_used(part_num)
 
         print(f"\n   Parent Assemblies Found: {len(result) if result else 0}")
 
@@ -201,7 +201,7 @@ class TestGetPartWhereUsed:
         print(f"   ✅ Test passed: Top-level part returns {'empty list' if len(result) == 0 else f'{len(result)} parents'}")
 
     @pytest.mark.integration
-    def test_get_part_where_used_with_nonexistent_part(self, epicor, connection_verified):
+    async def test_get_part_where_used_with_nonexistent_part(self, epicor, connection_verified):
         """
         Test handling of non-existent part number.
 
@@ -214,7 +214,7 @@ class TestGetPartWhereUsed:
         part_num = "NONEXISTENT-PART-XYZ-999"
         print(f"   Part (should not exist): {part_num}")
 
-        result = epicor.get_part_where_used(part_num)
+        result = await epicor.get_part_where_used(part_num)
 
         print(f"\n   Result: {result}")
 
@@ -232,7 +232,7 @@ class TestFindAllAffectedAssemblies:
     """Tests for find_all_affected_assemblies() - recursive multi-level BOM implosion"""
 
     @pytest.mark.integration
-    def test_find_all_affected_assemblies_basic(self, epicor, connection_verified):
+    async def test_find_all_affected_assemblies_basic(self, epicor, connection_verified):
         """
         Test recursive BOM traversal to find all affected assemblies.
 
@@ -247,7 +247,7 @@ class TestFindAllAffectedAssemblies:
         part_num = TEST_DATA["MULTI_LEVEL_COMPONENT"]
         print(f"   Component Part: {part_num}")
 
-        result = epicor.find_all_affected_assemblies(part_num)
+        result = await epicor.find_all_affected_assemblies(part_num)
 
         print(f"\n   Total Affected Assemblies: {len(result) if result else 0}")
 
@@ -290,7 +290,7 @@ class TestFindAllAffectedAssemblies:
             pytest.skip(f"No affected assemblies found for {part_num}")
 
     @pytest.mark.integration
-    def test_find_all_affected_assemblies_max_levels(self, epicor, connection_verified):
+    async def test_find_all_affected_assemblies_max_levels(self, epicor, connection_verified):
         """
         Test that max_levels parameter limits traversal depth.
         """
@@ -301,10 +301,10 @@ class TestFindAllAffectedAssemblies:
         part_num = TEST_DATA["MULTI_LEVEL_COMPONENT"]
 
         # Test with max_levels=1 (direct parents only)
-        result_1_level = epicor.find_all_affected_assemblies(part_num, max_levels=1)
+        result_1_level = await epicor.find_all_affected_assemblies(part_num, max_levels=1)
 
         # Test with max_levels=10 (deep traversal)
-        result_10_levels = epicor.find_all_affected_assemblies(part_num, max_levels=10)
+        result_10_levels = await epicor.find_all_affected_assemblies(part_num, max_levels=10)
 
         print(f"   Results with max_levels=1:  {len(result_1_level) if result_1_level else 0} assemblies")
         print(f"   Results with max_levels=10: {len(result_10_levels) if result_10_levels else 0} assemblies")
@@ -330,7 +330,7 @@ class TestCalculateAssemblyCostImpact:
     """Tests for calculate_assembly_cost_impact() - cost impact per assembly"""
 
     @pytest.mark.integration
-    def test_calculate_assembly_cost_impact_basic(self, epicor, connection_verified):
+    async def test_calculate_assembly_cost_impact_basic(self, epicor, connection_verified):
         """
         Test basic cost impact calculation for a price change.
 
@@ -348,7 +348,7 @@ class TestCalculateAssemblyCostImpact:
         print(f"   Price Delta: ${price_delta:.4f}")
         print(f"   Qty Per Assembly: {qty_per}")
 
-        result = epicor.calculate_assembly_cost_impact(
+        result = await epicor.calculate_assembly_cost_impact(
             component_price_delta=price_delta,
             qty_per_assembly=qty_per,
             assembly_part_num=assembly_part
@@ -385,7 +385,7 @@ class TestGetPartForecast:
     """Tests for get_part_forecast() - retrieving forecast/demand data from Epicor"""
 
     @pytest.mark.integration
-    def test_get_part_forecast_basic(self, epicor, connection_verified):
+    async def test_get_part_forecast_basic(self, epicor, connection_verified):
         """
         Test retrieving forecast data for a part.
 
@@ -400,7 +400,7 @@ class TestGetPartForecast:
 
         print(f"   Part Number: {part_num}")
 
-        result = epicor.get_part_forecast(part_num)
+        result = await epicor.get_part_forecast(part_num)
 
         print(f"\n   Result:")
         print(f"      Total Forecast Qty: {result.get('total_forecast_qty', 0)}")
@@ -426,7 +426,7 @@ class TestCalculateAnnualImpact:
     """Tests for calculate_annual_impact() - annual financial impact estimation"""
 
     @pytest.mark.integration
-    def test_calculate_annual_impact_with_override(self, epicor, connection_verified):
+    async def test_calculate_annual_impact_with_override(self, epicor, connection_verified):
         """
         Test annual impact calculation with weekly demand overrides.
 
@@ -440,7 +440,7 @@ class TestCalculateAnnualImpact:
         price_delta = TEST_DATA["NEW_PRICE"] - TEST_DATA["OLD_PRICE"]
 
         # First, get affected assemblies
-        affected = epicor.find_all_affected_assemblies(part_num)
+        affected = await epicor.find_all_affected_assemblies(part_num)
 
         if not affected:
             pytest.skip(f"No affected assemblies found for {part_num}")
@@ -454,7 +454,7 @@ class TestCalculateAnnualImpact:
         print(f"   Affected Assemblies: {len(affected)}")
         print(f"   Weekly Demand Override: {weekly_demand_override}")
 
-        result = epicor.calculate_annual_impact(
+        result = await epicor.calculate_annual_impact(
             price_delta=price_delta,
             affected_assemblies=affected,
             weekly_demand_override=weekly_demand_override
@@ -479,7 +479,7 @@ class TestCalculateAnnualImpact:
         print(f"\n   ✅ Test passed: Annual impact calculated")
 
     @pytest.mark.integration
-    def test_calculate_annual_impact_with_forecast(self, epicor, connection_verified):
+    async def test_calculate_annual_impact_with_forecast(self, epicor, connection_verified):
         """
         Test annual impact calculation using Epicor forecast data.
 
@@ -494,7 +494,7 @@ class TestCalculateAnnualImpact:
         price_delta = TEST_DATA["NEW_PRICE"] - TEST_DATA["OLD_PRICE"]
 
         # First, get affected assemblies
-        affected = epicor.find_all_affected_assemblies(part_num)
+        affected = await epicor.find_all_affected_assemblies(part_num)
 
         if not affected:
             pytest.skip(f"No affected assemblies found for {part_num}")
@@ -503,7 +503,7 @@ class TestCalculateAnnualImpact:
         print(f"   Affected Assemblies: {len(affected)}")
         print(f"   Using Epicor Forecast: True")
 
-        result = epicor.calculate_annual_impact(
+        result = await epicor.calculate_annual_impact(
             price_delta=price_delta,
             affected_assemblies=affected,
             use_forecast=True  # Automatically fetch forecast data
@@ -541,7 +541,7 @@ class TestCheckMarginErosion:
     """Tests for check_margin_erosion() - margin erosion risk flagging"""
 
     @pytest.mark.integration
-    def test_check_margin_erosion_basic(self, epicor, connection_verified):
+    async def test_check_margin_erosion_basic(self, epicor, connection_verified):
         """
         Test margin erosion check for an assembly with a cost increase.
 
@@ -558,7 +558,7 @@ class TestCheckMarginErosion:
         print(f"   Assembly Part: {assembly_part}")
         print(f"   Cost Increase: ${cost_increase:.2f}")
 
-        result = epicor.check_margin_erosion(
+        result = await epicor.check_margin_erosion(
             assembly_part_num=assembly_part,
             cost_increase=cost_increase
         )
@@ -586,7 +586,7 @@ class TestCheckMarginErosion:
             print(f"\n   ⚠️ Error checking margin: {result.get('error')}")
 
     @pytest.mark.integration
-    def test_check_margin_erosion_with_custom_thresholds(self, epicor, connection_verified):
+    async def test_check_margin_erosion_with_custom_thresholds(self, epicor, connection_verified):
         """
         Test margin erosion check with custom thresholds.
         """
@@ -608,7 +608,7 @@ class TestCheckMarginErosion:
         print(f"   Cost Increase: ${cost_increase:.2f}")
         print(f"   Custom Thresholds: {custom_thresholds}")
 
-        result = epicor.check_margin_erosion(
+        result = await epicor.check_margin_erosion(
             assembly_part_num=assembly_part,
             cost_increase=cost_increase,
             margin_thresholds=custom_thresholds
@@ -634,7 +634,7 @@ class TestAnalyzePriceChangeImpact:
     """Tests for analyze_price_change_impact() - the comprehensive analysis method"""
 
     @pytest.mark.integration
-    def test_analyze_price_change_impact_full(self, epicor, connection_verified):
+    async def test_analyze_price_change_impact_full(self, epicor, connection_verified):
         """
         Test the comprehensive BOM impact analysis for a price change.
 
@@ -661,7 +661,7 @@ class TestAnalyzePriceChangeImpact:
         print(f"   New Price: ${new_price:.2f}")
         print(f"   Price Change: ${new_price - old_price:.2f} ({((new_price - old_price) / old_price * 100):.1f}%)")
 
-        result = epicor.analyze_price_change_impact(
+        result = await epicor.analyze_price_change_impact(
             part_num=part_num,
             old_price=old_price,
             new_price=new_price,
@@ -726,7 +726,7 @@ class TestAnalyzePriceChangeImpact:
         print("="*80)
 
     @pytest.mark.integration
-    def test_analyze_price_change_impact_no_affected_assemblies(self, epicor, connection_verified):
+    async def test_analyze_price_change_impact_no_affected_assemblies(self, epicor, connection_verified):
         """
         Test comprehensive analysis for a part with no affected assemblies.
 
@@ -740,7 +740,7 @@ class TestAnalyzePriceChangeImpact:
 
         print(f"   Part (should have no parents): {part_num}")
 
-        result = epicor.analyze_price_change_impact(
+        result = await epicor.analyze_price_change_impact(
             part_num=part_num,
             old_price=100.00,
             new_price=110.00
@@ -762,7 +762,7 @@ class TestAnalyzePriceChangeImpact:
 # MAIN - Run tests manually (outside pytest)
 # =============================================================================
 
-def main():
+async def main():
     """
     Run BOM impact analysis tests manually.
     Use this for quick testing without pytest framework.
@@ -775,7 +775,7 @@ def main():
 
     # Check connection first
     print("\n🔌 Testing Epicor connection...")
-    connection = epicor_service.test_connection()
+    connection = await epicor_service.test_connection()
 
     if connection["status"] != "success":
         print(f"❌ Connection failed: {connection.get('message')}")
@@ -792,20 +792,20 @@ def main():
     # Test 1: get_part_where_used
     print("\n📋 Test 1: get_part_where_used()")
     part = TEST_DATA["COMPONENT_PART"]
-    result = epicor_service.get_part_where_used(part)
+    result = await epicor_service.get_part_where_used(part)
     print(f"   Part: {part}")
     print(f"   Direct Parents Found: {len(result) if result else 0}")
 
     # Test 2: find_all_affected_assemblies
     print("\n📋 Test 2: find_all_affected_assemblies()")
-    result = epicor_service.find_all_affected_assemblies(part)
+    result = await epicor_service.find_all_affected_assemblies(part)
     print(f"   Part: {part}")
     print(f"   All Affected Assemblies: {len(result) if result else 0}")
 
     # Test 3: Full analysis
     if result:
         print("\n📋 Test 3: analyze_price_change_impact()")
-        analysis = epicor_service.analyze_price_change_impact(
+        analysis = await epicor_service.analyze_price_change_impact(
             part_num=part,
             old_price=TEST_DATA["OLD_PRICE"],
             new_price=TEST_DATA["NEW_PRICE"]
@@ -824,4 +824,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
