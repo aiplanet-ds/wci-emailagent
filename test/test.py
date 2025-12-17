@@ -1,6 +1,10 @@
 import openai
 import os
+import logging
 from dotenv import load_dotenv
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -19,11 +23,11 @@ try:
         prompt="Hello, how are you?",
         max_tokens=20
     )
-    print("API key and endpoint are valid!")
-    print(response.choices[0].text)
+    logger.info("API key and endpoint are valid!")
+    logger.info(response.choices[0].text)
 except openai.error.AuthenticationError as e:
-    print(f"Authentication Error: Your API key or endpoint might be invalid. Details: {e}")
+    logger.error(f"Authentication Error: Your API key or endpoint might be invalid. Details: {e}")
 except openai.error.APIError as e:
-    print(f"API Error: An issue occurred with the API call. Details: {e}")
+    logger.error(f"API Error: An issue occurred with the API call. Details: {e}")
 except Exception as e:
-    print(f"An unexpected error occurred: {e}")
+    logger.error(f"An unexpected error occurred: {e}")

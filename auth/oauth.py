@@ -1,9 +1,13 @@
 import os
 import json
 import atexit
+import logging
 from typing import Optional, Dict, Any
 from msal import ConfidentialClientApplication, SerializableTokenCache
 from dotenv import load_dotenv
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -38,11 +42,11 @@ class MultiUserAuth:
                     with open(cache_file, "r") as f:
                         cache_data = f.read()
                         cache.deserialize(cache_data)
-                    print(f"✅ Loaded token cache for {user_email} from {cache_file}")
+                    logger.info(f"Loaded token cache for {user_email} from {cache_file}")
                 except Exception as e:
-                    print(f"❌ Failed to load cache for {user_email}: {e}")
+                    logger.error(f"Failed to load cache for {user_email}: {e}")
             else:
-                print(f"⚠️ No existing cache file for {user_email}")
+                logger.warning(f"No existing cache file for {user_email}")
 
             self.user_caches[user_email] = cache
 
@@ -58,9 +62,9 @@ class MultiUserAuth:
             try:
                 with open(cache_file, "w") as f:
                     f.write(cache.serialize())
-                print(f"✅ Saved token cache for {user_email} to {cache_file}")
+                logger.info(f"Saved token cache for {user_email} to {cache_file}")
             except Exception as e:
-                print(f"❌ Failed to save cache for {user_email}: {e}")
+                logger.error(f"Failed to save cache for {user_email}: {e}")
     
     def save_all_caches(self):
         """Save all user caches"""
@@ -113,10 +117,10 @@ class MultiUserAuth:
         )
         
         if "access_token" in result:
-            print(f"✅ Got access token from authorization code")
-            print(f"   Token: {result['access_token'][:50]}...")
-            print(f"   Expires in: {result.get('expires_in')} seconds")
-            print(f"   Has refresh token: {bool(result.get('refresh_token'))}")
+            logger.info("Got access token from authorization code")
+            logger.debug(f"   Token: {result['access_token'][:50]}...")
+            logger.debug(f"   Expires in: {result.get('expires_in')} seconds")
+            logger.debug(f"   Has refresh token: {bool(result.get('refresh_token'))}")
 
             # Decode token to check scopes
             try:
@@ -129,10 +133,10 @@ class MultiUserAuth:
                     payload += '=' * (4 - len(payload) % 4)
                     decoded = base64.b64decode(payload)
                     token_data = json.loads(decoded)
-                    print(f"   Token scopes: {token_data.get('scp', 'N/A')}")
-                    print(f"   Token audience: {token_data.get('aud', 'N/A')}")
+                    logger.debug(f"   Token scopes: {token_data.get('scp', 'N/A')}")
+                    logger.debug(f"   Token audience: {token_data.get('aud', 'N/A')}")
             except Exception as e:
-                print(f"   Could not decode token: {e}")
+                logger.debug(f"   Could not decode token: {e}")
 
             # Get user info from the token
             import requests
@@ -229,9 +233,9 @@ class MultiUserAuth:
                         "expires_at": time.time() + result.get("expires_in", 3600)
                     }
 
-                    print(f"✅ Token exchange successful for {user_email}")
-                    print(f"   Cache file should be at: {self.get_user_cache_file(user_email)}")
-                    print(f"   Token stored in memory for immediate use")
+                    logger.info(f"Token exchange successful for {user_email}")
+                    logger.debug(f"   Cache file should be at: {self.get_user_cache_file(user_email)}")
+                    logger.debug("   Token stored in memory for immediate use")
                     result["user_email"] = user_email
                     result["user_info"] = user_info
         
@@ -245,49 +249,49 @@ class MultiUserAuth:
             if user_email in self.user_tokens:
                 token_data = self.user_tokens[user_email]
                 if time.time() < token_data["expires_at"] - 300:  # 5 min buffer
-                    print(f"✅ Using in-memory token for {user_email}")
+                    logger.debug(f"Using in-memory token for {user_email}")
                     return token_data["access_token"]
                 else:
-                    print(f"⚠️ In-memory token expired for {user_email}")
+                    logger.warning(f"In-memory token expired for {user_email}")
 
             app = self.get_user_app(user_email)
 
             # Try to get accounts for this user
             accounts = app.get_accounts()
 
-            print(f"🔍 Checking token for {user_email}, found {len(accounts)} accounts")
+            logger.debug(f"Checking token for {user_email}, found {len(accounts)} accounts")
 
             # Find account matching the user email
             user_account = None
             for account in accounts:
                 account_username = account.get("username", "")
-                print(f"   Account: {account_username}")
+                logger.debug(f"   Account: {account_username}")
                 if account_username.lower() == user_email.lower():
                     user_account = account
                     break
 
             if user_account:
-                print(f"✅ Found matching account for {user_email}")
+                logger.debug(f"Found matching account for {user_email}")
                 # Try silent token acquisition
                 result = app.acquire_token_silent(SCOPES, account=user_account)
 
                 if result and "access_token" in result:
-                    print(f"✅ Successfully got token for {user_email}")
-                    print(f"   Token: {result['access_token'][:50]}...")
-                    print(f"   Expires in: {result.get('expires_in')} seconds")
+                    logger.info(f"Successfully got token for {user_email}")
+                    logger.debug(f"   Token: {result['access_token'][:50]}...")
+                    logger.debug(f"   Expires in: {result.get('expires_in')} seconds")
                     self.save_user_cache(user_email)
                     return result["access_token"]
                 else:
                     error = result.get("error") if result else "No result"
                     error_desc = result.get("error_description") if result else ""
-                    print(f"❌ Token acquisition failed for {user_email}: {error} - {error_desc}")
+                    logger.error(f"Token acquisition failed for {user_email}: {error} - {error_desc}")
             else:
-                print(f"⚠️ No matching account found for {user_email}")
+                logger.warning(f"No matching account found for {user_email}")
 
             return None
 
         except Exception as e:
-            print(f"❌ Exception getting token for {user_email}: {e}")
+            logger.error(f"Exception getting token for {user_email}: {e}")
             return None
     
     def is_user_authenticated(self, user_email: str) -> bool:
@@ -295,7 +299,7 @@ class MultiUserAuth:
         # First check if user has a cache file (they've logged in before)
         cache_file = self.get_user_cache_file(user_email)
         if not os.path.exists(cache_file):
-            print(f"⚠️ No cache file for {user_email}")
+            logger.warning(f"No cache file for {user_email}")
             return False
 
         # Try to get a valid token

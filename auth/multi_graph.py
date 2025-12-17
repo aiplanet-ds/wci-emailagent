@@ -1,6 +1,10 @@
 import requests
+import logging
 from typing import List, Dict, Any, Optional
 from auth.oauth import multi_auth
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -13,7 +17,7 @@ class MultiUserGraphClient:
         token = self.auth.get_user_token(user_email)
         if not token:
             raise ValueError(f"No valid token for user {user_email}")
-        print(f"🔑 Using token for {user_email}: {token[:50]}...")
+        logger.debug(f"Using token for {user_email}: {token[:50]}...")
         return {"Authorization": f"Bearer {token}"}
     
     def get_user_messages(self, user_email: str, top: int = 10) -> List[Dict[str, Any]]:
@@ -25,14 +29,14 @@ class MultiUserGraphClient:
             "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex,isReply"
         }
 
-        print(f"📧 Fetching messages for {user_email}")
-        print(f"   URL: {url}")
+        logger.debug(f"Fetching messages for {user_email}")
+        logger.debug(f"   URL: {url}")
 
         response = requests.get(url, headers=headers, params=params)
 
         if response.status_code != 200:
-            print(f"❌ Graph API error: {response.status_code}")
-            print(f"   Response: {response.text[:500]}")
+            logger.error(f"Graph API error: {response.status_code}")
+            logger.error(f"   Response: {response.text[:500]}")
 
         response.raise_for_status()
         return response.json().get("value", [])

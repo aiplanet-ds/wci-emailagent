@@ -1,6 +1,10 @@
 import os
+import logging
 from dotenv import load_dotenv
 from openai import AzureOpenAI
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -17,6 +21,6 @@ try:
             ],
             max_tokens=100
         )
-        print(completion.choices[0].message.content)
+        logger.info(completion.choices[0].message.content)
 except Exception as e:
-    print(f"An error occurred: {e}")
+    logger.error(f"An error occurred: {e}")

@@ -13,6 +13,10 @@ from dotenv import load_dotenv
 import os
 import secrets
 import json
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -149,18 +153,18 @@ async def auth_callback(request: Request, code: str = None, state: str = None, e
         
         # Add user to delta monitoring for automated email processing
         try:
-            print("\n" + "="*80)
-            print(f"[AUTH] USER AUTHENTICATED: {user_email}")
-            print("="*80)
+            logger.info("=" * 80)
+            logger.info(f"[AUTH] USER AUTHENTICATED: {user_email}")
+            logger.info("=" * 80)
             await delta_service.add_user_to_monitoring(user_email)
-            print(f"[OK] User added to automated monitoring")
-            print(f"[ACTIVE] Automated workflow ACTIVATED:")
-            print(f"   [1] Email detection (every 60 seconds)")
-            print(f"   [2] Azure OpenAI extraction")
-            print(f"   [3] Epicor ERP price update")
-            print("="*80 + "\n")
+            logger.info("User added to automated monitoring")
+            logger.info("Automated workflow ACTIVATED:")
+            logger.info("   [1] Email detection (every 60 seconds)")
+            logger.info("   [2] Azure OpenAI extraction")
+            logger.info("   [3] Epicor ERP price update")
+            logger.info("=" * 80)
         except Exception as e:
-            print(f"[WARN] WARNING: Could not add user to monitoring: {e}")
+            logger.warning(f"Could not add user to monitoring: {e}")
 
         return RedirectResponse(url="/success", status_code=302)
         
@@ -192,15 +196,15 @@ async def logout(request: Request):
     # Remove user from automated monitoring
     if user_email:
         try:
-            print("\n" + "="*80)
-            print(f"[LOGOUT] USER LOGOUT: {user_email}")
-            print("="*80)
+            logger.info("=" * 80)
+            logger.info(f"[LOGOUT] USER LOGOUT: {user_email}")
+            logger.info("=" * 80)
             await delta_service.remove_user_from_monitoring(user_email)
-            print(f"[OK] User removed from automated monitoring")
-            print(f"[STOP] Automated workflow DEACTIVATED for this user")
-            print("="*80 + "\n")
+            logger.info("User removed from automated monitoring")
+            logger.info("Automated workflow DEACTIVATED for this user")
+            logger.info("=" * 80)
         except Exception as e:
-            print(f"[ERROR] ERROR removing user from monitoring: {e}")
+            logger.error(f"Error removing user from monitoring: {e}")
 
     # Clear session
     request.session.clear()
@@ -211,12 +215,12 @@ async def logout(request: Request):
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and start the delta service when the application starts"""
-    print("\n" + "="*80)
-    print("[STARTUP] EMAIL INTELLIGENCE SYSTEM - AUTOMATED MODE")
-    print("="*80)
+    logger.info("=" * 80)
+    logger.info("[STARTUP] EMAIL INTELLIGENCE SYSTEM - AUTOMATED MODE")
+    logger.info("=" * 80)
 
     # Database initialization
-    print("[DB] Initializing database connection...")
+    logger.info("[DB] Initializing database connection...")
     try:
         from database.config import init_db, engine
         from sqlalchemy import text
@@ -224,21 +228,21 @@ async def startup_event():
         # Test database connection
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        print("[OK] Database connection successful")
+        logger.info("Database connection successful")
 
         # Ensure all tables exist
-        print("[DB] Creating/verifying database tables...")
+        logger.info("[DB] Creating/verifying database tables...")
         await init_db()
-        print("[OK] Database tables ready")
+        logger.info("Database tables ready")
 
     except Exception as e:
-        print(f"[ERROR] Database initialization failed: {e}")
-        print("[ERROR] Application cannot start without database")
-        print("[ERROR] Please ensure PostgreSQL is running and DATABASE_URL is correct")
+        logger.error(f"Database initialization failed: {e}")
+        logger.error("Application cannot start without database")
+        logger.error("Please ensure PostgreSQL is running and DATABASE_URL is correct")
         raise
 
     # Initialize Epicor OAuth token
-    print("[EPICOR] Initializing Epicor OAuth token...")
+    logger.info("[EPICOR] Initializing Epicor OAuth token...")
     try:
         from services.epicor_auth import epicor_auth
         from database.config import get_db
@@ -246,44 +250,44 @@ async def startup_event():
         async for db in get_db():
             token_initialized = await epicor_auth.initialize_token_async(db)
             if token_initialized:
-                print("[OK] Epicor OAuth token initialized and stored in database")
+                logger.info("Epicor OAuth token initialized and stored in database")
             else:
-                print("[WARN] Epicor OAuth token initialization failed - API calls may fail")
+                logger.warning("Epicor OAuth token initialization failed - API calls may fail")
             break
     except Exception as e:
-        print(f"[WARN] Epicor OAuth initialization error: {e}")
-        print("[WARN] Epicor API calls may fail until token is obtained")
+        logger.warning(f"Epicor OAuth initialization error: {e}")
+        logger.warning("Epicor API calls may fail until token is obtained")
 
     # Configuration and service startup
-    print("[CONFIG] Configuration:")
-    print("   [POLL] Polling Interval: 60 seconds (1 minute)")
-    print("   [AI] AI Engine: Azure OpenAI")
-    print("   [ERP] ERP Integration: Epicor REST API v2")
-    print("   [AUTH] Authentication: Microsoft OAuth 2.0")
-    print("-"*80)
-    print("[START] Starting automated email monitoring service...")
+    logger.info("[CONFIG] Configuration:")
+    logger.info("   Polling Interval: 60 seconds (1 minute)")
+    logger.info("   AI Engine: Azure OpenAI")
+    logger.info("   ERP Integration: Epicor REST API v2")
+    logger.info("   Authentication: Microsoft OAuth 2.0")
+    logger.info("-" * 80)
+    logger.info("Starting automated email monitoring service...")
     delta_service.start_polling()
-    print("[OK] Automated monitoring service ACTIVE")
-    print("="*80)
-    print("[WEB] Web Interface: http://localhost:8000")
-    print("[INFO] Users must login to enable automated processing")
-    print("="*80 + "\n")
+    logger.info("Automated monitoring service ACTIVE")
+    logger.info("=" * 80)
+    logger.info("Web Interface: http://localhost:8000")
+    logger.info("Users must login to enable automated processing")
+    logger.info("=" * 80)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Stop the delta service when the application shuts down"""
-    print("\n" + "="*80)
-    print("[SHUTDOWN] SHUTTING DOWN EMAIL INTELLIGENCE SYSTEM")
-    print("="*80)
+    logger.info("=" * 80)
+    logger.info("[SHUTDOWN] SHUTTING DOWN EMAIL INTELLIGENCE SYSTEM")
+    logger.info("=" * 80)
     delta_service.stop_polling()
-    print("[OK] Automated monitoring service stopped")
-    print("="*80 + "\n")
+    logger.info("Automated monitoring service stopped")
+    logger.info("=" * 80)
 
 # Run the server when executed directly
 if __name__ == "__main__":
     import uvicorn
-    print("[START] Starting Email Intelligence System...")
-    print("[WEB] Access the web interface at: http://localhost:8000")
-    print("[AUTH] OAuth authentication required")
-    print("[POLL] Delta query polling for email monitoring")
+    logger.info("Starting Email Intelligence System...")
+    logger.info("Access the web interface at: http://localhost:8000")
+    logger.info("OAuth authentication required")
+    logger.info("Delta query polling for email monitoring")
     uvicorn.run("start:app", host="0.0.0.0", port=8000, reload=True)

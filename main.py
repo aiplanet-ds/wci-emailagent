@@ -40,7 +40,7 @@ def _process_single_product_bom(
     new_price = product.get("new_price", 0)
 
     if not part_num:
-        logger.warning(f"   ⚠️  Product {idx}: Missing product_id, skipping")
+        logger.warning(f"   Product {idx}: Missing product_id, skipping")
         return {
             "idx": idx,
             "part_num": part_num,
@@ -48,7 +48,7 @@ def _process_single_product_bom(
             "result": None
         }
 
-    logger.info(f"   🔄 Starting Product {idx + 1}/{total_products}: {part_num} (${old_price:.4f} → ${new_price:.4f})")
+    logger.info(f"   Starting Product {idx + 1}/{total_products}: {part_num} (${old_price:.4f} -> ${new_price:.4f})")
 
     try:
         # Run the BOM impact analysis (synchronous Epicor API call)
@@ -67,9 +67,9 @@ def _process_single_product_bom(
         total_assemblies = summary.get("total_assemblies_affected", 0)
         risk_summary = summary.get("risk_summary", {})
 
-        logger.info(f"   ✅ Product {idx + 1}/{total_products} ({part_num}): {status}, {total_assemblies} assemblies")
+        logger.info(f"   Product {idx + 1}/{total_products} ({part_num}): {status}, {total_assemblies} assemblies")
         if risk_summary and (risk_summary.get('critical', 0) > 0 or risk_summary.get('high', 0) > 0):
-            logger.info(f"      ⚠️  Risk: Critical={risk_summary.get('critical', 0)}, High={risk_summary.get('high', 0)}")
+            logger.warning(f"      Risk: Critical={risk_summary.get('critical', 0)}, High={risk_summary.get('high', 0)}")
 
         return {
             "idx": idx,
@@ -80,7 +80,7 @@ def _process_single_product_bom(
         }
 
     except Exception as e:
-        logger.error(f"   ❌ Product {idx + 1}/{total_products} ({part_num}): Error - {e}")
+        logger.error(f"   Product {idx + 1}/{total_products} ({part_num}): Error - {e}")
         # Return error result
         error_result = {
             "status": "error",
@@ -122,15 +122,15 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
 
     affected_products = extraction_result.get("affected_products", [])
     if not affected_products:
-        logger.info("   ℹ️  No affected products to analyze for BOM impact")
+        logger.info("   No affected products to analyze for BOM impact")
         return
 
     supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
     effective_date = extraction_result.get("price_change_summary", {}).get("effective_date")
     total_products = len(affected_products)
 
-    logger.info(f"\n📊 STAGE 3: BOM IMPACT ANALYSIS (CONCURRENT)")
-    logger.info("-"*80)
+    logger.info("STAGE 3: BOM IMPACT ANALYSIS (CONCURRENT)")
+    logger.info("-" * 80)
     logger.info(f"   Analyzing {total_products} product(s) for BOM impact...")
     logger.info(f"   Using {MAX_WORKERS} concurrent workers")
 
@@ -138,7 +138,7 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
         epicor_service = EpicorService()
 
         # Run concurrent BOM analysis in thread pool
-        logger.info(f"\n   🚀 Starting concurrent BOM analysis...")
+        logger.info("   Starting concurrent BOM analysis...")
 
         results = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -163,10 +163,10 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
                 try:
                     result = future.result()
                     results.append(result)
-                    logger.info(f"   📊 Progress: {completed}/{total_products} products processed")
+                    logger.info(f"   Progress: {completed}/{total_products} products processed")
                 except Exception as e:
                     idx = future_to_idx[future]
-                    logger.error(f"   ❌ Unexpected error for product {idx}: {e}")
+                    logger.error(f"   Unexpected error for product {idx}: {e}")
                     # Create error result for unexpected failures
                     product = affected_products[idx]
                     results.append({
@@ -191,7 +191,7 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
                     })
 
         # Store results in database (async context)
-        logger.info(f"\n   💾 Storing {len(results)} results in database...")
+        logger.info(f"   Storing {len(results)} results in database...")
 
         async with SessionLocal() as db:
             # Delete any existing BOM impact results for this email (for re-processing)
@@ -221,12 +221,12 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
 
             await db.commit()
 
-        logger.info(f"\n   ✅ BOM Impact Analysis Complete")
+        logger.info("   BOM Impact Analysis Complete")
         logger.info(f"      Success: {success_count}, Errors: {error_count}, Skipped: {skipped_count}")
-        logger.info("="*80)
+        logger.info("=" * 80)
 
     except Exception as e:
-        logger.error(f"   ❌ BOM Impact Analysis failed: {e}")
+        logger.error(f"   BOM Impact Analysis failed: {e}")
 
 
 def process_user_message(msg, user_email, skip_verification=False):
@@ -254,15 +254,15 @@ def process_user_message(msg, user_email, skip_verification=False):
     # Extract thread information from the message
     thread_info = extract_thread_info(msg)
 
-    print("\n" + "="*80)
-    print(f"🚀 EMAIL INTELLIGENCE SYSTEM - 3-STAGE WORKFLOW")
-    print("="*80)
-    print(f"📧 Processing email for: {user_email}")
-    print(f"📌 Subject: {subject}")
-    print(f"👤 From: {sender}")
-    print(f"📅 Date: {date_received}")
-    print(f"🆔 Message ID: {message_id[:20]}...")
-    print("="*80)
+    logger.info("=" * 80)
+    logger.info("EMAIL INTELLIGENCE SYSTEM - 3-STAGE WORKFLOW")
+    logger.info("=" * 80)
+    logger.info(f"Processing email for: {user_email}")
+    logger.info(f"Subject: {subject}")
+    logger.info(f"From: {sender}")
+    logger.info(f"Date: {date_received}")
+    logger.info(f"Message ID: {message_id[:20]}...")
+    logger.info("=" * 80)
     
     # Prepare metadata
     email_metadata = {
@@ -276,15 +276,15 @@ def process_user_message(msg, user_email, skip_verification=False):
     }
     
     # ========== STAGE 1: EMAIL DETECTION ==========
-    print("\n📬 STAGE 1: EMAIL DETECTION")
-    print("-"*80)
+    logger.info("STAGE 1: EMAIL DETECTION")
+    logger.info("-" * 80)
 
     # Process attachments with user-specific download directory
     attachment_paths = []
     has_attachments = msg.get("hasAttachments", False)
 
     if has_attachments:
-        print("📎 Processing attachments...")
+        logger.info("Processing attachments...")
         # Import here to avoid circular import issues
         from auth.multi_graph import graph_client
         attachments = graph_client.get_user_message_attachments(user_email, message_id)
@@ -292,7 +292,7 @@ def process_user_message(msg, user_email, skip_verification=False):
         for att in attachments:
             if att.get("@odata.type", "").endswith("fileAttachment"):
                 filename = att.get("name", "unknown")
-                print(f"   ✅ Attachment: {filename}")
+                logger.info(f"   Attachment: {filename}")
 
                 # Save to user-specific directory
                 att_copy = att.copy()
@@ -307,17 +307,17 @@ def process_user_message(msg, user_email, skip_verification=False):
     if body_data:
         email_body = body_data.get("content", "")
 
-    print(f"✅ Stage 1 Complete: Content extracted")
-    print(f"   📝 Body length: {len(email_body)} characters")
-    print(f"   📎 Attachments: {len(attachment_paths)}")
-    print("="*80)
+    logger.info("Stage 1 Complete: Content extracted")
+    logger.info(f"   Body length: {len(email_body)} characters")
+    logger.info(f"   Attachments: {len(attachment_paths)}")
+    logger.info("=" * 80)
     
     # Process all content (email body + attachments)
     combined_content = process_all_content(email_body, attachment_paths)
 
     if not combined_content.strip():
-        print("   ⚠️  No content to process")
-        print("="*80 + "\n")
+        logger.warning("   No content to process")
+        logger.info("=" * 80)
         return
 
     # ========== PRE-STAGE 2: VENDOR VERIFICATION CHECK ==========
@@ -337,25 +337,25 @@ def process_user_message(msg, user_email, skip_verification=False):
         state = loop.run_until_complete(check_verification_status())
 
         if state and state.verification_status == 'pending_review':
-            print("\n⚠️  EMAIL FLAGGED FOR VERIFICATION")
-            print("-"*80)
-            print("   This email is from an unverified sender")
-            print("   AI extraction skipped to save tokens")
-            print("   📋 Review this email in the dashboard 'Pending Verification' tab")
-            print("   ✅ Approve to trigger AI extraction")
-            print("="*80 + "\n")
+            logger.warning("EMAIL FLAGGED FOR VERIFICATION")
+            logger.info("-" * 80)
+            logger.info("   This email is from an unverified sender")
+            logger.info("   AI extraction skipped to save tokens")
+            logger.info("   Review this email in the dashboard 'Pending Verification' tab")
+            logger.info("   Approve to trigger AI extraction")
+            logger.info("=" * 80)
             return
 
     # ========== STAGE 2: AI ENTITY EXTRACTION ==========
-    print("\n🤖 STAGE 2: AI ENTITY EXTRACTION")
-    print("-"*80)
-    print("🔄 Azure OpenAI GPT-4.1 Processing...")
-    print("   Extracting parallel entities:")
-    print("   • Supplier ID")
-    print("   • Part Name & Number")
-    print("   • Effective Date")
-    print("   • New Price")
-    print("   • Reason for Change")
+    logger.info("STAGE 2: AI ENTITY EXTRACTION")
+    logger.info("-" * 80)
+    logger.info("Azure OpenAI GPT-4.1 Processing...")
+    logger.info("   Extracting parallel entities:")
+    logger.info("   - Supplier ID")
+    logger.info("   - Part Name & Number")
+    logger.info("   - Effective Date")
+    logger.info("   - New Price")
+    logger.info("   - Reason for Change")
 
     try:
         # Note: Email has already been validated as price change by LLM detector in delta_service
@@ -431,14 +431,13 @@ def process_user_message(msg, user_email, skip_verification=False):
 
         email_id = loop.run_until_complete(save_to_database())
 
-        print(f"✅ Stage 2 Complete: Data extracted successfully")
-        print(f"   💾 Saved to: {output_filename}")
-        print(f"   💾 Saved to database")
+        logger.info("Stage 2 Complete: Data extracted successfully")
+        logger.info("   Saved to database")
 
         # Print summary of extracted data
-        print("\n📋 Extracted Data Summary:")
+        logger.info("Extracted Data Summary:")
         print_extraction_summary(result)
-        print("="*80)
+        logger.info("=" * 80)
 
         # ========== STAGE 3: BOM IMPACT ANALYSIS (Background) ==========
         # Run BOM impact analysis for all products in the email
@@ -450,18 +449,18 @@ def process_user_message(msg, user_email, skip_verification=False):
                     supplier_info=result.get("supplier_info")
                 ))
             except Exception as e:
-                print(f"   ⚠️  BOM Impact Analysis error (non-blocking): {e}")
+                logger.warning(f"   BOM Impact Analysis error (non-blocking): {e}")
 
         # Note: Epicor sync will happen when user clicks "Process" button in the UI
-        print("\n💼 Email extracted and ready for processing")
-        print("   ℹ️  Epicor sync will occur when you click 'Mark as Processed' in the dashboard")
-        print("="*80)
-        print("✅ EMAIL PROCESSING COMPLETE")
-        print("="*80 + "\n")
+        logger.info("Email extracted and ready for processing")
+        logger.info("   Epicor sync will occur when you click 'Mark as Processed' in the dashboard")
+        logger.info("=" * 80)
+        logger.info("EMAIL PROCESSING COMPLETE")
+        logger.info("=" * 80)
 
     except Exception as e:
-        print(f"\n❌ ERROR PROCESSING EMAIL: {e}")
-        print("="*80 + "\n")
+        logger.error(f"ERROR PROCESSING EMAIL: {e}")
+        logger.info("=" * 80)
 
 def save_user_attachment(attachment, user_downloads_dir):
     """Save email attachment to user-specific downloads directory"""
@@ -485,10 +484,10 @@ def save_user_attachment(attachment, user_downloads_dir):
         with open(path, "wb") as f:
             f.write(decoded_content)
         
-        print(f"✅ Saved user attachment: {filename}")
+        logger.info(f"Saved user attachment: {filename}")
         return path
     except Exception as e:
-        print(f"❌ Error saving user attachment {filename}: {e}")
+        logger.error(f"Error saving user attachment {filename}: {e}")
         return None
 
 def process_message_with_locks(message_id):
@@ -496,8 +495,8 @@ def process_message_with_locks(message_id):
     Legacy function - now replaced by delta service
     Use process_user_message() instead with proper user context
     """
-    print(f"⚠️  process_message_with_locks is legacy - use delta service instead")
-    print(f"   Message {message_id} should be processed via web interface")
+    logger.warning("process_message_with_locks is legacy - use delta service instead")
+    logger.warning(f"   Message {message_id} should be processed via web interface")
     return False
 
 def process_message(msg):
@@ -505,21 +504,21 @@ def process_message(msg):
     Legacy function - now replaced by process_user_message() with user context
     This function is deprecated and should not be used in the delta service system
     """
-    print("⚠️  process_message() is legacy - use process_user_message() instead")
-    print("   Modern email processing requires user context for proper data isolation")
-    
+    logger.warning("process_message() is legacy - use process_user_message() instead")
+    logger.warning("   Modern email processing requires user context for proper data isolation")
+
     # Extract basic info for logging
     subject = msg.get("subject", "(no subject)")
     message_id = msg.get("id", "")
-    print(f"   📧 Legacy processing attempted for: {subject} (ID: {message_id})")
-    print("   ➡️  Use the web interface with delta service for proper processing")
-    
+    logger.warning(f"   Legacy processing attempted for: {subject} (ID: {message_id})")
+    logger.warning("   Use the web interface with delta service for proper processing")
+
     return False
 
 def print_extraction_summary(data):
     """Print a summary of the extracted price change data"""
     if "error" in data:
-        print(f"   ❌ Extraction error: {data['error']}")
+        logger.error(f"   Extraction error: {data['error']}")
         return
 
     # Supplier info
@@ -528,9 +527,9 @@ def print_extraction_summary(data):
     supplier_name = supplier_info.get("supplier_name")
 
     if supplier_id:
-        print(f"   🏢 Supplier ID: {supplier_id}")
+        logger.info(f"   Supplier ID: {supplier_id}")
     if supplier_name:
-        print(f"   🏢 Supplier Name: {supplier_name}")
+        logger.info(f"   Supplier Name: {supplier_name}")
 
     # Price change details (check both locations for backward compatibility)
     change_details = data.get("price_change_details", {})
@@ -538,51 +537,51 @@ def print_extraction_summary(data):
 
     change_type = change_details.get("change_type") or price_change_summary.get("change_type")
     effective_date = change_details.get("effective_date") or price_change_summary.get("effective_date")
-    
+
     if change_type:
-        print(f"   📈 Change Type: {change_type}")
+        logger.info(f"   Change Type: {change_type}")
     if effective_date:
-        print(f"   📅 Effective Date: {effective_date}")
-    
+        logger.info(f"   Effective Date: {effective_date}")
+
     # Products affected
     products = data.get("affected_products", [])
     if products:
-        print(f"   📦 Products Affected: {len(products)}")
+        logger.info(f"   Products Affected: {len(products)}")
         for i, product in enumerate(products[:3]):  # Show first 3 products
             name = product.get("product_name", "Unknown")
             old_price = product.get("old_price", "N/A")
             new_price = product.get("new_price", "N/A")
-            print(f"      {i+1}. {name}: {old_price} → {new_price}")
-        
+            logger.info(f"      {i+1}. {name}: {old_price} -> {new_price}")
+
         if len(products) > 3:
-            print(f"      ... and {len(products) - 3} more products")
-    
+            logger.info(f"      ... and {len(products) - 3} more products")
+
     # Action required
     action = data.get("action_required", {})
     deadline = action.get("response_deadline")
     if deadline:
-        print(f"   ⏰ Response Deadline: {deadline}")
+        logger.info(f"   Response Deadline: {deadline}")
 
 def main():
     """
     Legacy CLI processing function - now replaced by delta service
-    
+
     For modern usage:
     1. Run: python webhook.py
     2. Visit: http://localhost:8000
     3. Authenticate with Microsoft OAuth
     4. Emails will be automatically processed via delta queries
     """
-    print("🚀 Email Intelligence System")
-    print("=" * 50)
-    print("⚠️  This CLI mode is legacy - use the web interface instead:")
-    print("   1. Run: python webhook.py")
-    print("   2. Visit: http://localhost:8000")
-    print("   3. Authenticate with Microsoft OAuth")
-    print("   4. Emails automatically processed via delta queries every 3 minutes")
-    print("=" * 50)
-    print("✅ For current functionality, use the web interface with delta service")
-    
+    logger.info("Email Intelligence System")
+    logger.info("=" * 50)
+    logger.warning("This CLI mode is legacy - use the web interface instead:")
+    logger.info("   1. Run: python webhook.py")
+    logger.info("   2. Visit: http://localhost:8000")
+    logger.info("   3. Authenticate with Microsoft OAuth")
+    logger.info("   4. Emails automatically processed via delta queries every 3 minutes")
+    logger.info("=" * 50)
+    logger.info("For current functionality, use the web interface with delta service")
+
     return
 
 if __name__ == "__main__":

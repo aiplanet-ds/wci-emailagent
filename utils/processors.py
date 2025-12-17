@@ -1,8 +1,12 @@
 import os, pandas as pd, base64
+import logging
 import pdfplumber
 from docx import Document
 import re
 from typing import List, Dict, Any
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # OCR imports (optional - for scanned/image-based PDFs)
 try:
@@ -11,7 +15,7 @@ try:
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
-    print("⚠️  OCR not available. Install pytesseract and pdf2image for scanned PDF support.")
+    logger.warning("OCR not available. Install pytesseract and pdf2image for scanned PDF support.")
 
 DOWNLOADS_DIR = "downloads"
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
@@ -39,10 +43,10 @@ def save_attachment(attachment):
         with open(path, "wb") as f:
             f.write(decoded_content)
         
-        print(f"✅ Saved attachment: {filename}")
+        logger.info(f"Saved attachment: {filename}")
         return path
     except Exception as e:
-        print(f"❌ Error saving attachment {filename}: {e}")
+        logger.error(f"Error saving attachment {filename}: {e}")
         return None
 
 def _format_table_as_text(table: list) -> str:
@@ -65,11 +69,11 @@ def _extract_text_with_ocr(path: str) -> str:
     Requires: pytesseract, pdf2image, and Tesseract OCR installed.
     """
     if not OCR_AVAILABLE:
-        print("⚠️  OCR libraries not installed. Cannot process scanned PDF.")
+        logger.warning("OCR libraries not installed. Cannot process scanned PDF.")
         return ""
 
     try:
-        print("🔍 Attempting OCR extraction for scanned PDF...")
+        logger.info("Attempting OCR extraction for scanned PDF...")
         extracted_text = []
 
         # Convert PDF pages to images
@@ -86,11 +90,11 @@ def _extract_text_with_ocr(path: str) -> str:
                 extracted_text.append("\n".join(page_content))
 
         full_text = "\n\n".join(extracted_text)
-        print(f"✅ Extracted text from PDF using OCR: {len(full_text)} characters")
+        logger.info(f"Extracted text from PDF using OCR: {len(full_text)} characters")
         return full_text
 
     except Exception as e:
-        print(f"❌ OCR extraction failed: {e}")
+        logger.error(f"OCR extraction failed: {e}")
         return ""
 
 
@@ -154,17 +158,17 @@ def extract_text_from_pdf(path: str) -> str:
                     extracted_text.append("\n".join(page_content))
 
         full_text = "\n\n".join(extracted_text)
-        print(f"✅ Extracted text from PDF using pdfplumber: {len(full_text)} characters")
+        logger.info(f"Extracted text from PDF using pdfplumber: {len(full_text)} characters")
 
         # If pdfplumber extracted no text, try OCR (for scanned/image PDFs)
         if len(full_text.strip()) == 0:
-            print("⚠️  No text extracted with pdfplumber. PDF may be scanned/image-based.")
+            logger.warning("No text extracted with pdfplumber. PDF may be scanned/image-based.")
             full_text = _extract_text_with_ocr(path)
 
         return full_text
 
     except Exception as e:
-        print(f"❌ Error extracting PDF text from {path}: {e}")
+        logger.error(f"Error extracting PDF text from {path}: {e}")
         # Try OCR as last resort
         return _extract_text_with_ocr(path)
 
@@ -187,14 +191,14 @@ def extract_text_from_excel(path: str) -> str:
                     sheet_text += df.to_string(index=False)
                     extracted_data.append(sheet_text)
             except Exception as e:
-                print(f"⚠️  Warning: Could not read sheet '{sheet_name}': {e}")
+                logger.warning(f"Could not read sheet '{sheet_name}': {e}")
                 continue
-        
+
         full_text = "\n\n".join(extracted_data)
-        print(f"✅ Extracted text from Excel: {len(full_text)} characters")
+        logger.info(f"Extracted text from Excel: {len(full_text)} characters")
         return full_text
     except Exception as e:
-        print(f"❌ Error extracting Excel text from {path}: {e}")
+        logger.error(f"Error extracting Excel text from {path}: {e}")
         return ""
 
 def extract_text_from_docx(path: str) -> str:
@@ -217,10 +221,10 @@ def extract_text_from_docx(path: str) -> str:
             extracted_text.append(table_text)
         
         full_text = "\n".join(extracted_text)
-        print(f"✅ Extracted text from Word doc: {len(full_text)} characters")
+        logger.info(f"Extracted text from Word doc: {len(full_text)} characters")
         return full_text
     except Exception as e:
-        print(f"❌ Error extracting Word doc text from {path}: {e}")
+        logger.error(f"Error extracting Word doc text from {path}: {e}")
         return ""
 
 def extract_text_from_txt(path: str) -> str:
@@ -233,21 +237,21 @@ def extract_text_from_txt(path: str) -> str:
             try:
                 with open(path, 'r', encoding=encoding) as f:
                     content = f.read()
-                print(f"✅ Extracted text from TXT file using {encoding}: {len(content)} characters")
+                logger.info(f"Extracted text from TXT file using {encoding}: {len(content)} characters")
                 return content
             except (UnicodeDecodeError, UnicodeError):
                 continue
-        
+
         # If all encodings fail, try binary mode and decode with error handling
         with open(path, 'rb') as f:
             raw_content = f.read()
             content = raw_content.decode('utf-8', errors='replace')
-        
-        print(f"✅ Extracted text from TXT file (with replacement chars): {len(content)} characters")
+
+        logger.info(f"Extracted text from TXT file (with replacement chars): {len(content)} characters")
         return content
-        
+
     except Exception as e:
-        print(f"❌ Error extracting TXT text from {path}: {e}")
+        logger.error(f"Error extracting TXT text from {path}: {e}")
         return ""
 
 def clean_email_body(email_body: str) -> str:
@@ -325,9 +329,9 @@ def process_all_content(email_body: str, attachments_info: List[Dict[str, Any]])
             if txt_text:
                 content_parts.append(txt_text)
         else:
-            print(f"⚠️  Unsupported file type: {filename}")
-    
+            logger.warning(f"Unsupported file type: {filename}")
+
     combined_content = "\n\n".join(content_parts)
-    print(f"✅ Combined content length: {len(combined_content)} characters")
-    
+    logger.info(f"Combined content length: {len(combined_content)} characters")
+
     return combined_content
