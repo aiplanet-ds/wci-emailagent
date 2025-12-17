@@ -15,6 +15,7 @@ Key Features:
 import os
 import json
 import logging
+import asyncio
 from typing import Dict, Any, List
 from openai import AsyncAzureOpenAI
 
@@ -184,28 +185,60 @@ async def llm_is_price_change_email(
 
 async def batch_detect_price_changes(
     emails: List[Dict[str, Any]],
-    confidence_threshold: float = None
+    confidence_threshold: float = None,
+    max_concurrent: int = 5
 ) -> List[Dict[str, Any]]:
     """
-    Detect price changes for multiple emails in batch.
+    Detect price changes for multiple emails concurrently.
+
+    Uses asyncio.gather() with a semaphore to limit concurrent LLM calls,
+    preventing API rate limiting while maximizing throughput.
 
     Args:
         emails: List of dicts with 'content' and 'metadata' keys
         confidence_threshold: Minimum confidence score
+        max_concurrent: Maximum number of concurrent LLM calls (default: 5)
 
     Returns:
         List of detection results in the same order as input
     """
-    results = []
-    for email in emails:
-        result = await llm_is_price_change_email(
-            email.get("content", ""),
-            email.get("metadata", {}),
-            confidence_threshold
-        )
-        results.append(result)
+    if not emails:
+        return []
 
-    return results
+    # Semaphore to limit concurrent LLM calls
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def detect_with_semaphore(email: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrapper to detect with semaphore limiting"""
+        async with semaphore:
+            return await llm_is_price_change_email(
+                email.get("content", ""),
+                email.get("metadata", {}),
+                confidence_threshold
+            )
+
+    # Run all detections concurrently with semaphore limiting
+    results = await asyncio.gather(
+        *[detect_with_semaphore(email) for email in emails],
+        return_exceptions=True
+    )
+
+    # Convert any exceptions to error results
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Error detecting price change for email {i}: {result}")
+            processed_results.append({
+                "is_price_change": False,
+                "confidence": 0.0,
+                "reasoning": f"Error during detection: {str(result)}",
+                "meets_threshold": False,
+                "error": str(result)
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
 
 
 def get_detection_stats(results: List[Dict[str, Any]]) -> Dict[str, Any]:

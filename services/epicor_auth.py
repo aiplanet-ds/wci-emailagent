@@ -47,10 +47,13 @@ class EpicorAuthService:
         self._token_expires_at: float = 0
         self._token_loaded: bool = False
 
+        # Async lock to prevent concurrent token refresh race conditions
+        self._token_lock: Optional[asyncio.Lock] = None
+
         if self.auto_token_enabled:
-            logger.info("✅ Epicor OAuth Service initialized (auto-token enabled with DB storage)")
+            logger.info("Epicor OAuth Service initialized (auto-token enabled with DB storage)")
         else:
-            logger.info("⚠️ Epicor OAuth Service initialized (no credentials configured)")
+            logger.info("Epicor OAuth Service initialized (no credentials configured)")
     
     async def _request_token_with_client_credentials(self) -> Dict[str, Any]:
         """
@@ -305,10 +308,17 @@ class EpicorAuthService:
             logger.error(f"❌ Failed to save token to database: {e}")
             return False
 
+    async def _get_token_lock(self) -> asyncio.Lock:
+        """Get or create the token lock (lazy initialization for async lock)"""
+        if self._token_lock is None:
+            self._token_lock = asyncio.Lock()
+        return self._token_lock
+
     async def get_valid_token_async(self, db) -> Optional[str]:
         """
         Get a valid Bearer token (async version with database support).
         Automatically loads from DB, refreshes if needed.
+        Uses async lock to prevent concurrent token refresh race conditions.
 
         Args:
             db: AsyncSession - database session
@@ -320,32 +330,42 @@ class EpicorAuthService:
             logger.warning("Auto-token disabled - no credentials configured")
             return None
 
-        # Load from database if not already loaded
-        if not self._token_loaded:
-            await self._load_token_from_db(db)
-
-        # Check if token exists and is not expired (with 5 minute buffer)
+        # Check if token exists and is not expired (with 5 minute buffer) - fast path without lock
         if self._access_token and time.time() < (self._token_expires_at - 300):
             return self._access_token
 
-        # Token expired or doesn't exist
-        logger.info("Token expired or missing, obtaining new token...")
+        # Acquire lock for token refresh to prevent race conditions
+        lock = await self._get_token_lock()
+        async with lock:
+            # Double-check after acquiring lock (another coroutine may have refreshed)
+            if self._access_token and time.time() < (self._token_expires_at - 300):
+                return self._access_token
 
-        # Try to refresh if we have a refresh token
-        if self._refresh_token:
-            result = await self._request_refresh_token(self._refresh_token)
+            # Load from database if not already loaded
+            if not self._token_loaded:
+                await self._load_token_from_db(db)
+                # Check again after loading from DB
+                if self._access_token and time.time() < (self._token_expires_at - 300):
+                    return self._access_token
+
+            # Token expired or doesn't exist
+            logger.info("Token expired or missing, obtaining new token...")
+
+            # Try to refresh if we have a refresh token
+            if self._refresh_token:
+                result = await self._request_refresh_token(self._refresh_token)
+                if result["status"] == "success":
+                    await self._save_token_to_db(db, result)
+                    return self._access_token
+
+            # Get new token
+            result = await self._request_new_token()
             if result["status"] == "success":
                 await self._save_token_to_db(db, result)
                 return self._access_token
 
-        # Get new token
-        result = await self._request_new_token()
-        if result["status"] == "success":
-            await self._save_token_to_db(db, result)
-            return self._access_token
-
-        logger.error("Failed to obtain valid token")
-        return None
+            logger.error("Failed to obtain valid token")
+            return None
 
     async def initialize_token_async(self, db) -> bool:
         """

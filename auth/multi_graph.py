@@ -114,7 +114,7 @@ class MultiUserGraphClient:
         try:
             token = self.auth.get_user_token(user_email)
             return token is not None
-        except:
+        except Exception:
             return False
 
 # Global instance
