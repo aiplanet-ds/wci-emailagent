@@ -12,7 +12,6 @@ import {
     Package,
     RefreshCw,
     Shield,
-    TrendingUp,
     XCircle
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -501,17 +500,18 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
           <button
             onClick={() => reanalyzeMutation.mutate(messageId)}
             disabled={reanalyzeMutation.isPending}
-            className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 flex items-center gap-1"
+            className="px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50 flex items-center gap-1.5 border border-gray-200"
           >
-            <RefreshCw className={`h-3 w-3 ${reanalyzeMutation.isPending ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 ${reanalyzeMutation.isPending ? 'animate-spin' : ''}`} />
             Re-analyze
           </button>
           {pendingCount > 0 && (
             <button
               onClick={() => approveAllMutation.mutate({ messageId })}
               disabled={approveAllMutation.isPending}
-              className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-1.5"
             >
+              <CheckCircle className="h-3.5 w-3.5" />
               {approveAllMutation.isPending ? 'Approving...' : `Approve All (${pendingCount})`}
             </button>
           )}
@@ -534,27 +534,43 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
         </div>
       </div>
 
-      {/* Tabs for Verified/Unverified */}
-      <div className="flex border-b border-gray-200">
+      {/* Tabs for Verified/Unverified - cleaner design */}
+      <div className="bg-gray-100 p-1 rounded-lg inline-flex">
         <button
           onClick={() => { setActiveTab('verified'); setCurrentPage(1); }}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
             activeTab === 'verified'
-              ? 'border-blue-500 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'bg-white text-blue-600 shadow-sm'
+              : 'text-gray-600 hover:text-gray-800'
           }`}
         >
-          Verified ({verifiedImpacts.length})
+          <span className="flex items-center gap-2">
+            <CheckCircle className={`h-4 w-4 ${activeTab === 'verified' ? 'text-green-500' : 'text-gray-400'}`} />
+            Verified
+            <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+              activeTab === 'verified' ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600'
+            }`}>
+              {verifiedImpacts.length}
+            </span>
+          </span>
         </button>
         <button
           onClick={() => { setActiveTab('unverified'); setCurrentPage(1); }}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
             activeTab === 'unverified'
-              ? 'border-red-500 text-red-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'bg-white text-red-600 shadow-sm'
+              : 'text-gray-600 hover:text-gray-800'
           }`}
         >
-          Unverified/Failed ({unverifiedImpacts.length})
+          <span className="flex items-center gap-2">
+            <XCircle className={`h-4 w-4 ${activeTab === 'unverified' ? 'text-red-500' : 'text-gray-400'}`} />
+            Unverified
+            <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+              activeTab === 'unverified' ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'
+            }`}>
+              {unverifiedImpacts.length}
+            </span>
+          </span>
         </button>
       </div>
 
@@ -579,91 +595,63 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
       {/* Summary View Card - only show if there are products to display */}
       {displayedImpacts.length > 0 && (
         <>
-          <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
-            <CardContent className="py-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                {/* Total Products */}
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                    <Package className="h-3 w-3" />
-                    Products
-                  </div>
-                  <div className="text-2xl font-bold text-gray-800">{summaryStats.totalProducts}</div>
-                  <div className="text-xs text-gray-500">
-                    {summaryStats.successCount} analyzed
-                    {summaryStats.errorCount > 0 && <span className="text-red-500 ml-1">({summaryStats.errorCount} errors)</span>}
-                  </div>
-                </div>
-
-                {/* Total Assemblies */}
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                    <Layers className="h-3 w-3" />
-                    Assemblies
-                  </div>
-                  <div className="text-2xl font-bold text-gray-800">{summaryStats.totalAssemblies}</div>
-                  <div className="text-xs text-gray-500">affected</div>
-                </div>
-
-                {/* Total Annual Impact */}
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                    <TrendingUp className="h-3 w-3" />
-                    Annual Impact
-                  </div>
-                  <div className="text-2xl font-bold text-blue-600">{formatCurrency(summaryStats.totalAnnualImpact)}</div>
-                  <div className="text-xs text-gray-500">estimated</div>
-                </div>
-
-                {/* Risk Breakdown - Critical/High */}
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-1 text-red-500 text-xs mb-1">
-                    <AlertTriangle className="h-3 w-3" />
-                    Critical/High
-                  </div>
-                  <div className="text-2xl font-bold text-red-600">
-                    {summaryStats.riskCounts.critical + summaryStats.riskCounts.high}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {summaryStats.riskCounts.critical} critical, {summaryStats.riskCounts.high} high
-                  </div>
-                </div>
-
-                {/* Risk Breakdown - Medium/Low */}
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-1 text-yellow-500 text-xs mb-1">
-                    <Shield className="h-3 w-3" />
-                    Medium/Low
-                  </div>
-                  <div className="text-2xl font-bold text-yellow-600">
-                    {summaryStats.riskCounts.medium + summaryStats.riskCounts.low}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {summaryStats.riskCounts.medium} medium, {summaryStats.riskCounts.low} low
-                  </div>
-                </div>
-
-                {/* Approval Status */}
-                <div className="text-center">
-                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                    <CheckCircle className="h-3 w-3" />
-                    Status
-                  </div>
-                  <div className="text-2xl font-bold text-green-600">
-                    {displayedImpacts.filter(i => i.approved).length}/{summaryStats.totalProducts}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {displayedImpacts.filter(i => !isDecided(i) && i.status !== 'error').length > 0
-                      ? `${displayedImpacts.filter(i => !isDecided(i) && i.status !== 'error').length} pending`
-                      : 'all decided'}
-                    {displayedImpacts.filter(i => i.rejected).length > 0 && (
-                      <span className="text-red-500 ml-1">({displayedImpacts.filter(i => i.rejected).length} rejected)</span>
-                    )}
-                  </div>
-                </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {/* Products & Assemblies */}
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                <Package className="h-4 w-4" />
+                Products
               </div>
-            </CardContent>
-          </Card>
+              <div className="text-2xl font-bold text-gray-900">{summaryStats.totalProducts}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {summaryStats.totalAssemblies} assemblies affected
+              </div>
+            </div>
+
+            {/* Annual Impact */}
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                <DollarSign className="h-4 w-4" />
+                Annual Impact
+              </div>
+              <div className="text-2xl font-bold text-blue-600">{formatCurrency(summaryStats.totalAnnualImpact)}</div>
+              <div className="text-xs text-gray-500 mt-1">estimated cost</div>
+            </div>
+
+            {/* Risk */}
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                <AlertTriangle className="h-4 w-4" />
+                Risk Level
+              </div>
+              <div className="flex items-baseline gap-3">
+                <span className="text-2xl font-bold text-red-600">
+                  {summaryStats.riskCounts.critical + summaryStats.riskCounts.high}
+                </span>
+                <span className="text-sm text-gray-500">high</span>
+                <span className="text-lg font-semibold text-yellow-600">
+                  {summaryStats.riskCounts.medium + summaryStats.riskCounts.low}
+                </span>
+                <span className="text-sm text-gray-500">low</span>
+              </div>
+            </div>
+
+            {/* Status */}
+            <div className="bg-white border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                <CheckCircle className="h-4 w-4" />
+                Approval Status
+              </div>
+              <div className="text-2xl font-bold text-green-600">
+                {displayedImpacts.filter(i => i.approved).length}/{summaryStats.totalProducts}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                {displayedImpacts.filter(i => !isDecided(i) && i.status !== 'error').length > 0
+                  ? `${displayedImpacts.filter(i => !isDecided(i) && i.status !== 'error').length} pending approval`
+                  : 'all decided'}
+              </div>
+            </div>
+          </div>
 
           {/* Pagination Info & Controls (Top) */}
           {totalPages > 1 && (
