@@ -1,6 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useIsMutating } from '@tanstack/react-query';
 import { emailApi } from '../services/api';
 import type { EmailFilter, FollowupRequest } from '../types/email';
+import { APPROVE_EMAIL_MUTATION_KEY } from './useVendorVerification';
 
 export function useCurrentUser() {
   return useQuery({
@@ -11,10 +12,12 @@ export function useCurrentUser() {
 }
 
 export function useEmails(filter?: EmailFilter, search?: string) {
+  const isApproveMutating = useIsMutating({ mutationKey: APPROVE_EMAIL_MUTATION_KEY });
+
   return useQuery({
     queryKey: ['emails', filter, search],
     queryFn: () => emailApi.getEmails(filter, search),
-    refetchInterval: 30000, // Refetch every 30 seconds
+    refetchInterval: isApproveMutating > 0 ? false : 30000, // Pause polling during mutation
   });
 }
 

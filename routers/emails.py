@@ -242,6 +242,72 @@ async def list_emails(
     return EmailListResponse(emails=emails, total=len(emails))
 
 
+# ============================================================================
+# STATIC ROUTES (must be defined BEFORE dynamic /{message_id} routes)
+# ============================================================================
+
+@router.get("/pending-verification", response_model=EmailListResponse)
+async def list_pending_verification_emails(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all emails pending vendor verification"""
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get all emails with pending_review verification status from database
+    pending_emails = await get_all_price_change_emails_from_db(
+        db=db,
+        user_id=user.id,
+        filter_type="pending_verification"
+    )
+
+    return EmailListResponse(emails=pending_emails, total=len(pending_emails))
+
+
+@router.get("/vendors/cache-status")
+async def get_vendor_cache_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor cache information"""
+    get_user_from_session(request)  # Verify authentication
+
+    from services.vendor_verification_service import vendor_verification_service
+
+    status = await vendor_verification_service.get_cache_status()
+    return status
+
+
+@router.post("/vendors/refresh-cache")
+async def refresh_vendor_cache(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually refresh vendor cache from Epicor"""
+    get_user_from_session(request)  # Verify authentication
+
+    from services.vendor_verification_service import vendor_verification_service
+
+    try:
+        result = await vendor_verification_service.refresh_cache()
+        cache_status = await vendor_verification_service.get_cache_status()
+        return {
+            "success": True,
+            "message": "Vendor cache refreshed successfully",
+            "cache_status": cache_status
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to refresh vendor cache: {str(e)}"
+        )
+
+
+# ============================================================================
+# DYNAMIC ROUTES (with /{message_id} path parameter)
+# ============================================================================
+
 @router.get("/{message_id}", response_model=EmailDetailResponse)
 async def get_email_detail(
     message_id: str,
@@ -934,25 +1000,6 @@ async def generate_followup(
         )
 
 
-@router.get("/pending-verification", response_model=EmailListResponse)
-async def list_pending_verification_emails(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get all emails pending vendor verification"""
-    user_email = get_user_from_session(request)
-    user = await get_user_from_db(db, user_email)
-
-    # Get all emails with pending_review verification status from database
-    pending_emails = await get_all_price_change_emails_from_db(
-        db=db,
-        user_id=user.id,
-        filter_type="pending_verification"
-    )
-
-    return EmailListResponse(emails=pending_emails, total=len(pending_emails))
-
-
 @router.post("/{message_id}/approve-and-process")
 async def approve_and_process_email(
     message_id: str,
@@ -1432,45 +1479,6 @@ async def reject_email(
     }
 
 
-@router.get("/vendors/cache-status")
-async def get_vendor_cache_status(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get vendor cache information"""
-    get_user_from_session(request)  # Verify authentication
-
-    from services.vendor_verification_service import vendor_verification_service
-
-    status = await vendor_verification_service.get_cache_status()
-    return status
-
-
-@router.post("/vendors/refresh-cache")
-async def refresh_vendor_cache(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """Manually refresh vendor cache from Epicor"""
-    get_user_from_session(request)  # Verify authentication
-
-    from services.vendor_verification_service import vendor_verification_service
-
-    try:
-        result = await vendor_verification_service.refresh_cache()
-        cache_status = await vendor_verification_service.get_cache_status()
-        return {
-            "success": True,
-            "message": "Vendor cache refreshed successfully",
-            "cache_status": cache_status
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to refresh vendor cache: {str(e)}"
-        )
-
-
 # ============================================================================
 # BOM IMPACT ANALYSIS ENDPOINTS
 # ============================================================================
@@ -1513,6 +1521,65 @@ class BomImpactApprovalRequest(BaseModel):
 
 class BomImpactRejectionRequest(BaseModel):
     rejection_reason: Optional[str] = None
+
+
+# Static BOM routes must come before dynamic /{product_index} routes
+@router.post("/{message_id}/bom-impact/approve-all")
+async def approve_all_bom_impacts(
+    message_id: str,
+    approval_request: BomImpactApprovalRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Approve all products in an email for Epicor sync.
+
+    This is a convenience endpoint to approve all products at once.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    if not impacts:
+        raise HTTPException(
+            status_code=404,
+            detail="No BOM impact results found for this email"
+        )
+
+    approved_count = 0
+    already_approved = 0
+
+    for impact in impacts:
+        if impact.approved:
+            already_approved += 1
+            continue
+
+        await BomImpactService.approve(
+            db,
+            impact_id=impact.id,
+            approved_by_id=user.id,
+            approval_notes=approval_request.approval_notes
+        )
+        approved_count += 1
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Approved {approved_count} product(s) for Epicor sync",
+        "approved_count": approved_count,
+        "already_approved": already_approved,
+        "total_products": len(impacts)
+    }
 
 
 @router.post("/{message_id}/bom-impact/{product_index}/approve")
@@ -1634,64 +1701,6 @@ async def reject_bom_impact(
         "success": True,
         "message": f"Product {target_impact.part_num} rejected - will not sync to Epicor",
         "impact": BomImpactService.to_dict(rejected_impact)
-    }
-
-
-@router.post("/{message_id}/bom-impact/approve-all")
-async def approve_all_bom_impacts(
-    message_id: str,
-    approval_request: BomImpactApprovalRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Approve all products in an email for Epicor sync.
-
-    This is a convenience endpoint to approve all products at once.
-    """
-    from database.services.bom_impact_service import BomImpactService
-
-    user_email = get_user_from_session(request)
-    user = await get_user_from_db(db, user_email)
-
-    # Get email and verify access
-    email = await get_email_from_db(db, message_id)
-    if email.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Get BOM impact results for this email
-    impacts = await BomImpactService.get_by_email_id(db, email.id)
-
-    if not impacts:
-        raise HTTPException(
-            status_code=404,
-            detail="No BOM impact results found for this email"
-        )
-
-    approved_count = 0
-    already_approved = 0
-
-    for impact in impacts:
-        if impact.approved:
-            already_approved += 1
-            continue
-
-        await BomImpactService.approve(
-            db,
-            impact_id=impact.id,
-            approved_by_id=user.id,
-            approval_notes=approval_request.approval_notes
-        )
-        approved_count += 1
-
-    await db.commit()
-
-    return {
-        "success": True,
-        "message": f"Approved {approved_count} product(s) for Epicor sync",
-        "approved_count": approved_count,
-        "already_approved": already_approved,
-        "total_products": len(impacts)
     }
 
 

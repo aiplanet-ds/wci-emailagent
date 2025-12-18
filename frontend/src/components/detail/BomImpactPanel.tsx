@@ -312,11 +312,16 @@ function ProductBomImpact({
 
 // Main BomImpactPanel component
 export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
+  // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
+  // (React Rules of Hooks - hooks must be called in the same order every render)
   const { data, isLoading, error, refetch } = useBomImpact(messageId);
   const approveMutation = useApproveBomImpact();
   const rejectMutation = useRejectBomImpact();
   const approveAllMutation = useApproveAllBomImpacts();
   const reanalyzeMutation = useReanalyzeBomImpact();
+
+  // Pagination state - MUST be before any early returns
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Debug: Log BOM impact data
   console.log('BomImpactPanel - messageId:', messageId, 'data:', data, 'isLoading:', isLoading, 'error:', error);
@@ -385,9 +390,6 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
       </Card>
     );
   }
-
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(1);
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {

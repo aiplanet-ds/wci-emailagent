@@ -55,13 +55,13 @@ class VendorVerificationService:
             logger.error(f"Error checking cache staleness: {e}")
             return True
 
-    def fetch_vendors_from_epicor(self) -> List[Dict[str, Any]]:
+    async def fetch_vendors_from_epicor(self) -> List[Dict[str, Any]]:
         """Fetch vendor emails from Epicor VendorSvc"""
         try:
             from services.epicor_service import EpicorAPIService
 
             epicor_service = EpicorAPIService()
-            vendors = epicor_service.get_all_vendor_emails()
+            vendors = await epicor_service.get_all_vendor_emails()
 
             logger.info(f"✅ Fetched {len(vendors)} vendors from Epicor")
             return vendors
@@ -74,7 +74,7 @@ class VendorVerificationService:
         """Build verified vendor cache in database from Epicor data"""
         logger.info("🔄 Building vendor verification cache from Epicor...")
 
-        vendors = self.fetch_vendors_from_epicor()
+        vendors = await self.fetch_vendors_from_epicor()
 
         if not vendors:
             logger.warning("⚠️ No vendors fetched from Epicor - database will be empty")
