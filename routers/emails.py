@@ -1114,73 +1114,202 @@ async def approve_and_process_email(
 
             await db.commit()
 
-            # ========== BOM IMPACT ANALYSIS ==========
-            # Run BOM impact analysis for all products after AI extraction
+            # ========== EPICOR VALIDATION (PRE-BOM CHECK) ==========
+            # Run validation to check part exists, supplier exists, and supplier-part relationship
             affected_products = result.get("affected_products", [])
             supplier_info = result.get("supplier_info", {})
             supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
 
-            if affected_products:
-                print(f"\n📊 Running BOM Impact Analysis for {len(affected_products)} products...")
+            validation_results = None
+            if affected_products and supplier_id:
+                print(f"\n🔍 Running Epicor Validation for {len(affected_products)} products...")
                 try:
                     epicor_service = EpicorAPIService()
 
-                    for idx, product in enumerate(affected_products):
-                        part_num = product.get("product_code") or product.get("part_number", "")
-                        old_price = product.get("old_price", 0)
-                        new_price = product.get("new_price", 0)
+                    validation_results = {
+                        "all_products_valid": True,
+                        "any_product_can_proceed": False,
+                        "product_validations": [],
+                        "summary": {
+                            "total_products": len(affected_products),
+                            "parts_validated": 0,
+                            "suppliers_validated": 0,
+                            "supplier_parts_validated": 0,
+                            "products_blocked": 0
+                        }
+                    }
 
+                    for idx, product in enumerate(affected_products):
+                        part_num = product.get("product_id") or product.get("product_code") or product.get("part_number", "")
                         if not part_num:
-                            print(f"   ⚠️ Product {idx + 1}: No part number, skipping")
+                            print(f"   ⚠️ Product {idx + 1}: No part number, skipping validation")
+                            validation_results["product_validations"].append({
+                                "idx": idx,
+                                "part_num": "",
+                                "validation_result": {
+                                    "all_valid": False,
+                                    "part_validated": False,
+                                    "supplier_validated": False,
+                                    "supplier_part_validated": False,
+                                    "validation_errors": ["Missing product_id"],
+                                    "can_proceed_with_bom_analysis": False
+                                }
+                            })
+                            validation_results["summary"]["products_blocked"] += 1
+                            validation_results["all_products_valid"] = False
                             continue
 
-                        print(f"   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
+                        print(f"   🔍 Validating Product {idx + 1}/{len(affected_products)}: {part_num}")
 
-                        try:
-                            # Run the BOM impact analysis (async)
-                            impact_result = await epicor_service.process_supplier_price_change(
-                                part_num=part_num,
-                                supplier_id=supplier_id,
-                                old_price=float(old_price) if old_price else 0,
-                                new_price=float(new_price) if new_price else 0,
-                                effective_date=result.get("price_change_summary", {}).get("effective_date"),
-                                email_metadata=None
-                            )
+                        # Run validation for this product
+                        validation = await epicor_service.validate_supplier_part_for_email(
+                            part_num=part_num,
+                            supplier_id=supplier_id
+                        )
 
-                            # Store the result in database
-                            await BomImpactService.create(
-                                db,
-                                email_id=email.id,
-                                product_index=idx,
-                                impact_data=impact_result
-                            )
+                        validation_results["product_validations"].append({
+                            "idx": idx,
+                            "part_num": part_num,
+                            "validation_result": validation
+                        })
 
-                            # Log summary
-                            status = impact_result.get("status", "unknown")
-                            summary = impact_result.get("bom_impact", {}).get("summary", {})
-                            total_assemblies = summary.get("total_assemblies_affected", 0)
-                            print(f"      ✅ Analysis: {status}, {total_assemblies} assemblies affected")
+                        # Update summary counts
+                        if validation.get("part_validated"):
+                            validation_results["summary"]["parts_validated"] += 1
+                        if validation.get("supplier_validated"):
+                            validation_results["summary"]["suppliers_validated"] += 1
+                        if validation.get("supplier_part_validated"):
+                            validation_results["summary"]["supplier_parts_validated"] += 1
 
-                        except Exception as e:
-                            print(f"      ❌ Error analyzing {part_num}: {e}")
-                            # Store error result
-                            error_result = {
-                                "status": "error",
-                                "processing_errors": [str(e)],
-                                "component": {"part_num": part_num, "validated": False},
-                                "supplier": {"supplier_id": supplier_id, "validated": False},
-                                "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
-                                "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
-                                "actions_required": [],
-                                "can_auto_approve": False
-                            }
-                            await BomImpactService.create(db, email_id=email.id, product_index=idx, impact_data=error_result)
+                        if not validation.get("all_valid"):
+                            validation_results["all_products_valid"] = False
+                            if not validation.get("can_proceed_with_bom_analysis"):
+                                validation_results["summary"]["products_blocked"] += 1
 
+                        if validation.get("can_proceed_with_bom_analysis"):
+                            validation_results["any_product_can_proceed"] = True
+
+                    # Store validation results in email state
+                    await EmailStateService.update_state(
+                        db=db,
+                        message_id=message_id,
+                        epicor_validation_performed=True,
+                        epicor_validation_result={
+                            "all_products_valid": validation_results["all_products_valid"],
+                            "summary": validation_results["summary"],
+                            "product_validations": [
+                                {
+                                    "idx": pv["idx"],
+                                    "part_num": pv["part_num"],
+                                    "all_valid": pv["validation_result"].get("all_valid"),
+                                    "part_validated": pv["validation_result"].get("part_validated"),
+                                    "supplier_validated": pv["validation_result"].get("supplier_validated"),
+                                    "supplier_part_validated": pv["validation_result"].get("supplier_part_validated"),
+                                    "validation_errors": pv["validation_result"].get("validation_errors", [])
+                                }
+                                for pv in validation_results["product_validations"]
+                            ]
+                        }
+                    )
                     await db.commit()
-                    print(f"   ✅ BOM Impact Analysis Complete")
+
+                    print(f"   ✅ Epicor Validation Complete")
+                    print(f"      Parts validated: {validation_results['summary']['parts_validated']}/{len(affected_products)}")
+                    print(f"      Supplier-Part links: {validation_results['summary']['supplier_parts_validated']}/{len(affected_products)}")
 
                 except Exception as e:
-                    print(f"   ⚠️ BOM Impact Analysis error (non-blocking): {e}")
+                    print(f"   ⚠️ Epicor Validation error (non-blocking): {e}")
+                    validation_results = None
+
+            # ========== BOM IMPACT ANALYSIS ==========
+            # Run BOM impact analysis for products that passed validation
+            if affected_products:
+                # Check if we should proceed with BOM analysis
+                should_proceed = True
+                if validation_results:
+                    should_proceed = validation_results.get("any_product_can_proceed", False)
+                    if not should_proceed:
+                        print(f"   ⚠️ Skipping BOM analysis - all products failed Epicor validation")
+
+                if should_proceed:
+                    print(f"\n📊 Running BOM Impact Analysis for {len(affected_products)} products...")
+                    try:
+                        if not epicor_service:
+                            epicor_service = EpicorAPIService()
+
+                        for idx, product in enumerate(affected_products):
+                            part_num = product.get("product_id") or product.get("product_code") or product.get("part_number", "")
+                            old_price = product.get("old_price", 0)
+                            new_price = product.get("new_price", 0)
+
+                            if not part_num:
+                                print(f"   ⚠️ Product {idx + 1}: No part number, skipping")
+                                continue
+
+                            print(f"   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
+
+                            try:
+                                # Run the BOM impact analysis (async)
+                                impact_result = await epicor_service.process_supplier_price_change(
+                                    part_num=part_num,
+                                    supplier_id=supplier_id,
+                                    old_price=float(old_price) if old_price else 0,
+                                    new_price=float(new_price) if new_price else 0,
+                                    effective_date=result.get("price_change_summary", {}).get("effective_date"),
+                                    email_metadata=None
+                                )
+
+                                # Enrich with validation data if available
+                                if validation_results:
+                                    for pv in validation_results.get("product_validations", []):
+                                        if pv["idx"] == idx:
+                                            vr = pv.get("validation_result", {})
+                                            impact_result["supplier_part_validated"] = vr.get("supplier_part_validated", False)
+                                            impact_result["supplier_part_validation_error"] = vr.get("supplier_part_error")
+                                            break
+
+                                # Store the result in database
+                                await BomImpactService.create(
+                                    db,
+                                    email_id=email.id,
+                                    product_index=idx,
+                                    impact_data=impact_result
+                                )
+
+                                # Log summary
+                                status = impact_result.get("status", "unknown")
+                                summary = impact_result.get("bom_impact", {}).get("summary", {})
+                                total_assemblies = summary.get("total_assemblies_affected", 0)
+                                print(f"      ✅ Analysis: {status}, {total_assemblies} assemblies affected")
+
+                            except Exception as e:
+                                print(f"      ❌ Error analyzing {part_num}: {e}")
+                                # Store error result with validation data
+                                error_result = {
+                                    "status": "error",
+                                    "processing_errors": [str(e)],
+                                    "component": {"part_num": part_num, "validated": False},
+                                    "supplier": {"supplier_id": supplier_id, "validated": False},
+                                    "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
+                                    "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                                    "actions_required": [],
+                                    "can_auto_approve": False
+                                }
+                                # Add validation data if available
+                                if validation_results:
+                                    for pv in validation_results.get("product_validations", []):
+                                        if pv["idx"] == idx:
+                                            vr = pv.get("validation_result", {})
+                                            error_result["supplier_part_validated"] = vr.get("supplier_part_validated", False)
+                                            error_result["supplier_part_validation_error"] = vr.get("supplier_part_error")
+                                            break
+                                await BomImpactService.create(db, email_id=email.id, product_index=idx, impact_data=error_result)
+
+                        await db.commit()
+                        print(f"   ✅ BOM Impact Analysis Complete")
+
+                    except Exception as e:
+                        print(f"   ⚠️ BOM Impact Analysis error (non-blocking): {e}")
 
             # Reload email data from database
             await db.refresh(email)

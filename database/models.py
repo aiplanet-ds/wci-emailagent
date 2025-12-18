@@ -175,6 +175,10 @@ class EmailState(Base):
     epicor_synced_at = Column(DateTime)
     epicor_sync_attempts = Column(Integer, default=0)
 
+    # Epicor pre-sync validation (part/supplier/supplier-part relationship checks)
+    epicor_validation_performed = Column(Boolean, default=False)
+    epicor_validation_result = Column(JSONB)  # Stores validation summary for all products
+
     # Follow-up
     needs_info = Column(Boolean, default=False)
     selected_missing_fields = Column(JSONB, default=[])
@@ -344,6 +348,10 @@ class BomImpactResult(Base):
     supplier_validated = Column(Boolean, default=False)
     supplier_name = Column(String(255))
     vendor_num = Column(Integer)
+
+    # Supplier-Part relationship validation (checks if supplier is authorized to supply this part)
+    supplier_part_validated = Column(Boolean, default=False)
+    supplier_part_validation_error = Column(Text)  # Error message if validation fails
 
     # BOM impact summary (JSONB for flexibility)
     summary = Column(JSONB)  # total_assemblies, risk_summary, annual_impact, etc.

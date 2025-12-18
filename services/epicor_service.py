@@ -1172,6 +1172,175 @@ class EpicorAPIService:
             else:
                 return "ℹ️ No assemblies affected by this price change."
 
+    async def validate_supplier_part_for_email(
+        self,
+        part_num: str,
+        supplier_id: str
+    ) -> Dict[str, Any]:
+        """
+        Perform comprehensive Epicor validation for a supplier-part combination.
+
+        This runs all three validations in sequence:
+        1. Check if the part exists in Epicor
+        2. Check if the supplier exists in Epicor
+        3. Check if the supplier-part relationship exists (supplier is authorized to supply this part)
+
+        Args:
+            part_num: Part number from the email
+            supplier_id: Supplier ID from the email
+
+        Returns:
+            Dictionary with validation results:
+            {
+                "all_valid": bool,
+                "part_validated": bool,
+                "part_data": dict or None,
+                "part_error": str or None,
+                "supplier_validated": bool,
+                "supplier_data": dict or None,
+                "supplier_error": str or None,
+                "supplier_part_validated": bool,
+                "supplier_part_data": dict or None,
+                "supplier_part_error": str or None,
+                "validation_errors": list of error messages,
+                "can_proceed_with_bom_analysis": bool
+            }
+        """
+        logger.info("="*80)
+        logger.info("EPICOR VALIDATION - PRE-BOM ANALYSIS CHECK")
+        logger.info("="*80)
+        logger.info(f"   Part: {part_num}")
+        logger.info(f"   Supplier: {supplier_id}")
+
+        result = {
+            "all_valid": False,
+            "part_validated": False,
+            "part_data": None,
+            "part_error": None,
+            "supplier_validated": False,
+            "supplier_data": None,
+            "supplier_error": None,
+            "supplier_part_validated": False,
+            "supplier_part_data": None,
+            "supplier_part_error": None,
+            "validation_errors": [],
+            "can_proceed_with_bom_analysis": False
+        }
+
+        # Step 1: Validate part exists in Epicor
+        logger.info("-"*80)
+        logger.info("Step 1: Checking if part exists in Epicor...")
+        try:
+            part_data = await self.get_part(part_num)
+            if part_data:
+                result["part_validated"] = True
+                result["part_data"] = {
+                    "part_num": part_num,
+                    "description": part_data.get("PartDescription", ""),
+                    "type_code": part_data.get("TypeCode", ""),
+                    "uom": part_data.get("IUM", ""),
+                    "current_cost": part_data.get("StdCost") or part_data.get("AvgMaterialCost", 0)
+                }
+                logger.info(f"   ✅ Part validated: {part_num}")
+                logger.info(f"      Description: {result['part_data']['description']}")
+            else:
+                result["part_error"] = f"Part {part_num} not found in Epicor"
+                result["validation_errors"].append(result["part_error"])
+                logger.warning(f"   ❌ Part not found: {part_num}")
+        except Exception as e:
+            result["part_error"] = f"Error validating part: {str(e)}"
+            result["validation_errors"].append(result["part_error"])
+            logger.error(f"   ❌ Error validating part: {e}")
+
+        # Step 2: Validate supplier exists in Epicor
+        logger.info("-"*80)
+        logger.info("Step 2: Checking if supplier exists in Epicor...")
+        try:
+            vendor_data = await self.get_vendor_by_id(supplier_id)
+            if vendor_data:
+                result["supplier_validated"] = True
+                result["supplier_data"] = {
+                    "supplier_id": supplier_id,
+                    "vendor_num": vendor_data.get("VendorNum"),
+                    "name": vendor_data.get("Name", ""),
+                    "active": vendor_data.get("Inactive", True) is False  # Epicor uses Inactive flag
+                }
+                logger.info(f"   ✅ Supplier validated: {supplier_id}")
+                logger.info(f"      Name: {result['supplier_data']['name']}")
+                logger.info(f"      VendorNum: {result['supplier_data']['vendor_num']}")
+            else:
+                result["supplier_error"] = f"Supplier {supplier_id} not found in Epicor"
+                result["validation_errors"].append(result["supplier_error"])
+                logger.warning(f"   ❌ Supplier not found: {supplier_id}")
+        except Exception as e:
+            result["supplier_error"] = f"Error validating supplier: {str(e)}"
+            result["validation_errors"].append(result["supplier_error"])
+            logger.error(f"   ❌ Error validating supplier: {e}")
+
+        # Step 3: Validate supplier-part relationship (only if both part and supplier exist)
+        logger.info("-"*80)
+        logger.info("Step 3: Checking supplier-part relationship...")
+        if result["part_validated"] and result["supplier_validated"]:
+            try:
+                supplier_part = await self.verify_supplier_part(supplier_id, part_num)
+                if supplier_part:
+                    result["supplier_part_validated"] = True
+                    result["supplier_part_data"] = {
+                        "vendor_num": supplier_part.get("VendorNum"),
+                        "vendor_name": supplier_part.get("VendorName"),
+                        "part_num": supplier_part.get("PartNum"),
+                        "vendor_part_num": supplier_part.get("VendPartNum", ""),
+                        "lead_time": supplier_part.get("LeadTime", 0),
+                        "last_price": supplier_part.get("LastPrice", 0)
+                    }
+                    logger.info(f"   ✅ Supplier-Part relationship verified")
+                    logger.info(f"      Supplier {supplier_id} is authorized to supply {part_num}")
+                else:
+                    result["supplier_part_error"] = (
+                        f"Supplier {supplier_id} is not authorized to supply part {part_num} in Epicor. "
+                        f"The supplier exists and the part exists, but there is no supplier-part relationship "
+                        f"configured in Epicor's SupplierPartSvc."
+                    )
+                    result["validation_errors"].append(result["supplier_part_error"])
+                    logger.warning(f"   ❌ Supplier-Part relationship NOT found")
+                    logger.warning(f"      Supplier {supplier_id} exists, Part {part_num} exists")
+                    logger.warning(f"      But supplier is not set up to supply this part in Epicor")
+            except Exception as e:
+                result["supplier_part_error"] = f"Error verifying supplier-part relationship: {str(e)}"
+                result["validation_errors"].append(result["supplier_part_error"])
+                logger.error(f"   ❌ Error checking supplier-part relationship: {e}")
+        else:
+            skip_reason = []
+            if not result["part_validated"]:
+                skip_reason.append("part not validated")
+            if not result["supplier_validated"]:
+                skip_reason.append("supplier not validated")
+            logger.info(f"   ⏭️  Skipped supplier-part check ({', '.join(skip_reason)})")
+
+        # Determine overall validation status
+        result["all_valid"] = (
+            result["part_validated"] and
+            result["supplier_validated"] and
+            result["supplier_part_validated"]
+        )
+
+        # BOM analysis can proceed if at least part exists (even without supplier-part link)
+        # This allows showing BOM impact for informational purposes
+        result["can_proceed_with_bom_analysis"] = result["part_validated"]
+
+        logger.info("-"*80)
+        if result["all_valid"]:
+            logger.info("✅ ALL VALIDATIONS PASSED - Ready for BOM analysis and Epicor sync")
+        elif result["can_proceed_with_bom_analysis"]:
+            logger.warning("⚠️  PARTIAL VALIDATION - BOM analysis will proceed, but Epicor sync blocked")
+            logger.warning(f"   Issues: {', '.join(result['validation_errors'])}")
+        else:
+            logger.error("❌ VALIDATION FAILED - Cannot proceed with BOM analysis")
+            logger.error(f"   Errors: {', '.join(result['validation_errors'])}")
+        logger.info("="*80)
+
+        return result
+
     async def process_supplier_price_change(
         self,
         part_num: str,

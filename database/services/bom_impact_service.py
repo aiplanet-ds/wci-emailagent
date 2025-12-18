@@ -73,6 +73,9 @@ class BomImpactService:
             supplier_validated=supplier.get("validated", False),
             supplier_name=supplier.get("name"),
             vendor_num=supplier.get("vendor_num"),
+            # Supplier-Part relationship validation (from pre-BOM validation step)
+            supplier_part_validated=impact_data.get("supplier_part_validated", False),
+            supplier_part_validation_error=impact_data.get("supplier_part_validation_error"),
             summary=summary,
             impact_details=bom_impact.get("impact_details", []),
             high_risk_assemblies=bom_impact.get("high_risk_assemblies", []),

@@ -100,17 +100,204 @@ async def _process_single_product_bom(
         }
 
 
-async def run_bom_impact_analysis(email_id: int, extraction_result: dict, supplier_info: dict):
+async def run_epicor_validation(
+    email_id: int,
+    extraction_result: dict,
+    supplier_info: dict
+) -> dict:
+    """
+    Run Epicor validation for all products BEFORE BOM impact analysis.
+
+    This validates:
+    1. Part exists in Epicor
+    2. Supplier exists in Epicor
+    3. Supplier-Part relationship exists (supplier is authorized to supply this part)
+
+    Args:
+        email_id: Database ID of the email record
+        extraction_result: The AI extraction result containing affected_products
+        supplier_info: Supplier info from extraction (contains supplier_id)
+
+    Returns:
+        Dictionary with validation results for each product:
+        {
+            "all_products_valid": bool,
+            "any_product_can_proceed": bool,
+            "product_validations": [
+                {
+                    "idx": int,
+                    "part_num": str,
+                    "validation_result": dict from validate_supplier_part_for_email
+                },
+                ...
+            ],
+            "summary": {
+                "total_products": int,
+                "parts_validated": int,
+                "suppliers_validated": int,
+                "supplier_parts_validated": int,
+                "products_blocked": int
+            }
+        }
+    """
+    from services.epicor_service import EpicorAPIService as EpicorService
+
+    affected_products = extraction_result.get("affected_products", [])
+    supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
+
+    result = {
+        "all_products_valid": True,
+        "any_product_can_proceed": False,
+        "product_validations": [],
+        "summary": {
+            "total_products": len(affected_products),
+            "parts_validated": 0,
+            "suppliers_validated": 0,
+            "supplier_parts_validated": 0,
+            "products_blocked": 0
+        }
+    }
+
+    if not affected_products:
+        logger.info("   No products to validate")
+        return result
+
+    if not supplier_id:
+        logger.warning("   No supplier ID provided - skipping validation")
+        result["all_products_valid"] = False
+        return result
+
+    logger.info("STAGE 2.5: EPICOR VALIDATION (PRE-BOM CHECK)")
+    logger.info("-" * 80)
+    logger.info(f"   Validating {len(affected_products)} product(s) against Epicor...")
+    logger.info(f"   Supplier ID: {supplier_id}")
+
+    try:
+        epicor_service = EpicorService()
+
+        for idx, product in enumerate(affected_products):
+            part_num = product.get("product_id", "")
+            if not part_num:
+                logger.warning(f"   Product {idx + 1}: Missing product_id, skipping validation")
+                result["product_validations"].append({
+                    "idx": idx,
+                    "part_num": "",
+                    "validation_result": {
+                        "all_valid": False,
+                        "part_validated": False,
+                        "supplier_validated": False,
+                        "supplier_part_validated": False,
+                        "validation_errors": ["Missing product_id"],
+                        "can_proceed_with_bom_analysis": False
+                    }
+                })
+                result["summary"]["products_blocked"] += 1
+                result["all_products_valid"] = False
+                continue
+
+            logger.info(f"\n   Product {idx + 1}/{len(affected_products)}: {part_num}")
+
+            # Run validation for this product
+            validation = await epicor_service.validate_supplier_part_for_email(
+                part_num=part_num,
+                supplier_id=supplier_id
+            )
+
+            result["product_validations"].append({
+                "idx": idx,
+                "part_num": part_num,
+                "validation_result": validation
+            })
+
+            # Update summary counts
+            if validation.get("part_validated"):
+                result["summary"]["parts_validated"] += 1
+            if validation.get("supplier_validated"):
+                result["summary"]["suppliers_validated"] += 1
+            if validation.get("supplier_part_validated"):
+                result["summary"]["supplier_parts_validated"] += 1
+
+            if not validation.get("all_valid"):
+                result["all_products_valid"] = False
+                if not validation.get("can_proceed_with_bom_analysis"):
+                    result["summary"]["products_blocked"] += 1
+
+            if validation.get("can_proceed_with_bom_analysis"):
+                result["any_product_can_proceed"] = True
+
+        # Store validation results in database
+        async with SessionLocal() as db:
+            from database.services.email_state_service import EmailStateService
+            from database.services.email_service import EmailService
+
+            # Get the email record to get message_id
+            email = await EmailService.get_email_by_id(db, email_id)
+            if email:
+                # Store validation summary in email state
+                await EmailStateService.update_state(
+                    db=db,
+                    message_id=email.message_id,
+                    epicor_validation_performed=True,
+                    epicor_validation_result={
+                        "all_products_valid": result["all_products_valid"],
+                        "summary": result["summary"],
+                        "product_validations": [
+                            {
+                                "idx": pv["idx"],
+                                "part_num": pv["part_num"],
+                                "all_valid": pv["validation_result"].get("all_valid"),
+                                "part_validated": pv["validation_result"].get("part_validated"),
+                                "supplier_validated": pv["validation_result"].get("supplier_validated"),
+                                "supplier_part_validated": pv["validation_result"].get("supplier_part_validated"),
+                                "validation_errors": pv["validation_result"].get("validation_errors", [])
+                            }
+                            for pv in result["product_validations"]
+                        ]
+                    }
+                )
+                await db.commit()
+
+        logger.info("\n" + "-" * 80)
+        logger.info("EPICOR VALIDATION SUMMARY:")
+        logger.info(f"   Total Products: {result['summary']['total_products']}")
+        logger.info(f"   Parts Validated: {result['summary']['parts_validated']}")
+        logger.info(f"   Suppliers Validated: {result['summary']['suppliers_validated']}")
+        logger.info(f"   Supplier-Part Links Validated: {result['summary']['supplier_parts_validated']}")
+        logger.info(f"   Products Blocked: {result['summary']['products_blocked']}")
+
+        if result["all_products_valid"]:
+            logger.info("   ✅ All validations passed - proceeding to BOM analysis")
+        elif result["any_product_can_proceed"]:
+            logger.warning("   ⚠️  Some validations failed - BOM analysis will proceed for valid products")
+        else:
+            logger.error("   ❌ All validations failed - BOM analysis blocked")
+
+        logger.info("=" * 80)
+
+    except Exception as e:
+        logger.error(f"   Epicor validation error: {e}")
+        result["all_products_valid"] = False
+
+    return result
+
+
+async def run_bom_impact_analysis(
+    email_id: int,
+    extraction_result: dict,
+    supplier_info: dict,
+    validation_results: dict = None
+):
     """
     Run BOM impact analysis for all products in an email and store results in database.
 
-    This runs in the background after AI extraction is complete.
+    This runs in the background after AI extraction AND Epicor validation is complete.
     Uses asyncio.gather() for concurrent processing of multiple products.
 
     Args:
         email_id: Database ID of the email record
         extraction_result: The AI extraction result containing affected_products
         supplier_info: Supplier info from extraction (contains supplier_id)
+        validation_results: Optional pre-validation results from run_epicor_validation
     """
     from services.epicor_service import EpicorAPIService as EpicorService
 
@@ -209,11 +396,22 @@ async def run_bom_impact_analysis(email_id: int, extraction_result: dict, suppli
                     skipped_count += 1
                     continue
 
+                # Enrich result with validation data if available
+                impact_data = result["result"]
+                if validation_results:
+                    # Find validation for this product
+                    for pv in validation_results.get("product_validations", []):
+                        if pv["idx"] == result["idx"]:
+                            vr = pv.get("validation_result", {})
+                            impact_data["supplier_part_validated"] = vr.get("supplier_part_validated", False)
+                            impact_data["supplier_part_validation_error"] = vr.get("supplier_part_error")
+                            break
+
                 await BomImpactService.create(
                     db,
                     email_id=email_id,
                     product_index=result["idx"],
-                    impact_data=result["result"]
+                    impact_data=impact_data
                 )
 
                 if result.get("error"):
@@ -423,17 +621,40 @@ async def process_user_message(msg, user_email, skip_verification=False):
         print_extraction_summary(result)
         logger.info("=" * 80)
 
-        # ========== STAGE 3: BOM IMPACT ANALYSIS (Background) ==========
-        # Run BOM impact analysis for all products in the email
-        if email_id and result.get("affected_products"):
+        # ========== STAGE 2.5: EPICOR VALIDATION (Before BOM Analysis) ==========
+        # Run validation to check part exists, supplier exists, and supplier-part relationship
+        validation_results = None
+        if email_id and result.get("affected_products") and result.get("supplier_info", {}).get("supplier_id"):
             try:
-                await run_bom_impact_analysis(
+                validation_results = await run_epicor_validation(
                     email_id=email_id,
                     extraction_result=result,
                     supplier_info=result.get("supplier_info")
                 )
             except Exception as e:
-                logger.warning(f"   BOM Impact Analysis error (non-blocking): {e}")
+                logger.warning(f"   Epicor Validation error (non-blocking): {e}")
+                validation_results = None
+
+        # ========== STAGE 3: BOM IMPACT ANALYSIS (Background) ==========
+        # Run BOM impact analysis for products that passed validation (or all if validation not available)
+        if email_id and result.get("affected_products"):
+            # Check if we should proceed with BOM analysis
+            should_proceed = True
+            if validation_results:
+                should_proceed = validation_results.get("any_product_can_proceed", False)
+                if not should_proceed:
+                    logger.warning("   ⚠️  Skipping BOM analysis - all products failed Epicor validation")
+
+            if should_proceed:
+                try:
+                    await run_bom_impact_analysis(
+                        email_id=email_id,
+                        extraction_result=result,
+                        supplier_info=result.get("supplier_info"),
+                        validation_results=validation_results
+                    )
+                except Exception as e:
+                    logger.warning(f"   BOM Impact Analysis error (non-blocking): {e}")
 
         # Note: Epicor sync will happen when user clicks "Process" button in the UI
         logger.info("Email extracted and ready for processing")
