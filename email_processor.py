@@ -338,23 +338,46 @@ async def run_bom_impact_analysis(
                     total_products
                 )
 
-        # Create tasks for all products
-        tasks = [
-            process_with_semaphore(idx, product)
-            for idx, product in enumerate(affected_products)
-        ]
+        # Build set of product indices that passed validation (using passed-in validation_results)
+        # GATE 2: Only run BOM analysis for products where part AND supplier-part are validated
+        valid_product_indices = set()
+        if validation_results:
+            for pv in validation_results.get("product_validations", []):
+                vr = pv.get("validation_result", {})
+                if vr.get("can_proceed_with_bom_analysis"):
+                    valid_product_indices.add(pv["idx"])
+
+        # Create tasks only for validated products, tracking original indices
+        tasks = []
+        task_indices = []  # Track which original product index each task corresponds to
+        skipped_products = []
+        for idx, product in enumerate(affected_products):
+            if validation_results is None or idx in valid_product_indices:
+                tasks.append(process_with_semaphore(idx, product))
+                task_indices.append(idx)
+            else:
+                skipped_products.append(f"{product.get('product_id', 'N/A')}")
+
+        if skipped_products:
+            logger.info(f"   Skipping {len(skipped_products)} product(s) - validation failed: {', '.join(skipped_products)}")
+
+        if not tasks:
+            logger.warning("   No products passed validation - skipping BOM analysis")
+            return
 
         # Run all tasks concurrently and collect results
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process results, handling any exceptions
+        # Note: results order matches task_indices order (original product indices)
         processed_results = []
-        for idx, result in enumerate(results):
+        for task_idx, result in enumerate(results):
+            original_idx = task_indices[task_idx]
             if isinstance(result, Exception):
-                logger.error(f"   Unexpected error for product {idx}: {result}")
-                product = affected_products[idx]
+                logger.error(f"   Unexpected error for product {original_idx}: {result}")
+                product = affected_products[original_idx]
                 processed_results.append({
-                    "idx": idx,
+                    "idx": original_idx,
                     "part_num": product.get("product_id", ""),
                     "skipped": False,
                     "error": str(result),
@@ -376,7 +399,7 @@ async def run_bom_impact_analysis(
             else:
                 processed_results.append(result)
 
-        logger.info(f"   Progress: {len(processed_results)}/{total_products} products processed")
+        logger.info(f"   Progress: {len(processed_results)}/{len(tasks)} validated products processed ({total_products} total)")
         results = processed_results
 
         # Store results in database (async context)
@@ -636,16 +659,19 @@ async def process_user_message(msg, user_email, skip_verification=False):
                 validation_results = None
 
         # ========== STAGE 3: BOM IMPACT ANALYSIS (Background) ==========
-        # Run BOM impact analysis for products that passed validation (or all if validation not available)
+        # Run BOM impact analysis for products that passed validation
+        # GATE 1: Supplier must be verified for ANY product to proceed
+        # GATE 2: Individual products must have part + supplier-part validated
         if email_id and result.get("affected_products"):
-            # Check if we should proceed with BOM analysis
-            should_proceed = True
+            # GATE 1: Check if supplier is verified (using stored validation results)
+            supplier_verified = False
             if validation_results:
-                should_proceed = validation_results.get("any_product_can_proceed", False)
-                if not should_proceed:
-                    logger.warning("   ⚠️  Skipping BOM analysis - all products failed Epicor validation")
+                supplier_verified = validation_results.get("summary", {}).get("suppliers_validated", 0) > 0
 
-            if should_proceed:
+            if not supplier_verified:
+                logger.warning("   ⚠️  Skipping BOM analysis - Supplier ID not verified in Epicor")
+            elif validation_results and validation_results.get("any_product_can_proceed"):
+                # GATE 2: run_bom_impact_analysis will filter individual products
                 try:
                     await run_bom_impact_analysis(
                         email_id=email_id,
@@ -655,6 +681,8 @@ async def process_user_message(msg, user_email, skip_verification=False):
                     )
                 except Exception as e:
                     logger.warning(f"   BOM Impact Analysis error (non-blocking): {e}")
+            elif validation_results:
+                logger.warning("   ⚠️  Skipping BOM analysis - no products passed validation (part + supplier-part required)")
 
         # Note: Epicor sync will happen when user clicks "Process" button in the UI
         logger.info("Email extracted and ready for processing")

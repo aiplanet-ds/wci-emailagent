@@ -171,7 +171,7 @@ function ProductBomImpact({
           </div>
 
           {/* Validation Status */}
-          <div className="mb-4 grid grid-cols-2 gap-4">
+          <div className="mb-4 grid grid-cols-3 gap-4">
             <div className="flex items-center gap-2">
               {impact.component_validated ? (
                 <CheckCircle className="h-4 w-4 text-green-500" />
@@ -190,6 +190,16 @@ function ProductBomImpact({
               )}
               <span className="text-sm">
                 Supplier: {impact.supplier_validated ? impact.supplier_name : 'Not Found'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {impact.supplier_part_validated ? (
+                <CheckCircle className="h-4 w-4 text-green-500" />
+              ) : (
+                <XCircle className="h-4 w-4 text-red-500" />
+              )}
+              <span className="text-sm" title={impact.supplier_part_validation_error || undefined}>
+                Supplier-Part: {impact.supplier_part_validated ? 'Linked' : impact.supplier_part_validation_error || 'Not Linked'}
               </span>
             </div>
           </div>
@@ -323,6 +333,52 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
   // Pagination state - MUST be before any early returns
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Calculate summary statistics - MUST be before any early returns
+  // Returns default values when data is not available
+  const summaryStats = useMemo(() => {
+    if (!data || !data.impacts || data.impacts.length === 0) {
+      return {
+        totalProducts: 0,
+        totalAssemblies: 0,
+        totalAnnualImpact: 0,
+        riskCounts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+        successCount: 0,
+        errorCount: 0,
+        warningCount: 0,
+      };
+    }
+
+    const impacts = data.impacts;
+
+    // Aggregate risk counts across all products
+    const riskCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+    let totalAssemblies = 0;
+    let totalAnnualImpact = 0;
+
+    impacts.forEach((impact) => {
+      const riskSummary = impact.summary?.risk_summary;
+      if (riskSummary) {
+        riskCounts.critical += riskSummary.critical || 0;
+        riskCounts.high += riskSummary.high || 0;
+        riskCounts.medium += riskSummary.medium || 0;
+        riskCounts.low += riskSummary.low || 0;
+        riskCounts.unknown += riskSummary.unknown || 0;
+      }
+      totalAssemblies += impact.summary?.total_assemblies_affected || 0;
+      totalAnnualImpact += impact.total_annual_cost_impact || 0;
+    });
+
+    return {
+      totalProducts: impacts.length,
+      totalAssemblies,
+      totalAnnualImpact,
+      riskCounts,
+      successCount: impacts.filter((i) => i.status === 'success').length,
+      errorCount: impacts.filter((i) => i.status === 'error').length,
+      warningCount: impacts.filter((i) => i.status === 'warning').length,
+    };
+  }, [data]);
+
   // Debug: Log BOM impact data
   console.log('BomImpactPanel - messageId:', messageId, 'data:', data, 'isLoading:', isLoading, 'error:', error);
 
@@ -390,39 +446,6 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
       </Card>
     );
   }
-
-  // Calculate summary statistics
-  const summaryStats = useMemo(() => {
-    const impacts = data.impacts;
-
-    // Aggregate risk counts across all products
-    const riskCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
-    let totalAssemblies = 0;
-    let totalAnnualImpact = 0;
-
-    impacts.forEach((impact) => {
-      const riskSummary = impact.summary?.risk_summary;
-      if (riskSummary) {
-        riskCounts.critical += riskSummary.critical || 0;
-        riskCounts.high += riskSummary.high || 0;
-        riskCounts.medium += riskSummary.medium || 0;
-        riskCounts.low += riskSummary.low || 0;
-        riskCounts.unknown += riskSummary.unknown || 0;
-      }
-      totalAssemblies += impact.summary?.total_assemblies_affected || 0;
-      totalAnnualImpact += impact.total_annual_cost_impact || 0;
-    });
-
-    return {
-      totalProducts: impacts.length,
-      totalAssemblies,
-      totalAnnualImpact,
-      riskCounts,
-      successCount: impacts.filter((i) => i.status === 'success').length,
-      errorCount: impacts.filter((i) => i.status === 'error').length,
-      warningCount: impacts.filter((i) => i.status === 'warning').length,
-    };
-  }, [data.impacts]);
 
   // Check if all products have been decided (approved or rejected)
   const allDecided = data.impacts.every((i) => isDecided(i) || i.status === 'error');

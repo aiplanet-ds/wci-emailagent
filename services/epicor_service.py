@@ -1324,18 +1324,23 @@ class EpicorAPIService:
             result["supplier_part_validated"]
         )
 
-        # BOM analysis can proceed if at least part exists (even without supplier-part link)
-        # This allows showing BOM impact for informational purposes
-        result["can_proceed_with_bom_analysis"] = result["part_validated"]
+        # BOM analysis requires BOTH part AND supplier-part relationship to be verified
+        # This ensures we only run BOM implosion for parts that have a valid supplier link
+        result["can_proceed_with_bom_analysis"] = (
+            result["part_validated"] and
+            result["supplier_part_validated"]
+        )
 
         logger.info("-"*80)
         if result["all_valid"]:
             logger.info("✅ ALL VALIDATIONS PASSED - Ready for BOM analysis and Epicor sync")
         elif result["can_proceed_with_bom_analysis"]:
-            logger.warning("⚠️  PARTIAL VALIDATION - BOM analysis will proceed, but Epicor sync blocked")
+            # Part + Supplier-Part validated, but supplier may have issues
+            logger.warning("⚠️  PARTIAL VALIDATION - BOM analysis will proceed")
             logger.warning(f"   Issues: {', '.join(result['validation_errors'])}")
         else:
             logger.error("❌ VALIDATION FAILED - Cannot proceed with BOM analysis")
+            logger.error(f"   Requires: part_validated AND supplier_part_validated")
             logger.error(f"   Errors: {', '.join(result['validation_errors'])}")
         logger.info("="*80)
 

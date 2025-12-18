@@ -87,6 +87,27 @@ export interface EmailState {
   // Pinning
   pinned?: boolean;
   pinned_at?: string | null;
+  // Epicor Validation (per-product verification results)
+  epicor_validation_performed?: boolean;
+  epicor_validation_result?: {
+    all_products_valid: boolean;
+    summary: {
+      total_products: number;
+      parts_validated: number;
+      suppliers_validated: number;
+      supplier_parts_validated: number;
+      products_blocked: number;
+    };
+    product_validations: Array<{
+      idx: number;
+      part_num: string;
+      all_valid: boolean;
+      part_validated: boolean;
+      supplier_validated: boolean;
+      supplier_part_validated: boolean;
+      validation_errors: string[];
+    }>;
+  } | null;
 }
 
 export interface EpicorUpdateDetail {
@@ -317,6 +338,10 @@ export interface BomImpactResult {
   supplier_validated: boolean;
   supplier_name: string | null;
   vendor_num: number | null;
+
+  // Supplier-Part relationship validation
+  supplier_part_validated: boolean;
+  supplier_part_validation_error: string | null;
 
   // BOM impact analysis
   summary: BomImpactSummary | null;

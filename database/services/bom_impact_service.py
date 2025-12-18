@@ -200,6 +200,8 @@ class BomImpactService:
             "supplier_validated": impact.supplier_validated,
             "supplier_name": impact.supplier_name,
             "vendor_num": impact.vendor_num,
+            "supplier_part_validated": impact.supplier_part_validated,
+            "supplier_part_validation_error": impact.supplier_part_validation_error,
             "summary": impact.summary,
             "impact_details": impact.impact_details,
             "high_risk_assemblies": impact.high_risk_assemblies,

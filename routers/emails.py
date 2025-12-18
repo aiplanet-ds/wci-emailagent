@@ -364,7 +364,9 @@ async def get_email_detail(
         "llm_confidence": state.llm_confidence if state else None,
         "llm_reasoning": state.llm_reasoning if state else None,
         "pinned": state.pinned if state and state.pinned else False,
-        "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None
+        "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None,
+        "epicor_validation_performed": state.epicor_validation_performed if state else False,
+        "epicor_validation_result": state.epicor_validation_result if state else None
     }
 
     # Build Epicor status response

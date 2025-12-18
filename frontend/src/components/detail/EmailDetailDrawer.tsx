@@ -445,7 +445,10 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
               <PriceChangeSummary summary={data.email_data.price_change_summary} />
 
               {/* Products Table */}
-              <ProductsTable products={data.email_data.affected_products} />
+              <ProductsTable
+                products={data.email_data.affected_products}
+                validationResults={data.state.epicor_validation_result}
+              />
 
               {/* BOM Impact Analysis - Show for price change emails */}
               {data.state.is_price_change && (

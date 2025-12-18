@@ -1,13 +1,78 @@
-import { Package, TrendingDown, TrendingUp } from 'lucide-react';
+import { CheckCircle, ChevronLeft, ChevronRight, Package, TrendingDown, TrendingUp, XCircle } from 'lucide-react';
+import { useState } from 'react';
 import { formatCurrency, formatPercentage } from '../../lib/utils';
-import type { AffectedProduct } from '../../types/email';
+import type { AffectedProduct, EmailState } from '../../types/email';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
+
+const PRODUCTS_PER_PAGE = 10;
+
+// Type for validation results
+type ValidationResult = NonNullable<EmailState['epicor_validation_result']>;
+type ProductValidation = ValidationResult['product_validations'][number];
 
 interface ProductsTableProps {
   products: AffectedProduct[];
+  validationResults?: ValidationResult | null;
 }
 
-export function ProductsTable({ products }: ProductsTableProps) {
+// Helper component for verification status icons with tooltip
+function VerificationStatus({ validation }: { validation: ProductValidation | null }) {
+  if (!validation) {
+    return null;
+  }
+
+  const { part_validated, supplier_validated, supplier_part_validated, validation_errors } = validation;
+
+  // Build tooltip text
+  const tooltipParts: string[] = [];
+  tooltipParts.push(`Part: ${part_validated ? 'Verified' : 'Not Found'}`);
+  tooltipParts.push(`Supplier: ${supplier_validated ? 'Verified' : 'Not Found'}`);
+  tooltipParts.push(`Supplier-Part: ${supplier_part_validated ? 'Linked' : 'Not Linked'}`);
+
+  if (validation_errors && validation_errors.length > 0) {
+    tooltipParts.push(`\nErrors: ${validation_errors.join(', ')}`);
+  }
+
+  const tooltipText = tooltipParts.join(' | ');
+
+  return (
+    <div className="flex items-center gap-0.5 ml-2" title={tooltipText}>
+      {part_validated ? (
+        <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+      ) : (
+        <XCircle className="h-3.5 w-3.5 text-red-500" />
+      )}
+      {supplier_validated ? (
+        <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+      ) : (
+        <XCircle className="h-3.5 w-3.5 text-red-500" />
+      )}
+      {supplier_part_validated ? (
+        <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+      ) : (
+        <XCircle className="h-3.5 w-3.5 text-red-500" />
+      )}
+    </div>
+  );
+}
+
+export function ProductsTable({ products, validationResults }: ProductsTableProps) {
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Create a map of product index to validation
+  const validationMap = new Map<number, ProductValidation>();
+  if (validationResults?.product_validations) {
+    validationResults.product_validations.forEach((pv) => {
+      validationMap.set(pv.idx, pv);
+    });
+  }
+
+  // Pagination calculations
+  const totalPages = Math.ceil(products.length / PRODUCTS_PER_PAGE);
+  const startIndex = (currentPage - 1) * PRODUCTS_PER_PAGE;
+  const endIndex = startIndex + PRODUCTS_PER_PAGE;
+  const paginatedProducts = products.slice(startIndex, endIndex);
+
   if (products.length === 0) {
     return (
       <Card>
@@ -45,7 +110,9 @@ export function ProductsTable({ products }: ProductsTableProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {products.map((product, idx) => {
+              {paginatedProducts.map((product, idx) => {
+                const actualIndex = startIndex + idx;
+                const validation = validationMap.get(actualIndex) || null;
                 const isIncrease = (product.price_change_amount ?? 0) > 0;
                 const isDecrease = (product.price_change_amount ?? 0) < 0;
 
@@ -58,9 +125,12 @@ export function ProductsTable({ products }: ProductsTableProps) {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {product.product_id || 'N/A'}
-                      </code>
+                      <div className="flex items-center">
+                        <code className="text-xs bg-gray-100 px-2 py-1 rounded">
+                          {product.product_id || 'N/A'}
+                        </code>
+                        <VerificationStatus validation={validation} />
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-right text-gray-600">
                       {formatCurrency(product.old_price, product.currency)}
@@ -88,6 +158,36 @@ export function ProductsTable({ products }: ProductsTableProps) {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200">
+            <span className="text-sm text-gray-600">
+              Showing {startIndex + 1}-{Math.min(endIndex, products.length)} of {products.length} products
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="p-1 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Previous page"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <span className="text-sm font-medium">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="p-1 rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Next page"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
