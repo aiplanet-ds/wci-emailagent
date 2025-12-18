@@ -43,6 +43,11 @@ const formatPercent = (value: number | null | undefined): string => {
 // Check if a product has been decided (approved or rejected)
 const isDecided = (impact: BomImpactResult): boolean => impact.approved || impact.rejected;
 
+// Check if a BOM impact result is verified (component AND supplier-part validated)
+const isVerified = (impact: BomImpactResult): boolean => {
+  return impact.component_validated && impact.supplier_part_validated;
+};
+
 // Single product BOM impact card
 function ProductBomImpact({
   impact,
@@ -330,13 +335,34 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
   const approveAllMutation = useApproveAllBomImpacts();
   const reanalyzeMutation = useReanalyzeBomImpact();
 
-  // Pagination state - MUST be before any early returns
+  // Tab and pagination state - MUST be before any early returns
+  const [activeTab, setActiveTab] = useState<'verified' | 'unverified'>('verified');
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Calculate summary statistics - MUST be before any early returns
-  // Returns default values when data is not available
+  // Filter impacts by verification status
+  const { verifiedImpacts, unverifiedImpacts } = useMemo(() => {
+    if (!data?.impacts) return { verifiedImpacts: [], unverifiedImpacts: [] };
+
+    const verified: BomImpactResult[] = [];
+    const unverified: BomImpactResult[] = [];
+
+    data.impacts.forEach((impact) => {
+      if (isVerified(impact)) {
+        verified.push(impact);
+      } else {
+        unverified.push(impact);
+      }
+    });
+
+    return { verifiedImpacts: verified, unverifiedImpacts: unverified };
+  }, [data]);
+
+  // Select which impacts to display based on active tab
+  const displayedImpacts = activeTab === 'verified' ? verifiedImpacts : unverifiedImpacts;
+
+  // Calculate summary statistics based on displayed impacts
   const summaryStats = useMemo(() => {
-    if (!data || !data.impacts || data.impacts.length === 0) {
+    if (!displayedImpacts || displayedImpacts.length === 0) {
       return {
         totalProducts: 0,
         totalAssemblies: 0,
@@ -348,14 +374,12 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
       };
     }
 
-    const impacts = data.impacts;
-
-    // Aggregate risk counts across all products
+    // Aggregate risk counts across displayed products
     const riskCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
     let totalAssemblies = 0;
     let totalAnnualImpact = 0;
 
-    impacts.forEach((impact) => {
+    displayedImpacts.forEach((impact) => {
       const riskSummary = impact.summary?.risk_summary;
       if (riskSummary) {
         riskCounts.critical += riskSummary.critical || 0;
@@ -369,15 +393,15 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
     });
 
     return {
-      totalProducts: impacts.length,
+      totalProducts: displayedImpacts.length,
       totalAssemblies,
       totalAnnualImpact,
       riskCounts,
-      successCount: impacts.filter((i) => i.status === 'success').length,
-      errorCount: impacts.filter((i) => i.status === 'error').length,
-      warningCount: impacts.filter((i) => i.status === 'warning').length,
+      successCount: displayedImpacts.filter((i) => i.status === 'success').length,
+      errorCount: displayedImpacts.filter((i) => i.status === 'error').length,
+      warningCount: displayedImpacts.filter((i) => i.status === 'warning').length,
     };
-  }, [data]);
+  }, [displayedImpacts]);
 
   // Debug: Log BOM impact data
   console.log('BomImpactPanel - messageId:', messageId, 'data:', data, 'isLoading:', isLoading, 'error:', error);
@@ -453,13 +477,13 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
   const approvedCount = data.impacts.filter((i) => i.approved).length;
   const rejectedCount = data.impacts.filter((i) => i.rejected).length;
 
-  // Pagination calculations
-  const totalPages = Math.ceil(data.impacts.length / PRODUCTS_PER_PAGE);
+  // Pagination calculations based on displayed impacts
+  const totalPages = Math.ceil(displayedImpacts.length / PRODUCTS_PER_PAGE);
   const startIndex = (currentPage - 1) * PRODUCTS_PER_PAGE;
   const endIndex = startIndex + PRODUCTS_PER_PAGE;
-  const paginatedImpacts = data.impacts.slice(startIndex, endIndex);
+  const paginatedImpacts = displayedImpacts.slice(startIndex, endIndex);
 
-  // Reset to page 1 if current page exceeds total pages (after re-analysis)
+  // Reset to page 1 if current page exceeds total pages (after tab switch or re-analysis)
   if (currentPage > totalPages && totalPages > 0) {
     setCurrentPage(1);
   }
@@ -510,195 +534,246 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
         </div>
       </div>
 
-      {/* Summary View Card */}
-      <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
-        <CardContent className="py-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {/* Total Products */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                <Package className="h-3 w-3" />
-                Products
-              </div>
-              <div className="text-2xl font-bold text-gray-800">{summaryStats.totalProducts}</div>
-              <div className="text-xs text-gray-500">
-                {summaryStats.successCount} analyzed
-                {summaryStats.errorCount > 0 && <span className="text-red-500 ml-1">({summaryStats.errorCount} errors)</span>}
-              </div>
-            </div>
+      {/* Tabs for Verified/Unverified */}
+      <div className="flex border-b border-gray-200">
+        <button
+          onClick={() => { setActiveTab('verified'); setCurrentPage(1); }}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'verified'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          Verified ({verifiedImpacts.length})
+        </button>
+        <button
+          onClick={() => { setActiveTab('unverified'); setCurrentPage(1); }}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'unverified'
+              ? 'border-red-500 text-red-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          Unverified/Failed ({unverifiedImpacts.length})
+        </button>
+      </div>
 
-            {/* Total Assemblies */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                <Layers className="h-3 w-3" />
-                Assemblies
-              </div>
-              <div className="text-2xl font-bold text-gray-800">{summaryStats.totalAssemblies}</div>
-              <div className="text-xs text-gray-500">affected</div>
-            </div>
-
-            {/* Total Annual Impact */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                <TrendingUp className="h-3 w-3" />
-                Annual Impact
-              </div>
-              <div className="text-2xl font-bold text-blue-600">{formatCurrency(summaryStats.totalAnnualImpact)}</div>
-              <div className="text-xs text-gray-500">estimated</div>
-            </div>
-
-            {/* Risk Breakdown - Critical/High */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-red-500 text-xs mb-1">
-                <AlertTriangle className="h-3 w-3" />
-                Critical/High
-              </div>
-              <div className="text-2xl font-bold text-red-600">
-                {summaryStats.riskCounts.critical + summaryStats.riskCounts.high}
-              </div>
-              <div className="text-xs text-gray-500">
-                {summaryStats.riskCounts.critical} critical, {summaryStats.riskCounts.high} high
-              </div>
-            </div>
-
-            {/* Risk Breakdown - Medium/Low */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-yellow-500 text-xs mb-1">
-                <Shield className="h-3 w-3" />
-                Medium/Low
-              </div>
-              <div className="text-2xl font-bold text-yellow-600">
-                {summaryStats.riskCounts.medium + summaryStats.riskCounts.low}
-              </div>
-              <div className="text-xs text-gray-500">
-                {summaryStats.riskCounts.medium} medium, {summaryStats.riskCounts.low} low
-              </div>
-            </div>
-
-            {/* Approval Status */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
-                <CheckCircle className="h-3 w-3" />
-                Status
-              </div>
-              <div className="text-2xl font-bold text-green-600">{approvedCount}/{summaryStats.totalProducts}</div>
-              <div className="text-xs text-gray-500">
-                {pendingCount > 0 ? `${pendingCount} pending` : 'all decided'}
-                {rejectedCount > 0 && <span className="text-red-500 ml-1">({rejectedCount} rejected)</span>}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Pagination Info & Controls (Top) */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between bg-gray-50 px-4 py-2 rounded-lg">
-          <span className="text-sm text-gray-600">
-            Showing {startIndex + 1}-{Math.min(endIndex, data.impacts.length)} of {data.impacts.length} products
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="p-1 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </button>
-            <span className="text-sm font-medium">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="p-1 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label="Next page"
-            >
-              <ChevronRight className="h-5 w-5" />
-            </button>
-          </div>
+      {/* Empty state for verified tab */}
+      {activeTab === 'verified' && verifiedImpacts.length === 0 && (
+        <div className="text-center py-8 text-gray-500">
+          <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-amber-400" />
+          <p className="font-medium">No verified parts</p>
+          <p className="text-xs mt-1">No products passed validation. Check the Unverified/Failed tab.</p>
         </div>
       )}
 
-      {/* Product impact cards (paginated) */}
-      {paginatedImpacts.map((impact) => (
-        <ProductBomImpact
-          key={impact.id}
-          impact={impact}
-          onApprove={() => approveMutation.mutate({ messageId, productIndex: impact.product_index })}
-          onReject={() => rejectMutation.mutate({ messageId, productIndex: impact.product_index })}
-          isApproving={approveMutation.isPending}
-          isRejecting={rejectMutation.isPending}
-        />
-      ))}
-
-      {/* Pagination Controls (Bottom) */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 py-4">
-          <button
-            onClick={() => setCurrentPage(1)}
-            disabled={currentPage === 1}
-            className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            First
-          </button>
-          <button
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-            className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-          >
-            <ChevronLeft className="h-3 w-3" /> Previous
-          </button>
-
-          {/* Page number buttons */}
-          <div className="flex items-center gap-1">
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              // Show pages around current page
-              let pageNum: number;
-              if (totalPages <= 5) {
-                pageNum = i + 1;
-              } else if (currentPage <= 3) {
-                pageNum = i + 1;
-              } else if (currentPage >= totalPages - 2) {
-                pageNum = totalPages - 4 + i;
-              } else {
-                pageNum = currentPage - 2 + i;
-              }
-
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => setCurrentPage(pageNum)}
-                  className={`px-3 py-1 text-xs rounded ${
-                    currentPage === pageNum
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {pageNum}
-                </button>
-              );
-            })}
-          </div>
-
-          <button
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            disabled={currentPage === totalPages}
-            className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-          >
-            Next <ChevronRight className="h-3 w-3" />
-          </button>
-          <button
-            onClick={() => setCurrentPage(totalPages)}
-            disabled={currentPage === totalPages}
-            className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Last
-          </button>
+      {/* Empty state for unverified tab */}
+      {activeTab === 'unverified' && unverifiedImpacts.length === 0 && (
+        <div className="text-center py-8 text-gray-500">
+          <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-400" />
+          <p className="font-medium">All parts verified</p>
+          <p className="text-xs mt-1">All products passed component and supplier-part validation.</p>
         </div>
+      )}
+
+      {/* Summary View Card - only show if there are products to display */}
+      {displayedImpacts.length > 0 && (
+        <>
+          <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+            <CardContent className="py-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                {/* Total Products */}
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
+                    <Package className="h-3 w-3" />
+                    Products
+                  </div>
+                  <div className="text-2xl font-bold text-gray-800">{summaryStats.totalProducts}</div>
+                  <div className="text-xs text-gray-500">
+                    {summaryStats.successCount} analyzed
+                    {summaryStats.errorCount > 0 && <span className="text-red-500 ml-1">({summaryStats.errorCount} errors)</span>}
+                  </div>
+                </div>
+
+                {/* Total Assemblies */}
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
+                    <Layers className="h-3 w-3" />
+                    Assemblies
+                  </div>
+                  <div className="text-2xl font-bold text-gray-800">{summaryStats.totalAssemblies}</div>
+                  <div className="text-xs text-gray-500">affected</div>
+                </div>
+
+                {/* Total Annual Impact */}
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
+                    <TrendingUp className="h-3 w-3" />
+                    Annual Impact
+                  </div>
+                  <div className="text-2xl font-bold text-blue-600">{formatCurrency(summaryStats.totalAnnualImpact)}</div>
+                  <div className="text-xs text-gray-500">estimated</div>
+                </div>
+
+                {/* Risk Breakdown - Critical/High */}
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1 text-red-500 text-xs mb-1">
+                    <AlertTriangle className="h-3 w-3" />
+                    Critical/High
+                  </div>
+                  <div className="text-2xl font-bold text-red-600">
+                    {summaryStats.riskCounts.critical + summaryStats.riskCounts.high}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {summaryStats.riskCounts.critical} critical, {summaryStats.riskCounts.high} high
+                  </div>
+                </div>
+
+                {/* Risk Breakdown - Medium/Low */}
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1 text-yellow-500 text-xs mb-1">
+                    <Shield className="h-3 w-3" />
+                    Medium/Low
+                  </div>
+                  <div className="text-2xl font-bold text-yellow-600">
+                    {summaryStats.riskCounts.medium + summaryStats.riskCounts.low}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {summaryStats.riskCounts.medium} medium, {summaryStats.riskCounts.low} low
+                  </div>
+                </div>
+
+                {/* Approval Status */}
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1 text-gray-500 text-xs mb-1">
+                    <CheckCircle className="h-3 w-3" />
+                    Status
+                  </div>
+                  <div className="text-2xl font-bold text-green-600">
+                    {displayedImpacts.filter(i => i.approved).length}/{summaryStats.totalProducts}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {displayedImpacts.filter(i => !isDecided(i) && i.status !== 'error').length > 0
+                      ? `${displayedImpacts.filter(i => !isDecided(i) && i.status !== 'error').length} pending`
+                      : 'all decided'}
+                    {displayedImpacts.filter(i => i.rejected).length > 0 && (
+                      <span className="text-red-500 ml-1">({displayedImpacts.filter(i => i.rejected).length} rejected)</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Pagination Info & Controls (Top) */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between bg-gray-50 px-4 py-2 rounded-lg">
+              <span className="text-sm text-gray-600">
+                Showing {startIndex + 1}-{Math.min(endIndex, displayedImpacts.length)} of {displayedImpacts.length} products
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="p-1 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+                <span className="text-sm font-medium">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="p-1 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Product impact cards (paginated) */}
+          {paginatedImpacts.map((impact) => (
+            <ProductBomImpact
+              key={impact.id}
+              impact={impact}
+              onApprove={() => approveMutation.mutate({ messageId, productIndex: impact.product_index })}
+              onReject={() => rejectMutation.mutate({ messageId, productIndex: impact.product_index })}
+              isApproving={approveMutation.isPending}
+              isRejecting={rejectMutation.isPending}
+            />
+          ))}
+
+          {/* Pagination Controls (Bottom) */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 py-4">
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                First
+              </button>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                <ChevronLeft className="h-3 w-3" /> Previous
+              </button>
+
+              {/* Page number buttons */}
+              <div className="flex items-center gap-1">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  // Show pages around current page
+                  let pageNum: number;
+                  if (totalPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (currentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (currentPage >= totalPages - 2) {
+                    pageNum = totalPages - 4 + i;
+                  } else {
+                    pageNum = currentPage - 2 + i;
+                  }
+
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`px-3 py-1 text-xs rounded ${
+                        currentPage === pageNum
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                Next <ChevronRight className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Last
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
-
