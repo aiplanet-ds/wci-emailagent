@@ -1801,8 +1801,22 @@ class EpicorAPIService:
             logger.error(f"Exception querying price lists: {e}")
             return None
 
+    # ========================================================================
+    # DEPRECATED: PriceLstSvc Methods
+    # These methods are deprecated in favor of VendPartSvc methods below.
+    # VendPartSvc is the correct Epicor service for supplier pricing as it:
+    # - Supports effective dates at the part level (not header level)
+    # - Allows multiple price records for same Part/Vendor with different dates
+    # - Has CommentText and Reference fields for traceability
+    #
+    # Use batch_update_vendpart_prices_direct() instead for new implementations.
+    # These methods are kept for backward compatibility only.
+    # ========================================================================
+
     async def get_price_list(self, list_code: str, part_num: str, uom_code: str = "EA") -> Optional[Dict[str, Any]]:
         """
+        DEPRECATED: Use VendPartSvc methods instead.
+
         Get specific price list entry using filter instead of key
 
         Args:
@@ -2630,6 +2644,13 @@ class EpicorAPIService:
         uom_code: str = "EA"
     ) -> Dict[str, Any]:
         """
+        DEPRECATED: Use update_vendpart_price_direct() or batch_update_vendpart_prices_direct() instead.
+
+        This method uses PriceLstSvc which has limitations:
+        - Effective dates are managed at header level (not per-part)
+        - No comment/reference fields for traceability
+        - Re-verifies supplier on every call
+
         Complete 4-step workflow to update supplier part price with effective date
 
         This method implements the workflow from the diagram:
@@ -2830,6 +2851,11 @@ class EpicorAPIService:
         use_new_workflow: bool = True
     ) -> Dict[str, Any]:
         """
+        DEPRECATED: Use batch_update_vendpart_prices_direct() instead.
+
+        This method uses PriceLstSvc which requires re-verification on each call.
+        The new VendPartSvc workflow uses pre-validated vendor_num for faster updates.
+
         Update multiple part prices from extracted email data
 
         Args:
@@ -2841,6 +2867,7 @@ class EpicorAPIService:
         Returns:
             Dictionary with batch update results
         """
+        logger.warning("DEPRECATED: batch_update_prices() is deprecated. Use batch_update_vendpart_prices_direct() instead.")
         results = {
             "total": len(products),
             "successful": 0,
@@ -2941,6 +2968,760 @@ class EpicorAPIService:
             results["details"].append(detail)
 
         logger.info(f"Batch update complete: {results['successful']} successful, {results['failed']} failed, {results['skipped']} skipped")
+
+        return results
+
+    # ========================================================================
+    # VENDPARTSVC METHODS - Direct supplier price updates
+    # ========================================================================
+
+    async def check_vendpart_exists(
+        self,
+        vendor_num: int,
+        part_num: str,
+        effective_date: str,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if a VendPart record exists for the given combination.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            effective_date: Effective date in ISO format
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            Existing VendPart record or None if not found
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            # Query VendPartSvc for existing record
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/VendParts"
+            headers = await self._get_headers()
+
+            # Build filter for composite key
+            filter_query = (
+                f"VendorNum eq {vendor_num} "
+                f"and PartNum eq '{part_num}' "
+                f"and EffectiveDate eq {effective_date} "
+                f"and PUM eq '{pum}' "
+                f"and OpCode eq '{op_code}'"
+            )
+
+            params = {
+                "$filter": filter_query,
+                "$select": "Company,PartNum,OpCode,PUM,EffectiveDate,VendorNum,BaseUnitPrice,VenPartNum,SysRowID,RowMod,PricePerCode,CurrencyCode,CommentText,Reference"
+            }
+
+            logger.info(f"Checking VendPart exists: VendorNum={vendor_num}, Part={part_num}, Date={effective_date}")
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
+
+            if response.status_code == 200:
+                data = response.json()
+                records = data.get("value", [])
+
+                if records:
+                    logger.info(f"   Found existing VendPart record")
+                    return records[0]
+                else:
+                    logger.info(f"   No existing VendPart record found")
+                    return None
+            else:
+                logger.error(f"Error checking VendPart: {response.status_code} - {response.text[:200]}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Exception checking VendPart: {e}")
+            return None
+
+    async def get_vendpart_by_id(
+        self,
+        vendor_num: int,
+        part_num: str,
+        effective_date: str,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a VendPart record by its composite key using GetByID method.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            effective_date: Effective date in ISO format
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            VendPart record or None if not found
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/GetByID"
+            headers = await self._get_headers()
+
+            payload = {
+                "partNum": part_num,
+                "opCode": op_code,
+                "pum": pum,
+                "effectiveDate": effective_date,
+                "vendorNum": vendor_num
+            }
+
+            logger.info(f"Getting VendPart by ID: VendorNum={vendor_num}, Part={part_num}")
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
+
+            if response.status_code == 200:
+                data = response.json()
+                vend_parts = data.get("returnObj", {}).get("VendPart", [])
+
+                if vend_parts:
+                    logger.info(f"   Retrieved VendPart record successfully")
+                    return vend_parts[0]
+                else:
+                    logger.info(f"   No VendPart record found")
+                    return None
+            else:
+                logger.error(f"Error getting VendPart by ID: {response.status_code} - {response.text[:200]}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Exception getting VendPart by ID: {e}")
+            return None
+
+    async def create_vendpart_record(
+        self,
+        vendor_num: int,
+        part_num: str,
+        base_price: float,
+        effective_date: str,
+        comment_text: str = None,
+        reference: str = None,
+        ven_part_num: str = None,
+        pum: str = "EA",
+        op_code: str = "",
+        currency_code: str = "USD",
+        price_per_code: str = "E"
+    ) -> Dict[str, Any]:
+        """
+        Create a new VendPart record using GetNewVendPart + Update workflow.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            base_price: Price to set
+            effective_date: Effective date in ISO format
+            comment_text: Comment for traceability
+            reference: Reference (e.g., email ID)
+            ven_part_num: Vendor's part number (optional)
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+            currency_code: Currency code (default: "USD")
+            price_per_code: Price per code (default: "E" = Each)
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            logger.info(f"Creating new VendPart: VendorNum={vendor_num}, Part={part_num}, Price={base_price}")
+
+            # Step 1: Get new record template
+            get_new_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/GetNewVendPart"
+            headers = await self._get_headers()
+
+            get_new_payload = {
+                "ds": {},
+                "partNum": part_num,
+                "opCode": op_code,
+                "pum": pum,
+                "effectiveDate": effective_date,
+                "vendorNum": vendor_num
+            }
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(get_new_url, json=get_new_payload, headers=headers, timeout=10.0)
+
+            if response.status_code != 200:
+                logger.error(f"GetNewVendPart failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "status": "error",
+                    "message": f"GetNewVendPart failed: HTTP {response.status_code}",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+            data = response.json()
+            ds = data.get("ds", {})
+            vend_parts = ds.get("VendPart", [])
+
+            if not vend_parts:
+                return {
+                    "status": "error",
+                    "message": "GetNewVendPart returned no template",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+            # Step 2: Populate the template with our values
+            new_record = vend_parts[0]
+            new_record["BaseUnitPrice"] = base_price
+            new_record["PricePerCode"] = price_per_code
+            new_record["CurrencyCode"] = currency_code
+            new_record["RowMod"] = "A"  # Add
+
+            if ven_part_num:
+                new_record["VenPartNum"] = ven_part_num
+            if comment_text:
+                new_record["CommentText"] = comment_text
+            if reference:
+                new_record["Reference"] = reference
+
+            # Step 3: Call Update to save the record
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/Update"
+
+            update_payload = {
+                "ds": {
+                    "VendPart": [new_record]
+                }
+            }
+
+            logger.info(f"   Saving new VendPart record...")
+            response = await client.post(update_url, json=update_payload, headers=headers, timeout=10.0)
+
+            if response.status_code == 200:
+                logger.info(f"   Successfully created VendPart record")
+                return {
+                    "status": "success",
+                    "message": "VendPart record created successfully",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num,
+                    "new_price": base_price,
+                    "effective_date": effective_date,
+                    "operation": "create"
+                }
+            else:
+                logger.error(f"Update failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "status": "error",
+                    "message": f"Update failed: HTTP {response.status_code} - {response.text[:200]}",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+        except Exception as e:
+            logger.error(f"Exception creating VendPart: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "vendor_num": vendor_num
+            }
+
+    async def update_vendpart_record(
+        self,
+        vendor_num: int,
+        part_num: str,
+        base_price: float,
+        effective_date: str,
+        comment_text: str = None,
+        reference: str = None,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Update an existing VendPart record using GetByID + Update workflow.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            base_price: New price to set
+            effective_date: Effective date in ISO format
+            comment_text: Comment for traceability
+            reference: Reference (e.g., email ID)
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            logger.info(f"Updating VendPart: VendorNum={vendor_num}, Part={part_num}, Price={base_price}")
+
+            # Step 1: Get existing record
+            existing = await self.get_vendpart_by_id(vendor_num, part_num, effective_date, pum, op_code)
+
+            if not existing:
+                return {
+                    "status": "error",
+                    "message": "VendPart record not found for update",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+            old_price = existing.get("BaseUnitPrice")
+
+            # Step 2: Modify the record
+            existing["BaseUnitPrice"] = base_price
+            existing["RowMod"] = "U"  # Update
+
+            if comment_text:
+                existing["CommentText"] = comment_text
+            if reference:
+                existing["Reference"] = reference
+
+            # Step 3: Call Update to save changes
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/Update"
+            headers = await self._get_headers()
+
+            update_payload = {
+                "ds": {
+                    "VendPart": [existing]
+                }
+            }
+
+            logger.info(f"   Saving updated VendPart record...")
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, json=update_payload, headers=headers, timeout=10.0)
+
+            if response.status_code == 200:
+                logger.info(f"   Successfully updated VendPart record: ${old_price} -> ${base_price}")
+                return {
+                    "status": "success",
+                    "message": "VendPart record updated successfully",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num,
+                    "old_price": old_price,
+                    "new_price": base_price,
+                    "effective_date": effective_date,
+                    "operation": "update"
+                }
+            else:
+                logger.error(f"Update failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "status": "error",
+                    "message": f"Update failed: HTTP {response.status_code} - {response.text[:200]}",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+        except Exception as e:
+            logger.error(f"Exception updating VendPart: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "vendor_num": vendor_num
+            }
+
+    async def update_vendpart_price_direct(
+        self,
+        vendor_num: int,
+        part_num: str,
+        new_price: float,
+        effective_date: str,
+        email_id: str = None,
+        comment: str = None,
+        old_price: float = None,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Direct VendPartSvc update - NO verification step.
+        Assumes vendor_num is pre-validated from Phase 1.
+
+        Used by "Mark as Processed" flow.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated from BomImpactResult)
+            part_num: Internal part number
+            new_price: New price to set
+            effective_date: Effective date in ISO format
+            email_id: Email ID for Reference field (traceability)
+            comment: Comment text for traceability
+            old_price: Previous price (for logging purposes)
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            logger.info("="*80)
+            logger.info(f"VENDPARTSVC DIRECT UPDATE (No Verification)")
+            logger.info("="*80)
+            logger.info(f"   VendorNum: {vendor_num} (pre-validated)")
+            logger.info(f"   Part: {part_num}")
+            logger.info(f"   New Price: ${new_price}")
+            logger.info(f"   Effective Date: {effective_date}")
+            logger.info("-"*80)
+
+            # Build reference and comment for traceability
+            reference = f"EMAIL-{email_id}" if email_id else None
+            from datetime import datetime
+            update_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            comment_text = comment or f"Price updated via email agent on {update_timestamp}"
+            if old_price is not None:
+                comment_text += f" - Old: ${old_price}, New: ${new_price}"
+
+            # Step 1: Check if VendPart record exists for this effective date
+            logger.info(f"Step 1: Checking if VendPart record exists...")
+            existing = await self.check_vendpart_exists(vendor_num, part_num, effective_date, pum, op_code)
+
+            if existing:
+                # Step 2A: UPDATE existing record
+                logger.info(f"Step 2: Updating existing VendPart record...")
+                result = await self.update_vendpart_record(
+                    vendor_num=vendor_num,
+                    part_num=part_num,
+                    base_price=new_price,
+                    effective_date=effective_date,
+                    comment_text=comment_text,
+                    reference=reference,
+                    pum=pum,
+                    op_code=op_code
+                )
+            else:
+                # Step 2B: CREATE new record
+                logger.info(f"Step 2: Creating new VendPart record...")
+                result = await self.create_vendpart_record(
+                    vendor_num=vendor_num,
+                    part_num=part_num,
+                    base_price=new_price,
+                    effective_date=effective_date,
+                    comment_text=comment_text,
+                    reference=reference,
+                    pum=pum,
+                    op_code=op_code
+                )
+
+            if result["status"] == "success":
+                logger.info(f"✅ VENDPARTSVC DIRECT UPDATE COMPLETE")
+                logger.info("="*80)
+            else:
+                logger.error(f"❌ VENDPARTSVC UPDATE FAILED: {result.get('message')}")
+                logger.error("="*80)
+
+            # Add email_id to result for reference
+            result["email_id"] = email_id
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Exception in direct VendPart update: {e}")
+            logger.error("="*80)
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "vendor_num": vendor_num
+            }
+
+    async def batch_update_vendpart_prices_direct(
+        self,
+        products: List[Dict[str, Any]],
+        effective_date: str,
+        email_id: str = None,
+        comment: str = None
+    ) -> Dict[str, Any]:
+        """
+        Batch VendPartSvc update using UpdateExt - single API call for all parts.
+        Each product dict must include pre-validated vendor_num.
+
+        Used by "Mark as Processed" flow for multiple products.
+
+        Args:
+            products: List of dicts with: part_num, new_price, vendor_num, old_price (optional)
+            effective_date: Effective date for all updates
+            email_id: Email ID for Reference field (traceability)
+            comment: Comment text for traceability
+
+        Returns:
+            Dictionary with batch update results
+        """
+        results = {
+            "total": len(products),
+            "successful": 0,
+            "failed": 0,
+            "skipped": 0,
+            "details": [],
+            "workflow_used": "VendPartSvc UpdateExt (single API call)"
+        }
+
+        logger.info("="*80)
+        logger.info(f"BATCH VENDPARTSVC UPDATE (UpdateExt) - {len(products)} products")
+        logger.info("="*80)
+        logger.info(f"   Effective Date: {effective_date}")
+        logger.info(f"   Email ID: {email_id or 'Not provided'}")
+        logger.info("-"*80)
+
+        # Ensure effective_date has time component
+        if effective_date and 'T' not in effective_date:
+            effective_date = f"{effective_date}T00:00:00Z"
+
+        # Build reference and comment for traceability
+        # Note: Epicor Reference field has max 30 chars, so truncate if needed
+        if email_id:
+            # Use last 24 chars of email_id to fit within 30 char limit (6 for "EMAIL-")
+            short_id = email_id[-24:] if len(email_id) > 24 else email_id
+            reference = f"EMAIL-{short_id}"
+        else:
+            reference = None
+        from datetime import datetime
+        update_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        # Include full email_id in comment for full traceability (Reference is truncated)
+        base_comment = comment or "Price updated via email agent"
+        comment_text = f"{base_comment} on {update_timestamp}"
+        if email_id:
+            comment_text = f"{comment_text} | Email: {email_id}"
+
+        # Build VendPart records for UpdateExt
+        vendpart_records = []
+        skipped_products = []
+
+        for product in products:
+            part_num = product.get("part_num")
+            new_price = product.get("new_price")
+            vendor_num = product.get("vendor_num")
+            old_price = product.get("old_price")
+            product_name = product.get("product_name", "Unknown")
+
+            # Validate required fields
+            if not part_num:
+                results["skipped"] += 1
+                results["details"].append({
+                    "product": product_name,
+                    "status": "skipped",
+                    "reason": "Missing part_num"
+                })
+                skipped_products.append(product)
+                continue
+
+            if vendor_num is None:
+                results["skipped"] += 1
+                results["details"].append({
+                    "part_num": part_num,
+                    "product": product_name,
+                    "status": "skipped",
+                    "reason": "Missing vendor_num (not pre-validated)"
+                })
+                skipped_products.append(product)
+                continue
+
+            if new_price is None:
+                results["skipped"] += 1
+                results["details"].append({
+                    "part_num": part_num,
+                    "product": product_name,
+                    "status": "skipped",
+                    "reason": "Missing new_price"
+                })
+                skipped_products.append(product)
+                continue
+
+            # Parse price if it's a string
+            try:
+                if isinstance(new_price, str):
+                    clean_price = new_price.replace("$", "").replace(",", "").strip()
+                    new_price = float(clean_price)
+                else:
+                    new_price = float(new_price)
+            except (ValueError, TypeError) as e:
+                results["failed"] += 1
+                results["details"].append({
+                    "part_num": part_num,
+                    "product": product_name,
+                    "status": "failed",
+                    "reason": f"Invalid price format: {product.get('new_price')}"
+                })
+                continue
+
+            # Build VendPart record for UpdateExt
+            # Note: UpdateExt handles create vs update automatically
+            vendpart_record = {
+                "Company": self.company_id,
+                "PartNum": part_num,
+                "OpCode": "",  # Empty for raw materials
+                "PUM": "EA",
+                "EffectiveDate": effective_date,
+                "VendorNum": vendor_num,
+                "BaseUnitPrice": new_price,
+                "PricePerCode": "E",  # E = Each
+                "CurrencyCode": "USD",
+                "RowMod": "A"  # UpdateExt handles add vs update
+            }
+
+            if reference:
+                vendpart_record["Reference"] = reference
+            if comment_text:
+                # Include old price in comment if available
+                if old_price is not None:
+                    vendpart_record["CommentText"] = f"{comment_text} - Old: ${old_price}, New: ${new_price}"
+                else:
+                    vendpart_record["CommentText"] = comment_text
+
+            vendpart_records.append({
+                "record": vendpart_record,
+                "part_num": part_num,
+                "product_name": product_name,
+                "vendor_num": vendor_num,
+                "old_price": old_price,
+                "new_price": new_price
+            })
+
+        # If no valid records, return early
+        if not vendpart_records:
+            logger.warning("No valid products to update")
+            logger.info("="*80)
+            return results
+
+        logger.info(f"   Prepared {len(vendpart_records)} VendPart records for UpdateExt")
+
+        # Call UpdateExt with all records in a single API call
+        try:
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/UpdateExt"
+            headers = await self._get_headers()
+
+            payload = {
+                "ds": {
+                    "VendPart": [r["record"] for r in vendpart_records]
+                },
+                "continueProcessingOnError": True,  # Process all, report failures
+                "rollbackParentOnChildError": False  # Don't rollback on individual failures
+            }
+
+            logger.info(f"   Calling UpdateExt with {len(vendpart_records)} records...")
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, json=payload, headers=headers, timeout=60.0)
+
+            if response.status_code == 200:
+                response_data = response.json()
+
+                # Check for BOUpdError in response (partial failures)
+                # Note: UpdateExt returns errors in returnObj.BOUpdError, not ds.BOUpdError
+                bo_upd_errors = response_data.get("returnObj", {}).get("BOUpdError", [])
+                error_map = {}
+                for err in bo_upd_errors:
+                    # Map errors to table/row for matching
+                    table_name = err.get("TableName", "")
+                    row_id = err.get("RowIdent", "")
+                    error_msg = err.get("ErrorText", "Unknown error")
+                    error_map[f"{table_name}:{row_id}"] = error_msg
+
+                # Process results
+                for record_info in vendpart_records:
+                    part_num = record_info["part_num"]
+                    product_name = record_info["product_name"]
+                    vendor_num = record_info["vendor_num"]
+                    old_price = record_info["old_price"]
+                    new_price = record_info["new_price"]
+
+                    # Check if this record had an error
+                    # Note: Error matching may need adjustment based on actual Epicor response format
+                    has_error = False
+                    error_message = None
+
+                    for key, msg in error_map.items():
+                        if part_num in key:
+                            has_error = True
+                            error_message = msg
+                            break
+
+                    if has_error:
+                        results["failed"] += 1
+                        results["details"].append({
+                            "part_num": part_num,
+                            "product": product_name,
+                            "status": "failed",
+                            "vendor_num": vendor_num,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "effective_date": effective_date,
+                            "message": error_message
+                        })
+                    else:
+                        results["successful"] += 1
+                        results["details"].append({
+                            "part_num": part_num,
+                            "product": product_name,
+                            "status": "success",
+                            "vendor_num": vendor_num,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "effective_date": effective_date,
+                            "operation": "batch_update",
+                            "message": "Updated via UpdateExt"
+                        })
+
+                logger.info(f"   ✅ UpdateExt completed successfully")
+
+            else:
+                # Entire batch failed
+                error_text = response.text[:500]
+                logger.error(f"   ❌ UpdateExt failed: {response.status_code} - {error_text}")
+
+                # Mark all as failed
+                for record_info in vendpart_records:
+                    results["failed"] += 1
+                    results["details"].append({
+                        "part_num": record_info["part_num"],
+                        "product": record_info["product_name"],
+                        "status": "failed",
+                        "vendor_num": record_info["vendor_num"],
+                        "old_price": record_info["old_price"],
+                        "new_price": record_info["new_price"],
+                        "effective_date": effective_date,
+                        "message": f"UpdateExt failed: HTTP {response.status_code}"
+                    })
+
+        except httpx.TimeoutException:
+            logger.error(f"   ❌ UpdateExt timeout")
+            for record_info in vendpart_records:
+                results["failed"] += 1
+                results["details"].append({
+                    "part_num": record_info["part_num"],
+                    "product": record_info["product_name"],
+                    "status": "failed",
+                    "message": "Request timeout"
+                })
+
+        except Exception as e:
+            logger.error(f"   ❌ UpdateExt exception: {e}")
+            for record_info in vendpart_records:
+                results["failed"] += 1
+                results["details"].append({
+                    "part_num": record_info["part_num"],
+                    "product": record_info["product_name"],
+                    "status": "failed",
+                    "message": str(e)
+                })
+
+        logger.info("="*80)
+        logger.info(f"BATCH UPDATE COMPLETE (UpdateExt)")
+        logger.info(f"   Successful: {results['successful']}")
+        logger.info(f"   Failed: {results['failed']}")
+        logger.info(f"   Skipped: {results['skipped']}")
+        logger.info("="*80)
 
         return results
 

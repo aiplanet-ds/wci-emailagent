@@ -120,7 +120,8 @@ export interface EpicorUpdateDetail {
   effective_date?: string;
   supplier_id?: string;
   vendor_name?: string;
-  list_code?: string;
+  vendor_num?: number;    // VendPartSvc uses VendorNum
+  operation?: string;     // "created" or "updated" for VendPartSvc
 }
 
 export interface EpicorWorkflowSteps {

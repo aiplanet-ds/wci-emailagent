@@ -806,25 +806,65 @@ async def update_email_state(
                 "message": "Some recommended fields are missing. Do you want to proceed anyway?"
             }
 
-        # Sync to Epicor
+        # Sync to Epicor using VendPartSvc (direct update - no re-verification)
         try:
             epicor_service = EpicorAPIService()
             supplier_info = email_data.get("supplier_info", {})
             price_summary = email_data.get("price_change_summary", {})
-            affected_products = email_data.get("affected_products", [])
+            effective_date = price_summary.get("effective_date")
 
-            # Perform batch update
-            epicor_result = await epicor_service.batch_update_prices(
-                products=affected_products,
-                supplier_id=supplier_info.get("supplier_id"),
-                effective_date=price_summary.get("effective_date")
-            )
+            # Get approved BomImpactResults for this email (with pre-validated vendor_num)
+            bom_impact_results = await BomImpactService.get_by_email_id(db, email.id)
+
+            # Build products list from approved BomImpactResults
+            # Each result has vendor_num pre-validated during Phase 1
+            products = []
+            for bom_result in bom_impact_results:
+                # Only update approved products (not rejected)
+                if bom_result.approved and not bom_result.rejected:
+                    if bom_result.vendor_num is None:
+                        # Fallback warning - vendor_num should be set during verification
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            f"Missing vendor_num for part {bom_result.part_num} - skipping"
+                        )
+                        continue
+
+                    products.append({
+                        "part_num": bom_result.part_num,
+                        "new_price": float(bom_result.new_price) if bom_result.new_price else None,
+                        "old_price": float(bom_result.old_price) if bom_result.old_price else None,
+                        "vendor_num": bom_result.vendor_num,  # Pre-validated from Phase 1
+                        "product_name": bom_result.product_name
+                    })
+
+            # If no products to update, use affected_products as fallback (legacy behavior)
+            if not products:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "No approved BomImpactResults with vendor_num found - falling back to legacy workflow"
+                )
+                # Fallback to old batch_update_prices method
+                affected_products = email_data.get("affected_products", [])
+                epicor_result = await epicor_service.batch_update_prices(
+                    products=affected_products,
+                    supplier_id=supplier_info.get("supplier_id"),
+                    effective_date=effective_date
+                )
+            else:
+                # Use new VendPartSvc direct update (no verification)
+                epicor_result = await epicor_service.batch_update_vendpart_prices_direct(
+                    products=products,
+                    effective_date=effective_date,
+                    email_id=message_id,
+                    comment=f"Price update from {supplier_info.get('supplier_name', 'Unknown Supplier')}"
+                )
 
             # Save epicor result to DATABASE (not JSON file)
             # Determine sync status based on results
             successful_updates = epicor_result.get("successful", 0)
             failed_updates = epicor_result.get("failed", 0)
-            total_products = epicor_result.get("total", len(affected_products))
+            total_products = epicor_result.get("total", len(products) if products else 0)
 
             # Set sync_status based on results
             if failed_updates == 0 and successful_updates > 0:

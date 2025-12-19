@@ -428,6 +428,15 @@ async def run_bom_impact_analysis(
                             vr = pv.get("validation_result", {})
                             impact_data["supplier_part_validated"] = vr.get("supplier_part_validated", False)
                             impact_data["supplier_part_validation_error"] = vr.get("supplier_part_error")
+
+                            # Extract vendor_num from validation result for direct VendPartSvc updates
+                            # Priority: supplier_part_data (more specific) > supplier_data (fallback)
+                            supplier_part_data = vr.get("supplier_part_data", {})
+                            supplier_data = vr.get("supplier_data", {})
+                            vendor_num = supplier_part_data.get("vendor_num") or supplier_data.get("vendor_num")
+                            if vendor_num:
+                                impact_data["vendor_num"] = vendor_num
+                                logger.info(f"   Captured VendorNum={vendor_num} for part {result.get('part_num', 'unknown')}")
                             break
 
                 await BomImpactService.create(

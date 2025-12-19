@@ -530,9 +530,15 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
                             </div>
                           )}
 
-                          {detail.list_code && (
+                          {detail.vendor_num && (
                             <div className="text-gray-600 mb-1">
-                              List: <span className="font-medium">{detail.list_code}</span>
+                              Vendor #: <span className="font-medium">{detail.vendor_num}</span>
+                            </div>
+                          )}
+
+                          {detail.operation && (
+                            <div className="text-gray-600 mb-1">
+                              Operation: <span className="font-medium capitalize">{detail.operation}</span>
                             </div>
                           )}
 
