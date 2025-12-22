@@ -1,9 +1,11 @@
-import os, json
+import os, json, logging
 from openai import AsyncAzureOpenAI
 from dotenv import load_dotenv
 from typing import Dict, Any, List
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # Azure OpenAI async configuration
 async_client = AsyncAzureOpenAI(
@@ -129,8 +131,8 @@ async def extract_price_change_json(content: str, metadata: Dict[str, Any]) -> D
             return extracted_data
 
         except json.JSONDecodeError as e:
-            print(f"JSON Parse Error: {e}")
-            print(f"Raw response (first 1000 chars):\n{content_response[:1000]}")
+            logger.error(f"JSON Parse Error: {e}")
+            logger.debug(f"Raw response (first 1000 chars):\n{content_response[:1000]}")
             return {
                 "error": f"Failed to parse AI response as JSON: {str(e)}",
                 "raw_response": content_response[:500]

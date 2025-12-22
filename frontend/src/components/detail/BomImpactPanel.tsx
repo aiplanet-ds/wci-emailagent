@@ -402,9 +402,6 @@ export function BomImpactPanel({ messageId }: BomImpactPanelProps) {
     };
   }, [displayedImpacts]);
 
-  // Debug: Log BOM impact data
-  console.log('BomImpactPanel - messageId:', messageId, 'data:', data, 'isLoading:', isLoading, 'error:', error);
-
   if (isLoading) {
     return (
       <Card>

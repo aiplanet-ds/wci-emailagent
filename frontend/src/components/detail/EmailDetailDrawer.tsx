@@ -56,9 +56,6 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
     };
   }, [threadData, messageId]);
 
-  // Debug: Log is_price_change value
-  console.log('EmailDetailDrawer - is_price_change:', data?.state?.is_price_change, 'data.state:', data?.state);
-
   if (!messageId) return null;
 
   const handleEmailSelect = (newMessageId: string) => {

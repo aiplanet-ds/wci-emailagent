@@ -810,7 +810,7 @@ def main():
 
     For modern usage:
     1. Run: python main.py
-    2. Visit: http://localhost:8000
+    2. Access the web interface at the configured URL
     3. Authenticate with Microsoft OAuth
     4. Emails will be automatically processed via delta queries
     """
@@ -818,7 +818,7 @@ def main():
     logger.info("=" * 50)
     logger.warning("This CLI mode is legacy - use the web interface instead:")
     logger.info("   1. Run: python main.py")
-    logger.info("   2. Visit: http://localhost:8000")
+    logger.info("   2. Access the web interface at the configured URL")
     logger.info("   3. Authenticate with Microsoft OAuth")
     logger.info("   4. Emails automatically processed via delta queries every 3 minutes")
     logger.info("=" * 50)

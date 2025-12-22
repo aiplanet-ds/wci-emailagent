@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Database URL from environment
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://wci_user:wci_password@localhost:5432/wci_emailagent")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
 
 # Database configuration
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))

@@ -23,10 +23,10 @@ load_dotenv()
 app = FastAPI(title="WCI Email Agent API", version="1.0.0")
 
 # Load CORS origins from environment variable (comma-separated)
-cors_origins = os.getenv(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:8000"
-).split(",")
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
+if not cors_origins_env:
+    raise ValueError("CORS_ALLOWED_ORIGINS environment variable is required")
+cors_origins = cors_origins_env.split(",")
 
 # Add CORS middleware for React frontend
 app.add_middleware(
@@ -269,7 +269,7 @@ async def startup_event():
     delta_service.start_polling()
     logger.info("Automated monitoring service ACTIVE")
     logger.info("=" * 80)
-    logger.info("Web Interface: http://localhost:8000")
+    logger.info("Web Interface: Running on port 8000")
     logger.info("Users must login to enable automated processing")
     logger.info("=" * 80)
 
@@ -297,7 +297,7 @@ async def shutdown_event():
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting Email Intelligence System...")
-    logger.info("Access the web interface at: http://localhost:8000")
+    logger.info("Access the web interface at the configured URL")
     logger.info("OAuth authentication required")
     logger.info("Delta query polling for email monitoring")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
