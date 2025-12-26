@@ -1,9 +1,14 @@
 version: '3.8'
 
+# Production Docker Compose Configuration
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: wci-emailagent-postgres
+    env_file:
+      - .env.production
     environment:
       POSTGRES_DB: ${DB_NAME:-wci_emailagent}
       POSTGRES_USER: ${DB_USER:-wci_user}
@@ -38,9 +43,9 @@ services:
       dockerfile: Dockerfile
     container_name: wci-emailagent-app
     env_file:
-      - .env
+      - .env.production
     environment:
-      # Database
+      # Database - use container hostname
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-wci_user}:${DB_PASSWORD:-wci_password}@postgres:5432/${DB_NAME:-wci_emailagent}
       DB_HOST: postgres
       DB_PORT: 5432
@@ -79,7 +84,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
+      # Production: only mount data directories, not source code
       - ./data:/app/data
       - ./outputs:/app/outputs
       - ./logs:/app/logs
@@ -97,14 +102,15 @@ services:
         reservations:
           cpus: '1'
           memory: 1G
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # Production: no --reload flag
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        ENV_FILE: .env
+        ENV_FILE: .env.production
     container_name: wci-emailagent-frontend
     ports:
       - "3000:80"

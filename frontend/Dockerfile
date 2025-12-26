@@ -3,6 +3,10 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
+# Build argument to specify which env file to use
+# Default to .env.production for production builds
+ARG ENV_FILE=.env.production
+
 # Copy package files
 COPY package*.json ./
 
@@ -11,6 +15,9 @@ RUN npm ci
 
 # Copy source files
 COPY . .
+
+# Copy the specified env file as .env for Vite to use during build
+COPY ${ENV_FILE} .env
 
 # Build the application
 RUN npm run build

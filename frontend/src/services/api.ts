@@ -16,11 +16,9 @@ import type {
     VendorCacheStatus
 } from '../types/email';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-
-if (!API_BASE_URL) {
-  throw new Error('VITE_API_BASE_URL environment variable is required');
-}
+// In production, VITE_API_BASE_URL can be empty to use relative URLs (nginx proxy)
+// In development, it should be set to the backend URL (e.g., http://localhost:8000)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
 // Create axios instance with credentials
 const api = axios.create({
