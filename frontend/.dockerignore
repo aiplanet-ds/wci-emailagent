@@ -3,7 +3,9 @@ dist
 .git
 .gitignore
 README.md
-.env
+# Allow .env and .env.production for Docker builds (needed for Vite)
+# .env
+# .env.production
 .env.local
 .env.*.local
 npm-debug.log*

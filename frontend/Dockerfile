@@ -16,8 +16,9 @@ RUN npm ci
 # Copy source files
 COPY . .
 
-# Copy the specified env file as .env for Vite to use during build
-COPY ${ENV_FILE} .env
+# Use the specified env file as .env for Vite to use during build
+# Only copy if ENV_FILE is different from .env (e.g., .env.production)
+RUN if [ "${ENV_FILE}" != ".env" ]; then cp ${ENV_FILE} .env; fi
 
 # Build the application
 RUN npm run build
