@@ -853,11 +853,19 @@ async def update_email_state(
                 )
             else:
                 # Use new VendPartSvc direct update (no verification)
+                # Build comment with supplier name and reason for price change
+                supplier_name = supplier_info.get('supplier_name', 'Unknown Supplier')
+                price_change_reason = price_summary.get('reason', '')
+                if price_change_reason:
+                    comment = f"Price update from {supplier_name} - Reason: {price_change_reason}"
+                else:
+                    comment = f"Price update from {supplier_name}"
+
                 epicor_result = await epicor_service.batch_update_vendpart_prices_direct(
                     products=products,
                     effective_date=effective_date,
                     email_id=message_id,
-                    comment=f"Price update from {supplier_info.get('supplier_name', 'Unknown Supplier')}"
+                    comment=comment
                 )
 
             # Save epicor result to DATABASE (not JSON file)
