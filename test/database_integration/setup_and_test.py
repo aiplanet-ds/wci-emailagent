@@ -189,8 +189,7 @@ def main():
         print("\n  2. Migrate existing data (if you have JSON files):")
         print("     python scripts/migrate_json_to_db.py --dry-run")
         print("     python scripts/migrate_json_to_db.py")
-        print("\n  3. Access your application:")
-        print("     http://localhost:8000")
+        print("\n  3. Access your application at the URL configured in your environment")
         return 0
     else:
         print("❌ Some tests failed!")

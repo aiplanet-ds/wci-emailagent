@@ -155,7 +155,7 @@ print("   3. Process multiple parts in batch")
 
 print("\n📝 To test with real email:")
 print("   1. Run: python start.py")
-print("   2. Go to: http://localhost:8000")
+print("   2. Go to the application URL configured in your environment")
 print("   3. Process an email with price changes")
 print("   4. Click 'Update Prices in Epicor ERP'")
 

@@ -12,7 +12,7 @@ cache_files = [f for f in os.listdir('.') if f.startswith('token_cache_')]
 
 if not cache_files:
     print("❌ No token cache files found!")
-    print("Please login first at http://localhost:8000")
+    print("Please login first at the application URL configured in your environment")
     exit(1)
 
 cache_file = cache_files[0]

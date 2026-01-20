@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("TEST_API_BASE_URL", "http://localhost:8000")
 
 
 async def test_api_health():

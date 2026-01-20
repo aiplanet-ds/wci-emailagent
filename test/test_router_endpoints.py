@@ -236,8 +236,8 @@ async def main():
         print("✓ All router endpoint database operations verified")
         print("\n[NEXT STEPS]")
         print("Test the actual HTTP endpoints:")
-        print("  curl http://localhost:8000/api/emails")
-        print("  curl http://localhost:8000/api/emails/vendors/cache-status")
+        print("  curl $TEST_API_BASE_URL/api/emails")
+        print("  curl $TEST_API_BASE_URL/api/emails/vendors/cache-status")
         print("="*80 + "\n")
 
     except Exception as e:

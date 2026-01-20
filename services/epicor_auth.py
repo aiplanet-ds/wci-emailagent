@@ -26,13 +26,21 @@ class EpicorAuthService:
 
     def __init__(self):
         """Initialize Epicor OAuth service"""
-        # OAuth Configuration
-        self.token_url = "https://login.epicor.com/connect/token"
-        self.client_id = os.getenv("EPICOR_CLIENT_ID", "f4471628-2e91-4a29-bdac-0aa6e4dad31f")
-        self.client_secret = os.getenv("EPICOR_CLIENT_SECRET", "")
-        self.username = os.getenv("EPICOR_USERNAME", "abhijit.kumar@akkodisgroup.com")
-        self.password = os.getenv("EPICOR_PASSWORD", "")
-        self.company_id = os.getenv("EPICOR_COMPANY_ID", "165122")
+        # OAuth Configuration - all values MUST be provided via environment variables
+        self.token_url = os.getenv("EPICOR_TOKEN_URL")
+        self.client_id = os.getenv("EPICOR_CLIENT_ID")
+        self.client_secret = os.getenv("EPICOR_CLIENT_SECRET")
+        self.username = os.getenv("EPICOR_USERNAME")
+        self.password = os.getenv("EPICOR_PASSWORD")
+        self.company_id = os.getenv("EPICOR_COMPANY_ID")
+
+        # Validate required configuration
+        if not self.token_url:
+            logger.warning("EPICOR_TOKEN_URL not set - Epicor OAuth will not work")
+        if not self.client_id:
+            logger.warning("EPICOR_CLIENT_ID not set - Epicor OAuth will not work")
+        if not self.username:
+            logger.warning("EPICOR_USERNAME not set - password grant will not work")
         # Use correct scope for Epicor OAuth - "epicor_erp" for client_credentials
         # "openid email epicor_erp" only works with password grant
         self.scope_client_credentials = "epicor_erp"
