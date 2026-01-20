@@ -8,7 +8,7 @@ from auth.oauth import multi_auth
 from auth.multi_graph import graph_client
 from services.delta_service import delta_service
 from services.epicor_service import epicor_service
-from routers import emails, dashboard
+from routers import emails, dashboard, settings
 from dotenv import load_dotenv
 import os
 import secrets
@@ -51,6 +51,7 @@ app.add_middleware(
 # Include API routers
 app.include_router(emails.router)
 app.include_router(dashboard.router)
+app.include_router(settings.router)
 
 # Mount static files (only if directory exists) and templates
 if os.path.isdir("static"):
@@ -262,9 +263,24 @@ async def startup_event():
         logger.warning(f"Epicor OAuth initialization error: {e}")
         logger.warning("Epicor API calls may fail until token is obtained")
 
+    # Load polling interval from database
+    logger.info("[CONFIG] Loading settings from database...")
+    try:
+        from database.services.settings_service import SettingsService
+
+        async for db in get_db():
+            interval_config = await SettingsService.get_polling_interval(db)
+            total_seconds = interval_config["total_seconds"]
+            delta_service.update_polling_interval(total_seconds)
+            logger.info(f"   Polling Interval: {interval_config['value']} {interval_config['unit']} ({total_seconds} seconds)")
+            break
+    except Exception as e:
+        logger.warning(f"Failed to load polling interval from database: {e}")
+        logger.info("   Polling Interval: 1 minute (default)")
+
     # Configuration and service startup
     logger.info("[CONFIG] Configuration:")
-    logger.info("   Polling Interval: 60 seconds (1 minute)")
+    logger.info(f"   Polling Interval: {delta_service.polling_interval} seconds")
     logger.info("   AI Engine: Azure OpenAI")
     logger.info("   ERP Integration: Epicor REST API v2")
     logger.info("   Authentication: Microsoft OAuth 2.0")
