@@ -592,9 +592,32 @@ class DeltaEmailService:
         return {
             "is_running": self.is_running,
             "polling_interval": self.polling_interval,
-            "next_run": None if not self.scheduler.running else 
+            "next_run": None if not self.scheduler.running else
                        self.scheduler.get_job('email_polling').next_run_time.isoformat() if self.scheduler.get_job('email_polling') else None
         }
+
+    def update_polling_interval(self, seconds: int):
+        """
+        Update the polling interval at runtime.
+
+        This reschedules the existing job with the new interval.
+        The change takes effect immediately.
+
+        Args:
+            seconds: New polling interval in seconds
+        """
+        old_interval = self.polling_interval
+        self.polling_interval = seconds
+
+        if self.is_running and self.scheduler.running:
+            # Reschedule the job with the new interval
+            self.scheduler.reschedule_job(
+                'email_polling',
+                trigger=IntervalTrigger(seconds=seconds)
+            )
+            logger.info(f"⏱️  Polling interval updated: {old_interval}s -> {seconds}s")
+        else:
+            logger.info(f"⏱️  Polling interval set to {seconds}s (will apply when service starts)")
     
     async def get_user_stats(self, user_email: str) -> Dict[str, Any]:
         """Get statistics for a user"""

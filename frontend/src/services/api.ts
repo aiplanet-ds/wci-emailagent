@@ -192,6 +192,52 @@ export const emailApi = {
     );
     return data;
   },
+
+  // ============================================================================
+  // SETTINGS API
+  // ============================================================================
+
+  // Get all system settings
+  async getSettings(): Promise<SettingsResponse> {
+    const { data } = await api.get<SettingsResponse>('/api/settings');
+    return data;
+  },
+
+  // Get current polling interval
+  async getPollingInterval(): Promise<PollingIntervalResponse> {
+    const { data } = await api.get<PollingIntervalResponse>('/api/settings/polling-interval');
+    return data;
+  },
+
+  // Update polling interval
+  async updatePollingInterval(value: number, unit: TimeUnit): Promise<PollingIntervalResponse> {
+    const { data } = await api.put<PollingIntervalResponse>('/api/settings/polling-interval', { value, unit });
+    return data;
+  },
 };
+
+// Types for settings
+export type TimeUnit = 'seconds' | 'minutes' | 'hours' | 'days';
+
+export interface PollingIntervalResponse {
+  value: number;
+  unit: TimeUnit;
+  total_seconds: number;
+  next_run: string | null;
+  is_running: boolean;
+}
+
+export interface SettingsResponse {
+  polling_interval: {
+    value: number;
+    unit: TimeUnit;
+    total_seconds: number;
+  };
+  polling_status: {
+    is_running: boolean;
+    polling_interval: number;
+    next_run: string | null;
+  };
+}
 
 export default api;

@@ -452,3 +452,16 @@ class OAuthToken(Base):
         """Check if the token expires within 5 minutes"""
         from datetime import timedelta
         return datetime.utcnow() >= (self.expires_at - timedelta(minutes=5))
+
+
+class SystemSettings(Base):
+    """System-wide settings stored as key-value pairs"""
+
+    __tablename__ = "system_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(JSONB, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<SystemSettings(key='{self.key}')>"
