@@ -1,14 +1,20 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useIsMutating } from '@tanstack/react-query';
 import { emailApi } from '../services/api';
+
+// Mutation key for approve email - exported for use in other hooks to pause polling
+export const APPROVE_EMAIL_MUTATION_KEY = ['approve-email'];
 
 /**
  * Hook to fetch pending verification emails
+ * Automatically pauses polling during approve mutation to prevent race conditions
  */
 export function usePendingEmails() {
+  const isApproveMutating = useIsMutating({ mutationKey: APPROVE_EMAIL_MUTATION_KEY });
+
   return useQuery({
     queryKey: ['pending-emails'],
     queryFn: () => emailApi.getPendingVerificationEmails(),
-    refetchInterval: 30000, // Refetch every 30 seconds
+    refetchInterval: isApproveMutating > 0 ? false : 30000, // Pause polling during mutation
     staleTime: 10000, // Consider data fresh for 10 seconds
   });
 }
@@ -20,6 +26,7 @@ export function useApproveEmail() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    mutationKey: APPROVE_EMAIL_MUTATION_KEY,
     mutationFn: (messageId: string) => emailApi.approveAndProcessEmail(messageId),
     onSuccess: (_, messageId) => {
       // Invalidate all related queries with exact matching

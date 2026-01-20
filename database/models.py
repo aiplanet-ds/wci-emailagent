@@ -107,6 +107,13 @@ class Email(Base):
     received_at = Column(DateTime, index=True)
     has_attachments = Column(Boolean, default=False)
 
+    # Threading fields (Microsoft Graph conversation tracking)
+    conversation_id = Column(String(255), index=True, nullable=True)  # Microsoft Graph conversationId
+    conversation_index = Column(Text, nullable=True)  # Microsoft Graph conversationIndex for thread hierarchy
+    is_reply = Column(Boolean, default=False)  # Indicates if email is a reply
+    is_forward = Column(Boolean, default=False)  # Indicates if email is a forward
+    thread_subject = Column(Text, nullable=True)  # Subject with Re:/Fwd: prefixes stripped for grouping
+
     # Email content
     body_text = Column(Text)
     body_html = Column(Text)
@@ -129,6 +136,7 @@ class Email(Base):
     email_state = relationship("EmailState", back_populates="email", uselist=False, cascade="all, delete-orphan")
     attachments = relationship("Attachment", back_populates="email", cascade="all, delete-orphan")
     epicor_sync_results = relationship("EpicorSyncResult", back_populates="email", cascade="all, delete-orphan")
+    bom_impact_results = relationship("BomImpactResult", back_populates="email", cascade="all, delete-orphan")
 
     # Full-text search indexes
     __table_args__ = (
@@ -167,6 +175,10 @@ class EmailState(Base):
     epicor_synced_at = Column(DateTime)
     epicor_sync_attempts = Column(Integer, default=0)
 
+    # Epicor pre-sync validation (part/supplier/supplier-part relationship checks)
+    epicor_validation_performed = Column(Boolean, default=False)
+    epicor_validation_result = Column(JSONB)  # Stores validation summary for all products
+
     # Follow-up
     needs_info = Column(Boolean, default=False)
     selected_missing_fields = Column(JSONB, default=[])
@@ -180,6 +192,10 @@ class EmailState(Base):
     manually_approved_by_id = Column(Integer, ForeignKey("users.id"))
     manually_approved_at = Column(DateTime)
     flagged_reason = Column(Text)
+
+    # Thread pinning
+    pinned = Column(Boolean, default=False, index=True)
+    pinned_at = Column(DateTime)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
@@ -302,3 +318,137 @@ class AuditLog(Base):
 
     def __repr__(self):
         return f"<AuditLog(id={self.id}, action_type='{self.action_type}')>"
+
+
+class BomImpactResult(Base):
+    """BOM Impact Analysis results for each product in an email"""
+
+    __tablename__ = "bom_impact_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email_id = Column(Integer, ForeignKey("emails.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Product identification
+    product_index = Column(Integer, nullable=False)  # Index of product in affected_products array
+    part_num = Column(String(100), index=True)
+    product_name = Column(String(255))
+
+    # Price change info
+    old_price = Column(Numeric(18, 6))
+    new_price = Column(Numeric(18, 6))
+    price_delta = Column(Numeric(18, 6))
+    price_change_pct = Column(Numeric(10, 4))
+
+    # Component validation
+    component_validated = Column(Boolean, default=False)
+    component_description = Column(String(500))
+
+    # Supplier validation
+    supplier_id = Column(String(100))
+    supplier_validated = Column(Boolean, default=False)
+    supplier_name = Column(String(255))
+    vendor_num = Column(Integer)
+
+    # Supplier-Part relationship validation (checks if supplier is authorized to supply this part)
+    supplier_part_validated = Column(Boolean, default=False)
+    supplier_part_validation_error = Column(Text)  # Error message if validation fails
+
+    # BOM impact summary (JSONB for flexibility)
+    summary = Column(JSONB)  # total_assemblies, risk_summary, annual_impact, etc.
+
+    # Impact details - list of affected assemblies
+    impact_details = Column(JSONB)  # Full array of assembly impacts
+
+    # High-risk assemblies (for quick access)
+    high_risk_assemblies = Column(JSONB)
+
+    # Annual impact calculation
+    annual_impact = Column(JSONB)  # Full annual impact breakdown
+    total_annual_cost_impact = Column(Numeric(18, 2))
+
+    # Actions and approval
+    actions_required = Column(JSONB)  # List of required actions
+    can_auto_approve = Column(Boolean, default=True)
+    recommendation = Column(Text)
+
+    # Thresholds used for analysis
+    thresholds_used = Column(JSONB)
+
+    # Processing status
+    status = Column(String(20), default="pending", index=True)  # 'pending', 'success', 'warning', 'error'
+    processing_errors = Column(JSONB, default=[])
+
+    # Approval tracking
+    approved = Column(Boolean, default=False, index=True)
+    approved_by_id = Column(Integer, ForeignKey("users.id"))
+    approved_at = Column(DateTime)
+    approval_notes = Column(Text)
+
+    # Rejection tracking
+    rejected = Column(Boolean, default=False, index=True)
+    rejected_by_id = Column(Integer, ForeignKey("users.id"))
+    rejected_at = Column(DateTime)
+    rejection_reason = Column(Text)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    email = relationship("Email", back_populates="bom_impact_results")
+    approved_by = relationship("User", foreign_keys=[approved_by_id])
+    rejected_by = relationship("User", foreign_keys=[rejected_by_id])
+
+    # Compound index for quick lookup
+    __table_args__ = (
+        Index('ix_bom_impact_email_product', 'email_id', 'product_index'),
+    )
+
+    def __repr__(self):
+        return f"<BomImpactResult(id={self.id}, part_num='{self.part_num}', status='{self.status}')>"
+
+
+class OAuthToken(Base):
+    """OAuth token storage for external API integrations (e.g., Epicor)"""
+
+    __tablename__ = "oauth_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Service identification (e.g., 'epicor', 'microsoft', etc.)
+    service_name = Column(String(100), unique=True, nullable=False, index=True)
+
+    # Token data
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    token_type = Column(String(50), default="Bearer")
+
+    # Expiration tracking
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    # Metadata for tracking
+    obtained_via = Column(String(50))  # 'client_credentials', 'password', 'refresh_token'
+    scope = Column(String(500))
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Index for efficient lookup by service and expiration
+    __table_args__ = (
+        Index('ix_oauth_tokens_service_expires', 'service_name', 'expires_at'),
+    )
+
+    def __repr__(self):
+        return f"<OAuthToken(id={self.id}, service='{self.service_name}', expires_at={self.expires_at})>"
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if the token is expired"""
+        return datetime.utcnow() >= self.expires_at
+
+    @property
+    def expires_soon(self) -> bool:
+        """Check if the token expires within 5 minutes"""
+        from datetime import timedelta
+        return datetime.utcnow() >= (self.expires_at - timedelta(minutes=5))

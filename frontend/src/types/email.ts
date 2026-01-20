@@ -18,7 +18,6 @@ export interface SupplierInfo {
 export interface PriceChangeSummary {
   change_type: string | null;
   effective_date: string | null;
-  notification_date: string | null;
   reason: string | null;
   overall_impact: string | null;
 }
@@ -26,28 +25,21 @@ export interface PriceChangeSummary {
 export interface AffectedProduct {
   product_name: string | null;
   product_id: string | null;
-  product_code: string | null;
   old_price: number | null;
   new_price: number | null;
+  // Computed fields (populated by post_process_extraction, not extracted by LLM)
   price_change_amount: number | null;
   price_change_percentage: number | null;
   currency: string | null;
   unit_of_measure: string | null;
 }
 
-export interface AdditionalDetails {
-  terms_and_conditions: string | null;
-  payment_terms: string | null;
-  minimum_order_quantity: string | null;
-  notes: string | null;
-}
-
 export interface EmailData {
+  // email_metadata is populated from source metadata, not extracted by LLM
   email_metadata: EmailMetadata;
   supplier_info: SupplierInfo;
   price_change_summary: PriceChangeSummary;
   affected_products: AffectedProduct[];
-  additional_details: AdditionalDetails;
 }
 
 export interface MissingField {
@@ -92,6 +84,30 @@ export interface EmailState {
   flagged_reason: string | null;
   epicor_synced: boolean;
   llm_detection_performed: boolean;
+  // Pinning
+  pinned?: boolean;
+  pinned_at?: string | null;
+  // Epicor Validation (per-product verification results)
+  epicor_validation_performed?: boolean;
+  epicor_validation_result?: {
+    all_products_valid: boolean;
+    summary: {
+      total_products: number;
+      parts_validated: number;
+      suppliers_validated: number;
+      supplier_parts_validated: number;
+      products_blocked: number;
+    };
+    product_validations: Array<{
+      idx: number;
+      part_num: string;
+      all_valid: boolean;
+      part_validated: boolean;
+      supplier_validated: boolean;
+      supplier_part_validated: boolean;
+      validation_errors: string[];
+    }>;
+  } | null;
 }
 
 export interface EpicorUpdateDetail {
@@ -104,7 +120,8 @@ export interface EpicorUpdateDetail {
   effective_date?: string;
   supplier_id?: string;
   vendor_name?: string;
-  list_code?: string;
+  vendor_num?: number;    // VendPartSvc uses VendorNum
+  operation?: string;     // "created" or "updated" for VendPartSvc
 }
 
 export interface EpicorWorkflowSteps {
@@ -147,11 +164,39 @@ export interface EmailListItem {
   received_time?: string;
   epicor_synced: boolean;
   llm_detection_performed: boolean;
+  // Threading fields
+  conversation_id?: string | null;
+  conversation_index?: string | null;
+  is_reply?: boolean;
+  is_forward?: boolean;
+  thread_subject?: string | null;
+  thread_count?: number;  // Number of emails in this thread
+  // Pinning fields
+  pinned?: boolean;
+  pinned_at?: string | null;
 }
 
 export interface EmailListResponse {
   emails: EmailListItem[];
   total: number;
+}
+
+// Thread-related types
+export interface ThreadEmail {
+  message_id: string;
+  subject: string;
+  sender: string;
+  received_at: string;
+  verification_status: string;
+  is_reply: boolean;
+  is_forward: boolean;
+}
+
+export interface ThreadHistoryResponse {
+  conversation_id: string;
+  thread_subject: string;
+  emails: ThreadEmail[];
+  total_count: number;
 }
 
 export interface EmailDetailResponse {
@@ -190,3 +235,208 @@ export interface VendorCacheStatus {
 
 // Filter types
 export type EmailFilter = 'all' | 'price_change' | 'non_price_change' | 'processed' | 'unprocessed' | 'pending_verification' | 'rejected';
+
+// ============================================================================
+// BOM IMPACT ANALYSIS TYPES
+// ============================================================================
+
+export type BomImpactRiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'unknown';
+
+export interface BomImpactRiskSummary {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+}
+
+export interface BomImpactSummary {
+  total_assemblies_affected: number;
+  risk_summary: BomImpactRiskSummary;
+  total_annual_cost_impact: number;
+  assemblies_with_demand_data: number;
+  assemblies_without_demand_data: number;
+  demand_from_forecast: number;
+  assemblies_with_unknown_risk: number;
+  has_data_quality_issues: boolean;
+  requires_approval: boolean;
+}
+
+export interface BomImpactAssemblyDetail {
+  assembly_part_num: string;
+  assembly_description: string;
+  revision: string;
+  qty_per: number;
+  cumulative_qty: number;
+  level: number;
+  path: string[];
+  current_cost: number;
+  selling_price: number;
+  current_margin: number;
+  current_margin_pct: number;
+  new_cost: number;
+  new_margin: number;
+  new_margin_pct: number;
+  margin_erosion: number;
+  margin_erosion_pct: number;
+  cost_increase_per_unit: number;
+  risk_level: BomImpactRiskLevel;
+  weekly_demand: number;
+  annual_cost_impact: number;
+}
+
+export interface BomImpactAnnualImpact {
+  total_annual_cost_impact: number;
+  assemblies_with_demand: number;
+  assemblies_without_demand: number;
+  breakdown: {
+    assembly_part_num: string;
+    weekly_demand: number;
+    annual_demand: number;
+    cost_impact_per_unit: number;
+    annual_cost_impact: number;
+  }[];
+}
+
+export interface BomImpactThresholds {
+  critical: number;
+  high: number;
+  medium: number;
+}
+
+export type BomImpactActionType =
+  | 'EXECUTIVE_APPROVAL_REQUIRED'
+  | 'MANAGER_APPROVAL_REQUIRED'
+  | 'REVIEW_RECOMMENDED'
+  | 'AUTO_APPROVE_ELIGIBLE'
+  | 'MANUAL_REVIEW_REQUIRED';
+
+export interface BomImpactAction {
+  action: BomImpactActionType;
+  reason: string;
+  assemblies?: string[];
+}
+
+export interface BomImpactResult {
+  id: number;
+  email_id: number;
+  product_index: number;
+  part_num: string | null;
+  product_name: string | null;
+
+  // Price change info
+  old_price: number | null;
+  new_price: number | null;
+  price_delta: number | null;
+  price_change_pct: number | null;
+
+  // Component validation
+  component_validated: boolean;
+  component_description: string | null;
+
+  // Supplier validation
+  supplier_id: string | null;
+  supplier_validated: boolean;
+  supplier_name: string | null;
+  vendor_num: number | null;
+
+  // Supplier-Part relationship validation
+  supplier_part_validated: boolean;
+  supplier_part_validation_error: string | null;
+
+  // BOM impact analysis
+  summary: BomImpactSummary | null;
+  impact_details: BomImpactAssemblyDetail[];
+  high_risk_assemblies: BomImpactAssemblyDetail[];
+  annual_impact: BomImpactAnnualImpact | null;
+  total_annual_cost_impact: number;
+
+  // Actions and approval
+  actions_required: BomImpactAction[];
+  can_auto_approve: boolean;
+  recommendation: string | null;
+  thresholds_used: BomImpactThresholds | null;
+
+  // Processing status
+  status: 'pending' | 'success' | 'warning' | 'error';
+  processing_errors: string[];
+
+  // Approval tracking
+  approved: boolean;
+  approved_by_id: number | null;
+  approved_at: string | null;
+  approval_notes: string | null;
+
+  // Rejection tracking
+  rejected: boolean;
+  rejected_by_id: number | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+
+  // Timestamps
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BomImpactResponse {
+  email_id: number;
+  message_id: string;
+  total_products: number;
+  impacts: BomImpactResult[];
+}
+
+export interface BomImpactApprovalRequest {
+  approval_notes?: string;
+}
+
+export interface BomImpactRejectionRequest {
+  rejection_reason?: string;
+}
+
+export interface BomImpactApprovalResponse {
+  success: boolean;
+  message: string;
+  impact?: BomImpactResult;
+  approved_count?: number;
+  already_approved?: number;
+  total_products?: number;
+}
+
+// Thread-level BOM impact aggregation
+export interface ThreadBomPartPriceUpdate {
+  email_id: number;
+  message_id: string;
+  old_price: number | null;
+  new_price: number | null;
+  received_at: string | null;
+}
+
+export interface ThreadBomAggregatedPart {
+  part_num: string;
+  product_name: string | null;
+  emails_count: number;
+  total_annual_impact: number;
+  total_assemblies_affected: number;
+  latest_old_price: number | null;
+  latest_new_price: number | null;
+  price_updates: ThreadBomPartPriceUpdate[];
+  approval_status: 'pending' | 'approved' | 'rejected';
+}
+
+export interface ThreadBomEmailImpact {
+  message_id: string;
+  subject: string;
+  received_at: string | null;
+  impacts: BomImpactResult[];
+}
+
+export interface ThreadBomImpactResponse {
+  conversation_id: string | null;
+  thread_subject: string;
+  total_emails: number;
+  emails_with_bom_data: number;
+  aggregated_impacts: Record<string, ThreadBomAggregatedPart>;
+  total_annual_impact: number;
+  total_parts_affected: number;
+  impacts_by_email: ThreadBomEmailImpact[];
+}

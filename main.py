@@ -1,346 +1,303 @@
-import os, json
-import asyncio
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+from auth.oauth import multi_auth
 from auth.multi_graph import graph_client
-from utils.processors import save_attachment, process_all_content
-from services.extractor import extract_price_change_json
+from services.delta_service import delta_service
+from services.epicor_service import epicor_service
+from routers import emails, dashboard
+from dotenv import load_dotenv
+import os
+import secrets
+import json
+import logging
 
-# Database imports
-from database.config import SessionLocal
-from database.services.user_service import UserService
-from database.services.email_service import EmailService
-from database.services.email_state_service import EmailStateService
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = "outputs"
-DOWNLOADS_DIR = "downloads"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+load_dotenv()
 
-def process_user_message(msg, user_email, skip_verification=False):
-    """Process a single email message for a specific user with data isolation
+app = FastAPI(title="WCI Email Agent API", version="1.0.0")
 
-    Args:
-        msg: Email message dict from Microsoft Graph API
-        user_email: Email address of the user
-        skip_verification: If True, bypass vendor verification check (for manually approved emails)
-    """
-    # Create user-specific output directory
-    safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
-    user_output_dir = os.path.join(OUTPUT_DIR, safe_email)
-    user_downloads_dir = os.path.join(DOWNLOADS_DIR, safe_email)
-    os.makedirs(user_output_dir, exist_ok=True)
-    os.makedirs(user_downloads_dir, exist_ok=True)
+# Load CORS origins from environment variable (comma-separated)
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
+if not cors_origins_env:
+    raise ValueError("CORS_ALLOWED_ORIGINS environment variable is required")
+cors_origins = cors_origins_env.split(",")
 
-    # Extract basic email information
-    subject = msg.get("subject", "(no subject)")
-    sender_info = msg.get("from", {}).get("emailAddress", {})
-    sender = sender_info.get("address", "(no sender)")
-    date_received = msg.get("receivedDateTime", "(no date)")
-    message_id = msg.get("id", "")
+# Add CORS middleware for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    print("\n" + "="*80)
-    print(f"🚀 EMAIL INTELLIGENCE SYSTEM - 3-STAGE WORKFLOW")
-    print("="*80)
-    print(f"📧 Processing email for: {user_email}")
-    print(f"📌 Subject: {subject}")
-    print(f"👤 From: {sender}")
-    print(f"📅 Date: {date_received}")
-    print(f"🆔 Message ID: {message_id[:20]}...")
-    print("="*80)
-    
-    # Prepare metadata
-    email_metadata = {
-        "subject": subject,
-        "from": sender,
-        "sender": sender,
-        "date": date_received,
-        "message_id": message_id,
-        "user_email": user_email,
-        "attachments": []
-    }
-    
-    # ========== STAGE 1: EMAIL DETECTION ==========
-    print("\n📬 STAGE 1: EMAIL DETECTION")
-    print("-"*80)
+# Add session middleware for user authentication
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET", secrets.token_hex(32)),
+    max_age=24 * 60 * 60  # 24 hours
+)
 
-    # Process attachments with user-specific download directory
-    attachment_paths = []
-    has_attachments = msg.get("hasAttachments", False)
+# Include API routers
+app.include_router(emails.router)
+app.include_router(dashboard.router)
 
-    if has_attachments:
-        print("📎 Processing attachments...")
-        # Import here to avoid circular import issues
-        from auth.multi_graph import graph_client
-        attachments = graph_client.get_user_message_attachments(user_email, message_id)
+# Mount static files (only if directory exists) and templates
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
-        for att in attachments:
-            if att.get("@odata.type", "").endswith("fileAttachment"):
-                filename = att.get("name", "unknown")
-                print(f"   ✅ Attachment: {filename}")
+# Helper function to get current user from session
+def get_current_user(request: Request) -> str:
+    """Get current user email from session"""
+    # Check both 'user' and 'user_email' for backwards compatibility
+    user_email = request.session.get("user_email") or request.session.get("user")
+    if not user_email:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user_email
 
-                # Save to user-specific directory
-                att_copy = att.copy()
-                path = save_user_attachment(att_copy, user_downloads_dir)
-                if path:
-                    attachment_paths.append(path)
-                    email_metadata["attachments"].append(filename)
-
-    # Get email body content
-    email_body = ""
-    body_data = msg.get("body", {})
-    if body_data:
-        email_body = body_data.get("content", "")
-
-    print(f"✅ Stage 1 Complete: Content extracted")
-    print(f"   📝 Body length: {len(email_body)} characters")
-    print(f"   📎 Attachments: {len(attachment_paths)}")
-    print("="*80)
-    
-    # Process all content (email body + attachments)
-    combined_content = process_all_content(email_body, attachment_paths)
-
-    if not combined_content.strip():
-        print("   ⚠️  No content to process")
-        print("="*80 + "\n")
-        return
-
-    # ========== PRE-STAGE 2: VENDOR VERIFICATION CHECK ==========
-    if not skip_verification:
-        # Check email state in database
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        async def check_verification_status():
-            async with SessionLocal() as db:
-                state = await EmailStateService.get_state_by_message_id(db, message_id)
-                return state
-
-        state = loop.run_until_complete(check_verification_status())
-
-        if state and state.verification_status == 'pending_review':
-            print("\n⚠️  EMAIL FLAGGED FOR VERIFICATION")
-            print("-"*80)
-            print("   This email is from an unverified sender")
-            print("   AI extraction skipped to save tokens")
-            print("   📋 Review this email in the dashboard 'Pending Verification' tab")
-            print("   ✅ Approve to trigger AI extraction")
-            print("="*80 + "\n")
-            return
-
-    # ========== STAGE 2: AI ENTITY EXTRACTION ==========
-    print("\n🤖 STAGE 2: AI ENTITY EXTRACTION")
-    print("-"*80)
-    print("🔄 Azure OpenAI GPT-4.1 Processing...")
-    print("   Extracting parallel entities:")
-    print("   • Supplier ID")
-    print("   • Part Name & Number")
-    print("   • Effective Date")
-    print("   • New Price")
-    print("   • Reason for Change")
-
+# API Routes for Frontend
+@app.get("/api/user")
+async def get_user_info(request: Request):
+    """Get current authenticated user information"""
     try:
-        # Note: Email has already been validated as price change by LLM detector in delta_service
-        # This extraction focuses solely on extracting structured data
-        result = extract_price_change_json(combined_content, email_metadata)
+        user_email = get_current_user(request)
+        user_name = request.session.get("user_name", user_email)
+        return {
+            "authenticated": True,
+            "email": user_email,
+            "name": user_name
+        }
+    except HTTPException:
+        return {
+            "authenticated": False,
+            "email": None,
+            "name": None
+        }
 
-        # Save to database (JSON file writes removed - database is now the primary storage)
-        async def save_to_database():
-            async with SessionLocal() as db:
-                # Get or create user
-                user, _ = await UserService.get_or_create_user(db, user_email)
+# OAuth Routes
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request, error: str = None):
+    """Home page - redirect to success if logged in, otherwise show login"""
+    user_email = request.session.get("user_email")
+    if user_email and multi_auth.is_user_authenticated(user_email):
+        return RedirectResponse(url="/success", status_code=302)
+    return templates.TemplateResponse("login.html", {"request": request, "error": error})
 
-                # Create or update email record
-                email_record = await EmailService.get_email_by_message_id(db, message_id)
-                if not email_record:
-                    email_record = await EmailService.create_email(
-                        db,
-                        message_id=message_id,
-                        user_id=user.id,
-                        subject=subject,
-                        sender_email=sender,
-                        received_at=date_received,
-                        has_attachments=has_attachments,
-                        body_text=email_body,
-                        supplier_info=result.get("supplier_info"),
-                        price_change_summary=result.get("price_change_summary"),
-                        affected_products=result.get("affected_products"),
-                        additional_details=result.get("additional_details"),
-                        raw_email_data=msg
-                    )
-                else:
-                    # Update existing record
-                    email_record.supplier_info = result.get("supplier_info")
-                    email_record.price_change_summary = result.get("price_change_summary")
-                    email_record.affected_products = result.get("affected_products")
-                    email_record.additional_details = result.get("additional_details")
+@app.get("/login")
+async def login(request: Request):
+    """Initiate OAuth login flow"""
+    # Generate state for security
+    state = secrets.token_urlsafe(32)
+    request.session["oauth_state"] = state
+    
+    # Get OAuth authorization URL
+    redirect_uri = str(request.url_for("auth_callback"))
+    auth_url = multi_auth.get_authorization_url(redirect_uri, state)
+    
+    return RedirectResponse(url=auth_url)
 
-                # Update email state
-                state = await EmailStateService.get_state_by_message_id(db, message_id)
-                if not state:
-                    state = await EmailStateService.create_state(
-                        db,
-                        message_id=message_id,
-                        user_id=user.id,
-                        email_id=email_record.id,
-                        is_price_change=True
-                    )
-                else:
-                    state.email_id = email_record.id
-                    state.is_price_change = True
-
-                await db.commit()
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        loop.run_until_complete(save_to_database())
-
-        print(f"✅ Stage 2 Complete: Data extracted successfully")
-        print(f"   💾 Saved to: {output_filename}")
-        print(f"   💾 Saved to database")
-
-        # Print summary of extracted data
-        print("\n📋 Extracted Data Summary:")
-        print_extraction_summary(result)
-        print("="*80)
-
-        # Note: Epicor sync will happen when user clicks "Process" button in the UI
-        print("\n💼 Email extracted and ready for processing")
-        print("   ℹ️  Epicor sync will occur when you click 'Mark as Processed' in the dashboard")
-        print("="*80)
-        print("✅ EMAIL PROCESSING COMPLETE")
-        print("="*80 + "\n")
-
-    except Exception as e:
-        print(f"\n❌ ERROR PROCESSING EMAIL: {e}")
-        print("="*80 + "\n")
-
-def save_user_attachment(attachment, user_downloads_dir):
-    """Save email attachment to user-specific downloads directory"""
-    filename = attachment["name"]
-    content_bytes = attachment.get("contentBytes")
-    if not content_bytes:
-        return None
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str = None, state: str = None, error: str = None):
+    """Handle OAuth callback"""
+    if error:
+        return templates.TemplateResponse("error.html", {
+            "request": request, 
+            "error": f"OAuth error: {error}"
+        })
+    
+    if not code or not state:
+        return templates.TemplateResponse("error.html", {
+            "request": request, 
+            "error": "Missing authorization code or state"
+        })
+    
+    # Verify state to prevent CSRF
+    session_state = request.session.get("oauth_state")
+    if not session_state or session_state != state:
+        return templates.TemplateResponse("error.html", {
+            "request": request, 
+            "error": "Invalid state parameter"
+        })
     
     try:
-        # Handle base64 encoded content
-        if isinstance(content_bytes, str):
-            try:
-                import base64
-                decoded_content = base64.b64decode(content_bytes)
-            except:
-                decoded_content = content_bytes.encode('utf-8')
-        else:
-            decoded_content = content_bytes
-            
-        path = os.path.join(user_downloads_dir, filename)
-        with open(path, "wb") as f:
-            f.write(decoded_content)
+        # Exchange code for token (async)
+        redirect_uri = str(request.url_for("auth_callback"))
+        result = await multi_auth.exchange_code_for_token(code, redirect_uri)
         
-        print(f"✅ Saved user attachment: {filename}")
-        return path
+        if "access_token" not in result:
+            return templates.TemplateResponse("error.html", {
+                "request": request, 
+                "error": f"Token exchange failed: {result.get('error_description', 'Unknown error')}"
+            })
+        
+        # Get user email and info from result
+        user_email = result.get("user_email")
+        user_info = result.get("user_info", {})
+        
+        if not user_email:
+            return templates.TemplateResponse("error.html", {
+                "request": request, 
+                "error": "Unable to retrieve user email"
+            })
+        
+        # Store user in session
+        request.session["user_email"] = user_email
+        request.session["user_name"] = user_info.get("displayName", user_email)
+        
+        # Add user to delta monitoring for automated email processing
+        try:
+            logger.info("=" * 80)
+            logger.info(f"[AUTH] USER AUTHENTICATED: {user_email}")
+            logger.info("=" * 80)
+            await delta_service.add_user_to_monitoring(user_email)
+            logger.info("User added to automated monitoring")
+            logger.info("Automated workflow ACTIVATED:")
+            logger.info("   [1] Email detection (every 60 seconds)")
+            logger.info("   [2] Azure OpenAI extraction")
+            logger.info("   [3] Epicor ERP price update")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.warning(f"Could not add user to monitoring: {e}")
+
+        return RedirectResponse(url="/success", status_code=302)
+        
     except Exception as e:
-        print(f"❌ Error saving user attachment {filename}: {e}")
-        return None
+        return templates.TemplateResponse("error.html", {
+            "request": request, 
+            "error": f"Authentication failed: {str(e)}"
+        })
 
-def process_message_with_locks(message_id):
-    """
-    Legacy function - now replaced by delta service
-    Use process_user_message() instead with proper user context
-    """
-    print(f"⚠️  process_message_with_locks is legacy - use delta service instead")
-    print(f"   Message {message_id} should be processed via web interface")
-    return False
+@app.get("/success", response_class=HTMLResponse)
+async def success(request: Request):
+    """Success page - shows automated workflow is active"""
+    try:
+        user_email = get_current_user(request)
 
-def process_message(msg):
-    """
-    Legacy function - now replaced by process_user_message() with user context
-    This function is deprecated and should not be used in the delta service system
-    """
-    print("⚠️  process_message() is legacy - use process_user_message() instead")
-    print("   Modern email processing requires user context for proper data isolation")
-    
-    # Extract basic info for logging
-    subject = msg.get("subject", "(no subject)")
-    message_id = msg.get("id", "")
-    print(f"   📧 Legacy processing attempted for: {subject} (ID: {message_id})")
-    print("   ➡️  Use the web interface with delta service for proper processing")
-    
-    return False
+        return templates.TemplateResponse("success.html", {
+            "request": request,
+            "user_email": user_email
+        })
 
-def print_extraction_summary(data):
-    """Print a summary of the extracted price change data"""
-    if "error" in data:
-        print(f"   ❌ Extraction error: {data['error']}")
-        return
+    except HTTPException:
+        return RedirectResponse(url="/", status_code=302)
 
-    # Supplier info
-    supplier_info = data.get("supplier_info", {})
-    supplier_id = supplier_info.get("supplier_id")
-    supplier_name = supplier_info.get("supplier_name")
+@app.get("/logout")
+async def logout(request: Request):
+    """Logout user and stop monitoring"""
+    user_email = request.session.get("user_email")
 
-    if supplier_id:
-        print(f"   🏢 Supplier ID: {supplier_id}")
-    if supplier_name:
-        print(f"   🏢 Supplier Name: {supplier_name}")
+    # Remove user from automated monitoring
+    if user_email:
+        try:
+            logger.info("=" * 80)
+            logger.info(f"[LOGOUT] USER LOGOUT: {user_email}")
+            logger.info("=" * 80)
+            await delta_service.remove_user_from_monitoring(user_email)
+            logger.info("User removed from automated monitoring")
+            logger.info("Automated workflow DEACTIVATED for this user")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.error(f"Error removing user from monitoring: {e}")
 
-    # Price change details (check both locations for backward compatibility)
-    change_details = data.get("price_change_details", {})
-    price_change_summary = data.get("price_change_summary", {})
+    # Clear session
+    request.session.clear()
 
-    change_type = change_details.get("change_type") or price_change_summary.get("change_type")
-    effective_date = change_details.get("effective_date") or price_change_summary.get("effective_date")
-    
-    if change_type:
-        print(f"   📈 Change Type: {change_type}")
-    if effective_date:
-        print(f"   📅 Effective Date: {effective_date}")
-    
-    # Products affected
-    products = data.get("affected_products", [])
-    if products:
-        print(f"   📦 Products Affected: {len(products)}")
-        for i, product in enumerate(products[:3]):  # Show first 3 products
-            name = product.get("product_name", "Unknown")
-            old_price = product.get("old_price", "N/A")
-            new_price = product.get("new_price", "N/A")
-            print(f"      {i+1}. {name}: {old_price} → {new_price}")
-        
-        if len(products) > 3:
-            print(f"      ... and {len(products) - 3} more products")
-    
-    # Action required
-    action = data.get("action_required", {})
-    deadline = action.get("response_deadline")
-    if deadline:
-        print(f"   ⏰ Response Deadline: {deadline}")
+    return RedirectResponse(url="/", status_code=302)
 
-def main():
-    """
-    Legacy CLI processing function - now replaced by delta service
-    
-    For modern usage:
-    1. Run: python webhook.py
-    2. Visit: http://localhost:8000
-    3. Authenticate with Microsoft OAuth
-    4. Emails will be automatically processed via delta queries
-    """
-    print("🚀 Email Intelligence System")
-    print("=" * 50)
-    print("⚠️  This CLI mode is legacy - use the web interface instead:")
-    print("   1. Run: python webhook.py")
-    print("   2. Visit: http://localhost:8000")
-    print("   3. Authenticate with Microsoft OAuth")
-    print("   4. Emails automatically processed via delta queries every 3 minutes")
-    print("=" * 50)
-    print("✅ For current functionality, use the web interface with delta service")
-    
-    return
+# Start delta service when application starts
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and start the delta service when the application starts"""
+    logger.info("=" * 80)
+    logger.info("[STARTUP] EMAIL INTELLIGENCE SYSTEM - AUTOMATED MODE")
+    logger.info("=" * 80)
 
+    # Database initialization
+    logger.info("[DB] Initializing database connection...")
+    try:
+        from database.config import init_db, engine
+        from sqlalchemy import text
+
+        # Test database connection
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("Database connection successful")
+
+        # Ensure all tables exist
+        logger.info("[DB] Creating/verifying database tables...")
+        await init_db()
+        logger.info("Database tables ready")
+
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        logger.error("Application cannot start without database")
+        logger.error("Please ensure PostgreSQL is running and DATABASE_URL is correct")
+        raise
+
+    # Initialize Epicor OAuth token
+    logger.info("[EPICOR] Initializing Epicor OAuth token...")
+    try:
+        from services.epicor_auth import epicor_auth
+        from database.config import get_db
+
+        async for db in get_db():
+            token_initialized = await epicor_auth.initialize_token_async(db)
+            if token_initialized:
+                logger.info("Epicor OAuth token initialized and stored in database")
+            else:
+                logger.warning("Epicor OAuth token initialization failed - API calls may fail")
+            break
+    except Exception as e:
+        logger.warning(f"Epicor OAuth initialization error: {e}")
+        logger.warning("Epicor API calls may fail until token is obtained")
+
+    # Configuration and service startup
+    logger.info("[CONFIG] Configuration:")
+    logger.info("   Polling Interval: 60 seconds (1 minute)")
+    logger.info("   AI Engine: Azure OpenAI")
+    logger.info("   ERP Integration: Epicor REST API v2")
+    logger.info("   Authentication: Microsoft OAuth 2.0")
+    logger.info("-" * 80)
+    logger.info("Starting automated email monitoring service...")
+    delta_service.start_polling()
+    logger.info("Automated monitoring service ACTIVE")
+    logger.info("=" * 80)
+    logger.info("Web Interface: Running on port 8000")
+    logger.info("Users must login to enable automated processing")
+    logger.info("=" * 80)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the delta service when the application shuts down"""
+    logger.info("=" * 80)
+    logger.info("[SHUTDOWN] SHUTTING DOWN EMAIL INTELLIGENCE SYSTEM")
+    logger.info("=" * 80)
+    delta_service.stop_polling()
+    logger.info("Automated monitoring service stopped")
+
+    # Close HTTP client connections
+    from utils.http_client import HTTPClientManager
+    await HTTPClientManager.close_all()
+    logger.info("HTTP client connections closed")
+
+    # Close database connection pool
+    from database.config import close_db
+    await close_db()
+    logger.info("Database connections closed")
+    logger.info("=" * 80)
+
+# Run the server when executed directly
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    logger.info("Starting Email Intelligence System...")
+    logger.info("Access the web interface at the configured URL")
+    logger.info("OAuth authentication required")
+    logger.info("Delta query polling for email monitoring")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

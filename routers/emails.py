@@ -19,6 +19,7 @@ from database.services.user_service import UserService
 from database.services.email_service import EmailService
 from database.services.email_state_service import EmailStateService
 from database.services.epicor_sync_result_service import EpicorSyncResultService
+from database.services.bom_impact_service import BomImpactService
 
 # Legacy services
 from services.validation_service import validation_service
@@ -198,7 +199,16 @@ async def get_all_price_change_emails_from_db(
             "epicor_synced": state.epicor_synced if state else False,
             "llm_detection_performed": state.llm_detection_performed if state else False,
             "received_time": email.received_at.isoformat() if email.received_at else None,
-            "email_id": email.id
+            "email_id": email.id,
+            # Threading fields
+            "conversation_id": email.conversation_id,
+            "conversation_index": email.conversation_index,
+            "is_reply": email.is_reply if email.is_reply is not None else False,
+            "is_forward": email.is_forward if email.is_forward is not None else False,
+            "thread_subject": email.thread_subject,
+            # Pinning fields
+            "pinned": state.pinned if state and state.pinned else False,
+            "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None,
         })
 
     return emails
@@ -231,6 +241,72 @@ async def list_emails(
 
     return EmailListResponse(emails=emails, total=len(emails))
 
+
+# ============================================================================
+# STATIC ROUTES (must be defined BEFORE dynamic /{message_id} routes)
+# ============================================================================
+
+@router.get("/pending-verification", response_model=EmailListResponse)
+async def list_pending_verification_emails(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all emails pending vendor verification"""
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get all emails with pending_review verification status from database
+    pending_emails = await get_all_price_change_emails_from_db(
+        db=db,
+        user_id=user.id,
+        filter_type="pending_verification"
+    )
+
+    return EmailListResponse(emails=pending_emails, total=len(pending_emails))
+
+
+@router.get("/vendors/cache-status")
+async def get_vendor_cache_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor cache information"""
+    get_user_from_session(request)  # Verify authentication
+
+    from services.vendor_verification_service import vendor_verification_service
+
+    status = await vendor_verification_service.get_cache_status()
+    return status
+
+
+@router.post("/vendors/refresh-cache")
+async def refresh_vendor_cache(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually refresh vendor cache from Epicor"""
+    get_user_from_session(request)  # Verify authentication
+
+    from services.vendor_verification_service import vendor_verification_service
+
+    try:
+        result = await vendor_verification_service.refresh_cache()
+        cache_status = await vendor_verification_service.get_cache_status()
+        return {
+            "success": True,
+            "message": "Vendor cache refreshed successfully",
+            "cache_status": cache_status
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to refresh vendor cache: {str(e)}"
+        )
+
+
+# ============================================================================
+# DYNAMIC ROUTES (with /{message_id} path parameter)
+# ============================================================================
 
 @router.get("/{message_id}", response_model=EmailDetailResponse)
 async def get_email_detail(
@@ -286,18 +362,26 @@ async def get_email_detail(
         "flagged_reason": state.flagged_reason if state else None,
         "is_price_change": state.is_price_change if state else None,
         "llm_confidence": state.llm_confidence if state else None,
-        "llm_reasoning": state.llm_reasoning if state else None
+        "llm_reasoning": state.llm_reasoning if state else None,
+        "pinned": state.pinned if state and state.pinned else False,
+        "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None,
+        "epicor_validation_performed": state.epicor_validation_performed if state else False,
+        "epicor_validation_result": state.epicor_validation_result if state else None
     }
 
     # Build Epicor status response
     epicor_status = None
     if epicor_result:
+        # Extract details from results_summary for frontend compatibility
+        results_summary = epicor_result.results_summary or {}
         epicor_status = {
             "successful": epicor_result.successful_updates,
             "failed": epicor_result.failed_updates,
             "total": epicor_result.total_products,
+            "skipped": results_summary.get("skipped", 0),
             "status": epicor_result.sync_status,
-            "results": epicor_result.results_summary,
+            "details": results_summary.get("details", []),
+            "workflow_used": results_summary.get("workflow_used", ""),
             "synced_at": epicor_result.synced_at.isoformat() if epicor_result.synced_at else None
         }
 
@@ -307,6 +391,227 @@ async def get_email_detail(
         validation=validation,
         epicor_status=epicor_status
     )
+
+
+@router.get("/{message_id}/thread")
+async def get_email_thread(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get all emails in the same conversation thread as the specified email.
+
+    Returns emails sorted by received_at in chronological order.
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get the email to find its conversation_id
+    email = await get_email_from_db(db, message_id)
+
+    # Verify email belongs to user
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # If no conversation_id, return just this email
+    if not email.conversation_id:
+        return {
+            "conversation_id": None,
+            "thread_subject": email.thread_subject or email.subject,
+            "emails": [{
+                "message_id": email.message_id,
+                "subject": email.subject,
+                "sender": email.sender_email,
+                "received_at": email.received_at.isoformat() if email.received_at else None,
+                "verification_status": None,
+                "is_reply": email.is_reply or False,
+                "is_forward": email.is_forward or False,
+            }],
+            "total_count": 1
+        }
+
+    # Get all emails in the same conversation thread
+    thread_emails = await EmailService.get_emails_by_conversation_id(
+        db, email.conversation_id, user.id
+    )
+
+    # Get states for all emails in thread
+    thread_data = []
+    for thread_email in thread_emails:
+        state = await EmailStateService.get_state_by_message_id(db, thread_email.message_id)
+        thread_data.append({
+            "message_id": thread_email.message_id,
+            "subject": thread_email.subject,
+            "sender": thread_email.sender_email,
+            "received_at": thread_email.received_at.isoformat() if thread_email.received_at else None,
+            "verification_status": state.verification_status if state else None,
+            "is_reply": thread_email.is_reply or False,
+            "is_forward": thread_email.is_forward or False,
+        })
+
+    return {
+        "conversation_id": email.conversation_id,
+        "thread_subject": email.thread_subject or email.subject,
+        "emails": thread_data,
+        "total_count": len(thread_data)
+    }
+
+
+@router.get("/{message_id}/thread/bom-impact")
+async def get_thread_bom_impact(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get aggregated BOM impact analysis for all emails in a conversation thread.
+
+    Combines impact data from multiple emails affecting the same parts to show
+    cumulative thread-level impact.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get the email to find its conversation_id
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # If no conversation_id, just return single email's BOM impact
+    if not email.conversation_id:
+        impacts = await BomImpactService.get_by_email_id(db, email.id)
+        return {
+            "conversation_id": None,
+            "thread_subject": email.thread_subject or email.subject,
+            "total_emails": 1,
+            "emails_with_bom_data": 1 if impacts else 0,
+            "aggregated_impacts": {},
+            "total_annual_impact": sum(i.total_annual_cost_impact or 0 for i in impacts),
+            "total_parts_affected": len(impacts),
+            "impacts_by_email": [{
+                "message_id": email.message_id,
+                "subject": email.subject,
+                "impacts": [BomImpactService.to_dict(i) for i in impacts]
+            }]
+        }
+
+    # Get all emails in thread
+    thread_emails = await EmailService.get_emails_by_conversation_id(
+        db, email.conversation_id, user.id
+    )
+
+    # Collect BOM impacts from all emails
+    impacts_by_email = []
+    aggregated_by_part = {}  # part_num -> aggregated data
+    total_annual_impact = 0
+
+    for thread_email in thread_emails:
+        impacts = await BomImpactService.get_by_email_id(db, thread_email.id)
+        if impacts:
+            email_impacts = []
+            for impact in impacts:
+                impact_dict = BomImpactService.to_dict(impact)
+                email_impacts.append(impact_dict)
+                total_annual_impact += impact.total_annual_cost_impact or 0
+
+                # Aggregate by part number
+                part_num = impact.part_num
+                if part_num:
+                    if part_num not in aggregated_by_part:
+                        aggregated_by_part[part_num] = {
+                            "part_num": part_num,
+                            "product_name": impact.product_name,
+                            "emails_count": 0,
+                            "total_annual_impact": 0,
+                            "total_assemblies_affected": 0,
+                            "latest_old_price": None,
+                            "latest_new_price": None,
+                            "price_updates": [],
+                            "approval_status": "pending"
+                        }
+                    aggregated_by_part[part_num]["emails_count"] += 1
+                    aggregated_by_part[part_num]["total_annual_impact"] += impact.total_annual_cost_impact or 0
+                    if impact.summary:
+                        aggregated_by_part[part_num]["total_assemblies_affected"] = max(
+                            aggregated_by_part[part_num]["total_assemblies_affected"],
+                            impact.summary.get("total_assemblies_affected", 0) if isinstance(impact.summary, dict) else 0
+                        )
+                    aggregated_by_part[part_num]["latest_old_price"] = impact.old_price
+                    aggregated_by_part[part_num]["latest_new_price"] = impact.new_price
+                    aggregated_by_part[part_num]["price_updates"].append({
+                        "email_id": thread_email.id,
+                        "message_id": thread_email.message_id,
+                        "old_price": impact.old_price,
+                        "new_price": impact.new_price,
+                        "received_at": thread_email.received_at.isoformat() if thread_email.received_at else None
+                    })
+                    # Track approval status
+                    if impact.approved:
+                        aggregated_by_part[part_num]["approval_status"] = "approved"
+                    elif impact.rejected:
+                        aggregated_by_part[part_num]["approval_status"] = "rejected"
+
+            impacts_by_email.append({
+                "message_id": thread_email.message_id,
+                "subject": thread_email.subject,
+                "received_at": thread_email.received_at.isoformat() if thread_email.received_at else None,
+                "impacts": email_impacts
+            })
+
+    return {
+        "conversation_id": email.conversation_id,
+        "thread_subject": email.thread_subject or email.subject,
+        "total_emails": len(thread_emails),
+        "emails_with_bom_data": len(impacts_by_email),
+        "aggregated_impacts": aggregated_by_part,
+        "total_annual_impact": total_annual_impact,
+        "total_parts_affected": len(aggregated_by_part),
+        "impacts_by_email": impacts_by_email
+    }
+
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+
+@router.patch("/{message_id}/pin")
+async def toggle_email_pin(
+    message_id: str,
+    pin_request: PinRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Pin or unpin an email (bookmark for important threads).
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
+
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Update pin status
+    pinned_at = datetime.utcnow() if pin_request.pinned else None
+    await EmailStateService.update_state(
+        db=db,
+        message_id=message_id,
+        pinned=pin_request.pinned,
+        pinned_at=pinned_at
+    )
+
+    return {
+        "success": True,
+        "message_id": message_id,
+        "pinned": pin_request.pinned,
+        "pinned_at": pinned_at.isoformat() if pinned_at else None
+    }
 
 
 @router.get("/{message_id}/raw")
@@ -334,7 +639,7 @@ async def get_raw_email_content(
     try:
         # Fetch full email from Microsoft Graph API
         graph_client = MultiUserGraphClient()
-        msg = graph_client.get_user_message_by_id(user_email, message_id)
+        msg = await graph_client.get_user_message_by_id(user_email, message_id)
 
         # Extract email body
         body_data = msg.get("body", {})
@@ -344,7 +649,7 @@ async def get_raw_email_content(
         # Get attachment metadata if email has attachments
         attachments_meta = []
         if msg.get("hasAttachments", False):
-            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+            attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
             for att in attachments:
                 if att.get("@odata.type", "").endswith("fileAttachment"):
@@ -394,7 +699,7 @@ async def download_attachment(
     try:
         # Get attachment from Microsoft Graph API
         graph_client = MultiUserGraphClient()
-        attachments = graph_client.get_user_message_attachments(user_email, message_id)
+        attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
         # Find the specific attachment
         target_attachment = None
@@ -501,25 +806,83 @@ async def update_email_state(
                 "message": "Some recommended fields are missing. Do you want to proceed anyway?"
             }
 
-        # Sync to Epicor
+        # Sync to Epicor using VendPartSvc (direct update - no re-verification)
         try:
             epicor_service = EpicorAPIService()
             supplier_info = email_data.get("supplier_info", {})
             price_summary = email_data.get("price_change_summary", {})
-            affected_products = email_data.get("affected_products", [])
+            effective_date = price_summary.get("effective_date")
 
-            # Perform batch update
-            epicor_result = epicor_service.batch_update_prices(
-                products=affected_products,
-                supplier_id=supplier_info.get("supplier_id"),
-                effective_date=price_summary.get("effective_date")
-            )
+            # Get approved BomImpactResults for this email (with pre-validated vendor_num)
+            bom_impact_results = await BomImpactService.get_by_email_id(db, email.id)
+
+            # Build products list from approved BomImpactResults
+            # Each result has vendor_num pre-validated during Phase 1
+            products = []
+            for bom_result in bom_impact_results:
+                # Only update approved products (not rejected)
+                if bom_result.approved and not bom_result.rejected:
+                    if bom_result.vendor_num is None:
+                        # Fallback warning - vendor_num should be set during verification
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            f"Missing vendor_num for part {bom_result.part_num} - skipping"
+                        )
+                        continue
+
+                    products.append({
+                        "part_num": bom_result.part_num,
+                        "new_price": float(bom_result.new_price) if bom_result.new_price else None,
+                        "old_price": float(bom_result.old_price) if bom_result.old_price else None,
+                        "vendor_num": bom_result.vendor_num,  # Pre-validated from Phase 1
+                        "product_name": bom_result.product_name
+                    })
+
+            # If no products to update, use affected_products as fallback (legacy behavior)
+            if not products:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "No approved BomImpactResults with vendor_num found - falling back to legacy workflow"
+                )
+                # Fallback to old batch_update_prices method
+                affected_products = email_data.get("affected_products", [])
+                epicor_result = await epicor_service.batch_update_prices(
+                    products=affected_products,
+                    supplier_id=supplier_info.get("supplier_id"),
+                    effective_date=effective_date
+                )
+            else:
+                # Use new VendPartSvc direct update (no verification)
+                # Build comment with supplier name and reason for price change
+                supplier_name = supplier_info.get('supplier_name', 'Unknown Supplier')
+                price_change_reason = price_summary.get('reason', '')
+                if price_change_reason:
+                    comment = f"Price update from {supplier_name} - Reason: {price_change_reason}"
+                else:
+                    comment = f"Price update from {supplier_name}"
+
+                epicor_result = await epicor_service.batch_update_vendpart_prices_direct(
+                    products=products,
+                    effective_date=effective_date,
+                    email_id=message_id,
+                    comment=comment
+                )
 
             # Save epicor result to DATABASE (not JSON file)
-            sync_status = "success"
-            total_products = len(affected_products)
-            successful_updates = epicor_result.get("successful_updates", 0)
-            failed_updates = epicor_result.get("failed_updates", 0)
+            # Determine sync status based on results
+            successful_updates = epicor_result.get("successful", 0)
+            failed_updates = epicor_result.get("failed", 0)
+            total_products = epicor_result.get("total", len(products) if products else 0)
+
+            # Set sync_status based on results
+            if failed_updates == 0 and successful_updates > 0:
+                sync_status = "success"
+            elif successful_updates > 0 and failed_updates > 0:
+                sync_status = "partial"
+            elif failed_updates > 0:
+                sync_status = "failed"
+            else:
+                sync_status = "success"
 
             # Create sync result record in database
             sync_result = await EpicorSyncResultService.create_sync_result(
@@ -647,8 +1010,8 @@ async def generate_followup(
         )
 
     try:
-        # Generate follow-up email
-        followup_draft = generate_followup_email(
+        # Generate follow-up email (async)
+        followup_draft = await generate_followup_email(
             email_data=email_data,
             missing_fields=followup_request.missing_fields
         )
@@ -685,25 +1048,6 @@ async def generate_followup(
             status_code=500,
             detail=f"Failed to generate follow-up email: {str(e)}"
         )
-
-
-@router.get("/pending-verification", response_model=EmailListResponse)
-async def list_pending_verification_emails(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get all emails pending vendor verification"""
-    user_email = get_user_from_session(request)
-    user = await get_user_from_db(db, user_email)
-
-    # Get all emails with pending_review verification status from database
-    pending_emails = await get_all_price_change_emails_from_db(
-        db=db,
-        user_id=user.id,
-        filter_type="pending_verification"
-    )
-
-    return EmailListResponse(emails=pending_emails, total=len(pending_emails))
 
 
 @router.post("/{message_id}/approve-and-process")
@@ -752,7 +1096,7 @@ async def approve_and_process_email(
     try:
         # Get original message from Graph API
         graph_client = MultiUserGraphClient()
-        msg = graph_client.get_user_message_by_id(user_email, message_id)
+        msg = await graph_client.get_user_message_by_id(user_email, message_id)
 
         # STEP 1: Run LLM Price Change Detection
         from services.llm_detector import llm_is_price_change_email
@@ -768,7 +1112,7 @@ async def approve_and_process_email(
         # Process attachments (if any)
         attachment_paths = []
         if msg.get("hasAttachments", False):
-            attachments = graph_client.get_user_message_attachments(user_email, message_id)
+            attachments = await graph_client.get_user_message_attachments(user_email, message_id)
 
             # Create user-specific downloads directory
             safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
@@ -812,9 +1156,9 @@ async def approve_and_process_email(
             'has_attachments': msg.get('hasAttachments', False)
         }
 
-        # Run LLM detection
-        print(f"🤖 Running LLM price change detection for approved email...")
-        detection_result = llm_is_price_change_email(combined_content, metadata)
+        # Run LLM detection (async)
+        print(f"Running LLM price change detection for approved email...")
+        detection_result = await llm_is_price_change_email(combined_content, metadata)
 
         # Update email state with detection result in database
         await EmailStateService.update_state(
@@ -837,14 +1181,14 @@ async def approve_and_process_email(
             # Run AI extraction inline (async)
             from services.extractor import extract_price_change_json
 
-            print(f"\n🤖 STAGE 2: AI ENTITY EXTRACTION")
+            print(f"\nSTAGE 2: AI ENTITY EXTRACTION")
             print("-" * 80)
-            print(f"🔄 Azure OpenAI GPT-4.1 Processing...")
+            print(f"Azure OpenAI GPT-4.1 Processing...")
 
             # Extract entities using AI (combined_content and metadata already prepared above)
-            result = extract_price_change_json(combined_content, metadata)
+            result = await extract_price_change_json(combined_content, metadata)
 
-            print(f"✅ AI Extraction Complete")
+            print(f"AI Extraction Complete")
 
             # Save extracted data to database
             await EmailService.update_email(
@@ -866,6 +1210,203 @@ async def approve_and_process_email(
             )
 
             await db.commit()
+
+            # ========== EPICOR VALIDATION (PRE-BOM CHECK) ==========
+            # Run validation to check part exists, supplier exists, and supplier-part relationship
+            affected_products = result.get("affected_products", [])
+            supplier_info = result.get("supplier_info", {})
+            supplier_id = supplier_info.get("supplier_id", "") if supplier_info else ""
+
+            validation_results = None
+            if affected_products and supplier_id:
+                print(f"\n🔍 Running Epicor Validation for {len(affected_products)} products...")
+                try:
+                    epicor_service = EpicorAPIService()
+
+                    validation_results = {
+                        "all_products_valid": True,
+                        "any_product_can_proceed": False,
+                        "product_validations": [],
+                        "summary": {
+                            "total_products": len(affected_products),
+                            "parts_validated": 0,
+                            "suppliers_validated": 0,
+                            "supplier_parts_validated": 0,
+                            "products_blocked": 0
+                        }
+                    }
+
+                    for idx, product in enumerate(affected_products):
+                        part_num = product.get("product_id") or product.get("product_code") or product.get("part_number", "")
+                        if not part_num:
+                            print(f"   ⚠️ Product {idx + 1}: No part number, skipping validation")
+                            validation_results["product_validations"].append({
+                                "idx": idx,
+                                "part_num": "",
+                                "validation_result": {
+                                    "all_valid": False,
+                                    "part_validated": False,
+                                    "supplier_validated": False,
+                                    "supplier_part_validated": False,
+                                    "validation_errors": ["Missing product_id"],
+                                    "can_proceed_with_bom_analysis": False
+                                }
+                            })
+                            validation_results["summary"]["products_blocked"] += 1
+                            validation_results["all_products_valid"] = False
+                            continue
+
+                        print(f"   🔍 Validating Product {idx + 1}/{len(affected_products)}: {part_num}")
+
+                        # Run validation for this product
+                        validation = await epicor_service.validate_supplier_part_for_email(
+                            part_num=part_num,
+                            supplier_id=supplier_id
+                        )
+
+                        validation_results["product_validations"].append({
+                            "idx": idx,
+                            "part_num": part_num,
+                            "validation_result": validation
+                        })
+
+                        # Update summary counts
+                        if validation.get("part_validated"):
+                            validation_results["summary"]["parts_validated"] += 1
+                        if validation.get("supplier_validated"):
+                            validation_results["summary"]["suppliers_validated"] += 1
+                        if validation.get("supplier_part_validated"):
+                            validation_results["summary"]["supplier_parts_validated"] += 1
+
+                        if not validation.get("all_valid"):
+                            validation_results["all_products_valid"] = False
+                            if not validation.get("can_proceed_with_bom_analysis"):
+                                validation_results["summary"]["products_blocked"] += 1
+
+                        if validation.get("can_proceed_with_bom_analysis"):
+                            validation_results["any_product_can_proceed"] = True
+
+                    # Store validation results in email state
+                    await EmailStateService.update_state(
+                        db=db,
+                        message_id=message_id,
+                        epicor_validation_performed=True,
+                        epicor_validation_result={
+                            "all_products_valid": validation_results["all_products_valid"],
+                            "summary": validation_results["summary"],
+                            "product_validations": [
+                                {
+                                    "idx": pv["idx"],
+                                    "part_num": pv["part_num"],
+                                    "all_valid": pv["validation_result"].get("all_valid"),
+                                    "part_validated": pv["validation_result"].get("part_validated"),
+                                    "supplier_validated": pv["validation_result"].get("supplier_validated"),
+                                    "supplier_part_validated": pv["validation_result"].get("supplier_part_validated"),
+                                    "validation_errors": pv["validation_result"].get("validation_errors", [])
+                                }
+                                for pv in validation_results["product_validations"]
+                            ]
+                        }
+                    )
+                    await db.commit()
+
+                    print(f"   ✅ Epicor Validation Complete")
+                    print(f"      Parts validated: {validation_results['summary']['parts_validated']}/{len(affected_products)}")
+                    print(f"      Supplier-Part links: {validation_results['summary']['supplier_parts_validated']}/{len(affected_products)}")
+
+                except Exception as e:
+                    print(f"   ⚠️ Epicor Validation error (non-blocking): {e}")
+                    validation_results = None
+
+            # ========== BOM IMPACT ANALYSIS ==========
+            # Run BOM impact analysis for products that passed validation
+            if affected_products:
+                # Check if we should proceed with BOM analysis
+                should_proceed = True
+                if validation_results:
+                    should_proceed = validation_results.get("any_product_can_proceed", False)
+                    if not should_proceed:
+                        print(f"   ⚠️ Skipping BOM analysis - all products failed Epicor validation")
+
+                if should_proceed:
+                    print(f"\n📊 Running BOM Impact Analysis for {len(affected_products)} products...")
+                    try:
+                        if not epicor_service:
+                            epicor_service = EpicorAPIService()
+
+                        for idx, product in enumerate(affected_products):
+                            part_num = product.get("product_id") or product.get("product_code") or product.get("part_number", "")
+                            old_price = product.get("old_price", 0)
+                            new_price = product.get("new_price", 0)
+
+                            if not part_num:
+                                print(f"   ⚠️ Product {idx + 1}: No part number, skipping")
+                                continue
+
+                            print(f"   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
+
+                            try:
+                                # Run the BOM impact analysis (async)
+                                impact_result = await epicor_service.process_supplier_price_change(
+                                    part_num=part_num,
+                                    supplier_id=supplier_id,
+                                    old_price=float(old_price) if old_price else 0,
+                                    new_price=float(new_price) if new_price else 0,
+                                    effective_date=result.get("price_change_summary", {}).get("effective_date"),
+                                    email_metadata=None
+                                )
+
+                                # Enrich with validation data if available
+                                if validation_results:
+                                    for pv in validation_results.get("product_validations", []):
+                                        if pv["idx"] == idx:
+                                            vr = pv.get("validation_result", {})
+                                            impact_result["supplier_part_validated"] = vr.get("supplier_part_validated", False)
+                                            impact_result["supplier_part_validation_error"] = vr.get("supplier_part_error")
+                                            break
+
+                                # Store the result in database
+                                await BomImpactService.create(
+                                    db,
+                                    email_id=email.id,
+                                    product_index=idx,
+                                    impact_data=impact_result
+                                )
+
+                                # Log summary
+                                status = impact_result.get("status", "unknown")
+                                summary = impact_result.get("bom_impact", {}).get("summary", {})
+                                total_assemblies = summary.get("total_assemblies_affected", 0)
+                                print(f"      ✅ Analysis: {status}, {total_assemblies} assemblies affected")
+
+                            except Exception as e:
+                                print(f"      ❌ Error analyzing {part_num}: {e}")
+                                # Store error result with validation data
+                                error_result = {
+                                    "status": "error",
+                                    "processing_errors": [str(e)],
+                                    "component": {"part_num": part_num, "validated": False},
+                                    "supplier": {"supplier_id": supplier_id, "validated": False},
+                                    "price_change": {"part_num": part_num, "old_price": old_price, "new_price": new_price},
+                                    "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                                    "actions_required": [],
+                                    "can_auto_approve": False
+                                }
+                                # Add validation data if available
+                                if validation_results:
+                                    for pv in validation_results.get("product_validations", []):
+                                        if pv["idx"] == idx:
+                                            vr = pv.get("validation_result", {})
+                                            error_result["supplier_part_validated"] = vr.get("supplier_part_validated", False)
+                                            error_result["supplier_part_validation_error"] = vr.get("supplier_part_error")
+                                            break
+                                await BomImpactService.create(db, email_id=email.id, product_index=idx, impact_data=error_result)
+
+                        await db.commit()
+                        print(f"   ✅ BOM Impact Analysis Complete")
+
+                    except Exception as e:
+                        print(f"   ⚠️ BOM Impact Analysis error (non-blocking): {e}")
 
             # Reload email data from database
             await db.refresh(email)
@@ -988,40 +1529,286 @@ async def reject_email(
     }
 
 
-@router.get("/vendors/cache-status")
-async def get_vendor_cache_status(
+# ============================================================================
+# BOM IMPACT ANALYSIS ENDPOINTS
+# ============================================================================
+
+@router.get("/{message_id}/bom-impact")
+async def get_bom_impact(
+    message_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get vendor cache information"""
-    get_user_from_session(request)  # Verify authentication
+    """
+    Get BOM impact analysis results for an email.
 
-    from services.vendor_verification_service import vendor_verification_service
+    Returns all BOM impact results for each product in the email.
+    """
+    from database.services.bom_impact_service import BomImpactService
 
-    status = await vendor_verification_service.get_cache_status()
-    return status
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    return {
+        "email_id": email.id,
+        "message_id": message_id,
+        "total_products": len(impacts),
+        "impacts": [BomImpactService.to_dict(impact) for impact in impacts]
+    }
 
 
-@router.post("/vendors/refresh-cache")
-async def refresh_vendor_cache(
+class BomImpactApprovalRequest(BaseModel):
+    approval_notes: Optional[str] = None
+
+
+class BomImpactRejectionRequest(BaseModel):
+    rejection_reason: Optional[str] = None
+
+
+# Static BOM routes must come before dynamic /{product_index} routes
+@router.post("/{message_id}/bom-impact/approve-all")
+async def approve_all_bom_impacts(
+    message_id: str,
+    approval_request: BomImpactApprovalRequest,
     request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    """Manually refresh vendor cache from Epicor"""
-    get_user_from_session(request)  # Verify authentication
+    """
+    Approve all products in an email for Epicor sync.
 
-    from services.vendor_verification_service import vendor_verification_service
+    This is a convenience endpoint to approve all products at once.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    if not impacts:
+        raise HTTPException(
+            status_code=404,
+            detail="No BOM impact results found for this email"
+        )
+
+    approved_count = 0
+    already_approved = 0
+
+    for impact in impacts:
+        if impact.approved:
+            already_approved += 1
+            continue
+
+        await BomImpactService.approve(
+            db,
+            impact_id=impact.id,
+            approved_by_id=user.id,
+            approval_notes=approval_request.approval_notes
+        )
+        approved_count += 1
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Approved {approved_count} product(s) for Epicor sync",
+        "approved_count": approved_count,
+        "already_approved": already_approved,
+        "total_products": len(impacts)
+    }
+
+
+@router.post("/{message_id}/bom-impact/{product_index}/approve")
+async def approve_bom_impact(
+    message_id: str,
+    product_index: int,
+    approval_request: BomImpactApprovalRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Approve a specific product's BOM impact for Epicor sync.
+
+    This marks the product as approved for price update in Epicor.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    # Find the specific product
+    target_impact = None
+    for impact in impacts:
+        if impact.product_index == product_index:
+            target_impact = impact
+            break
+
+    if not target_impact:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BOM impact result not found for product index {product_index}"
+        )
+
+    if target_impact.approved:
+        raise HTTPException(
+            status_code=400,
+            detail="This product has already been approved"
+        )
+
+    # Approve the BOM impact
+    approved_impact = await BomImpactService.approve(
+        db,
+        impact_id=target_impact.id,
+        approved_by_id=user.id,
+        approval_notes=approval_request.approval_notes
+    )
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Product {target_impact.part_num} approved for Epicor sync",
+        "impact": BomImpactService.to_dict(approved_impact)
+    }
+
+
+@router.post("/{message_id}/bom-impact/{product_index}/reject")
+async def reject_bom_impact(
+    message_id: str,
+    product_index: int,
+    rejection_request: BomImpactRejectionRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reject a specific product's BOM impact (will not sync to Epicor).
+
+    This marks the product as rejected - the price change will not be applied in Epicor.
+    """
+    from database.services.bom_impact_service import BomImpactService
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get BOM impact results for this email
+    impacts = await BomImpactService.get_by_email_id(db, email.id)
+
+    # Find the specific product
+    target_impact = None
+    for impact in impacts:
+        if impact.product_index == product_index:
+            target_impact = impact
+            break
+
+    if not target_impact:
+        raise HTTPException(
+            status_code=404,
+            detail=f"BOM impact result not found for product index {product_index}"
+        )
+
+    if target_impact.rejected:
+        raise HTTPException(
+            status_code=400,
+            detail="This product has already been rejected"
+        )
+
+    # Reject the BOM impact
+    rejected_impact = await BomImpactService.reject(
+        db,
+        impact_id=target_impact.id,
+        rejected_by_id=user.id,
+        rejection_reason=rejection_request.rejection_reason
+    )
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": f"Product {target_impact.part_num} rejected - will not sync to Epicor",
+        "impact": BomImpactService.to_dict(rejected_impact)
+    }
+
+
+@router.post("/{message_id}/reanalyze-bom-impact")
+async def reanalyze_bom_impact(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Re-run BOM impact analysis for an email.
+
+    This deletes existing results and runs the analysis again.
+    Useful if Epicor data has changed or if there was an error.
+    """
+    from database.services.bom_impact_service import BomImpactService
+    from email_processor import run_bom_impact_analysis
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email and verify access
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Check if email has affected products
+    if not email.affected_products:
+        raise HTTPException(
+            status_code=400,
+            detail="Email has no affected products to analyze"
+        )
+
+    # Build extraction result from email data
+    extraction_result = {
+        "affected_products": email.affected_products,
+        "price_change_summary": email.price_change_summary,
+        "supplier_info": email.supplier_info
+    }
 
     try:
-        result = await vendor_verification_service.refresh_cache()
-        cache_status = await vendor_verification_service.get_cache_status()
+        # Run BOM impact analysis (this will delete existing results first)
+        await run_bom_impact_analysis(
+            email_id=email.id,
+            extraction_result=extraction_result,
+            supplier_info=email.supplier_info
+        )
+
+        # Get updated results
+        impacts = await BomImpactService.get_by_email_id(db, email.id)
+
         return {
             "success": True,
-            "message": "Vendor cache refreshed successfully",
-            "cache_status": cache_status
+            "message": f"BOM impact analysis completed for {len(impacts)} product(s)",
+            "impacts": [BomImpactService.to_dict(impact) for impact in impacts]
         }
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to refresh vendor cache: {str(e)}"
+            detail=f"BOM impact analysis failed: {str(e)}"
         )

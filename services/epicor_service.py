@@ -4,12 +4,13 @@ Handles authentication and API calls to Epicor for updating part prices
 """
 
 import os
-import requests
+import httpx
 import base64
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 import logging
 from services.epicor_auth import epicor_auth
+from utils.http_client import HTTPClientManager
 
 load_dotenv()
 
@@ -29,6 +30,14 @@ class EpicorAPIService:
         self.company_id = os.getenv("EPICOR_COMPANY_ID")
         self.default_price_list = os.getenv("EPICOR_DEFAULT_PRICE_LIST", "UNA1")
 
+        # Load margin thresholds from environment with defaults
+        # These define the margin percentage levels for risk classification
+        self.margin_thresholds = {
+            "critical": float(os.getenv("MARGIN_THRESHOLD_CRITICAL", "10.0")),  # < 10% = critical
+            "high": float(os.getenv("MARGIN_THRESHOLD_HIGH", "15.0")),          # 10-15% = high
+            "medium": float(os.getenv("MARGIN_THRESHOLD_MEDIUM", "20.0"))       # 15-20% = medium, > 20% = low
+        }
+
         # Validate required configuration
         if not self.base_url:
             raise ValueError("EPICOR_BASE_URL not configured in .env file")
@@ -46,8 +55,9 @@ class EpicorAPIService:
         logger.info(f"   Company ID: {self.company_id}")
         logger.info(f"   Default Price List: {self.default_price_list}")
         logger.info(f"   Auth Method: Bearer Token + X-api-Key")
+        logger.info(f"   Margin Thresholds: Critical<{self.margin_thresholds['critical']}%, High<{self.margin_thresholds['high']}%, Medium<{self.margin_thresholds['medium']}%")
     
-    def _get_headers(self) -> Dict[str, str]:
+    async def _get_headers(self) -> Dict[str, str]:
         """Get authentication headers for API requests"""
         headers = {
             "Content-Type": "application/json",
@@ -57,7 +67,9 @@ class EpicorAPIService:
         }
 
         # Get valid Bearer token (automatically refreshes if expired)
-        bearer_token = epicor_auth.get_valid_token()
+        # Uses get_valid_token() which works without DB session (in-memory cache)
+        # The token is initialized with DB on app startup, then cached in memory
+        bearer_token = await epicor_auth.get_valid_token()
 
         if bearer_token:
             headers["Authorization"] = f"Bearer {bearer_token}"
@@ -70,39 +82,46 @@ class EpicorAPIService:
 
         return headers
     
-    def test_connection(self) -> Dict[str, Any]:
+    async def test_connection(self) -> Dict[str, Any]:
         """Test connection to Epicor API"""
         try:
             # Test with the Part Service endpoint (company-specific)
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             logger.info(f"Testing connection to: {url}")
-            response = requests.get(url, headers=headers, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, timeout=10.0)
 
             if response.status_code == 200:
-                logger.info("✅ Epicor API connection successful")
+                logger.info("Epicor API connection successful")
                 return {
                     "status": "success",
                     "message": "Connection successful",
                     "part_service_accessible": True
                 }
             else:
-                logger.error(f"❌ Epicor API connection failed: {response.status_code}")
+                logger.error(f"Epicor API connection failed: {response.status_code}")
                 return {
                     "status": "error",
                     "message": f"HTTP {response.status_code}: {response.text}",
                     "status_code": response.status_code
                 }
 
+        except httpx.TimeoutException:
+            logger.error("Epicor API connection timeout")
+            return {
+                "status": "error",
+                "message": "Connection timeout"
+            }
         except Exception as e:
-            logger.error(f"❌ Epicor API connection error: {e}")
+            logger.error(f"Epicor API connection error: {e}")
             return {
                 "status": "error",
                 "message": str(e)
             }
     
-    def get_part(self, part_num: str) -> Optional[Dict[str, Any]]:
+    async def get_part(self, part_num: str) -> Optional[Dict[str, Any]]:
         """
         Get part information from Epicor
 
@@ -113,27 +132,1456 @@ class EpicorAPIService:
             Part data dictionary or None if not found
         """
         try:
-            url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/Parts(Company='{self.company_id}',PartNum='{part_num}')"
-            headers = self._get_headers()
+            # Use filter query instead of key lookup to handle special characters like #
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/Parts"
+            headers = await self._get_headers()
 
-            response = requests.get(url, headers=headers, timeout=10)
+            params = {
+                "$filter": f"Company eq '{self.company_id}' and PartNum eq '{part_num}'",
+                "$top": 1
+            }
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             if response.status_code == 200:
-                part_data = response.json()
-                logger.info(f"✅ Retrieved part: {part_num}")
-                return part_data
+                data = response.json()
+                parts = data.get("value", [])
+                if parts:
+                    logger.info(f"Retrieved part: {part_num}")
+                    return parts[0]
+                else:
+                    logger.warning(f"Part not found: {part_num}")
+                    return None
             elif response.status_code == 404:
-                logger.warning(f"⚠️ Part not found: {part_num}")
+                logger.warning(f"Part not found: {part_num}")
                 return None
             else:
-                logger.error(f"❌ Error retrieving part {part_num}: {response.status_code} - {response.text}")
+                logger.error(f"Error retrieving part {part_num}: {response.status_code} - {response.text}")
                 return None
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout retrieving part {part_num}")
+            return None
         except Exception as e:
-            logger.error(f"❌ Exception retrieving part {part_num}: {e}")
+            logger.error(f"Exception retrieving part {part_num}: {e}")
             return None
 
-    def get_vendor_by_id(self, vendor_id: str) -> Optional[Dict[str, Any]]:
+    async def get_part_where_used(self, part_num: str) -> List[Dict[str, Any]]:
+        """
+        Find direct parent assemblies that use a given component part.
+
+        Calls the Epicor GetPartWhereUsed endpoint to perform BOM implosion
+        (find which assemblies contain this part as a component).
+
+        Args:
+            part_num: Component part number to look up
+
+        Returns:
+            List of parent assemblies with fields:
+            - PartNum: Parent assembly part number
+            - RevisionNum: Revision of the parent assembly
+            - QtyPer: Quantity of the component used per parent assembly
+            - CanTrackUp: Boolean indicating if this parent has further parents (for multi-level traversal)
+            - Description: Parent assembly description
+            - MtlSeq: Material sequence number in the BOM
+        """
+        try:
+            logger.info(f"Finding assemblies that use part: {part_num}")
+
+            # Build the endpoint URL for GetPartWhereUsed action
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/GetPartWhereUsed"
+            headers = await self._get_headers()
+
+            # Build the request body
+            payload = {
+                "whereUsedPartNum": part_num,
+                "pageSize": 0,       # 0 = return all results
+                "absolutePage": 0
+            }
+
+            logger.info(f"   Calling GetPartWhereUsed endpoint...")
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                # Extract the PartWhereUsed array from returnObj
+                return_obj = data.get("returnObj", {})
+                where_used_list = return_obj.get("PartWhereUsed", [])
+
+                if not where_used_list:
+                    logger.info(f"   No parent assemblies found for part {part_num}")
+                    return []
+
+                # Parse and normalize the results
+                results = []
+                for item in where_used_list:
+                    parent_info = {
+                        "PartNum": item.get("PartNum", ""),
+                        "RevisionNum": item.get("RevisionNum", ""),
+                        "QtyPer": float(item.get("QtyPer", 1.0)),
+                        "CanTrackUp": item.get("CanTrackUp", False),
+                        "Description": item.get("Description", "") or item.get("PartDescription", ""),
+                        "MtlSeq": item.get("MtlSeq", 0),
+                        "MtlPartNum": item.get("MtlPartNum", part_num)
+                    }
+                    results.append(parent_info)
+
+                logger.info(f"Found {len(results)} parent assemblies for part {part_num}")
+                for r in results[:5]:  # Log first 5 for brevity
+                    logger.info(f"   - {r['PartNum']} (Rev: {r['RevisionNum']}, QtyPer: {r['QtyPer']}, CanTrackUp: {r['CanTrackUp']})")
+                if len(results) > 5:
+                    logger.info(f"   ... and {len(results) - 5} more")
+
+                return results
+
+            elif response.status_code == 404:
+                logger.warning(f"GetPartWhereUsed endpoint not found - verify API version")
+                return []
+            else:
+                logger.error(f"Error calling GetPartWhereUsed: {response.status_code}")
+                logger.error(f"   Response: {response.text[:500]}")
+                return []
+
+        except httpx.TimeoutException:
+            logger.error(f"Timeout calling GetPartWhereUsed for part {part_num}")
+            return []
+        except Exception as e:
+            logger.error(f"Exception in get_part_where_used for {part_num}: {e}")
+            return []
+
+    async def find_all_affected_assemblies(
+        self,
+        part_num: str,
+        max_levels: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Recursively find ALL assemblies (direct and indirect) affected by a component.
+
+        Performs multi-level BOM traversal using GetPartWhereUsed to find:
+        - Direct parent assemblies that use the component
+        - Indirect parent assemblies (assemblies that use the direct parents)
+        - Continues up the BOM hierarchy until no more parents or max_levels reached
+
+        Calculates cumulative quantity at each level (multiplies QtyPer as we traverse up).
+
+        Args:
+            part_num: Component part number to start from
+            max_levels: Maximum BOM levels to traverse (default 10, prevents infinite loops)
+
+        Returns:
+            List of dictionaries containing:
+            - assembly_part_num: Parent assembly part number
+            - revision: Assembly revision
+            - qty_per: Quantity per (at this direct level)
+            - cumulative_qty: Cumulative quantity from original component to this assembly
+            - bom_level: BOM level (1 = direct parent, 2 = grandparent, etc.)
+            - direct_parent_of: The part this assembly directly contains
+            - can_track_up: Whether this assembly has further parents
+            - description: Assembly description
+        """
+        logger.info(f"Finding ALL affected assemblies for part: {part_num}")
+        logger.info(f"   Max traversal levels: {max_levels}")
+
+        all_affected = []
+        visited = set()  # Track visited parts to prevent circular references
+
+        async def traverse(current_part: str, level: int, cumulative_qty: float, parent_chain: List[str]):
+            """Recursive helper function to traverse BOM hierarchy"""
+
+            # Prevent infinite loops and excessive depth
+            if current_part in visited:
+                logger.debug(f"   Skipping already visited part: {current_part}")
+                return
+            if level > max_levels:
+                logger.warning(f"Max level ({max_levels}) reached at part {current_part}")
+                return
+
+            visited.add(current_part)
+
+            # Get direct parents of current part
+            parents = await self.get_part_where_used(current_part)
+
+            if not parents:
+                logger.debug(f"   No parents found for {current_part} at level {level}")
+                return
+
+            for parent in parents:
+                parent_part = parent.get("PartNum", "")
+                if not parent_part:
+                    continue
+
+                # Skip if this parent is in our traversal chain (circular reference)
+                if parent_part in parent_chain:
+                    logger.warning(f"Circular reference detected: {parent_part} already in chain")
+                    continue
+
+                qty_per = parent.get("QtyPer", 1.0)
+                total_qty = cumulative_qty * qty_per
+                can_track_up = parent.get("CanTrackUp", False)
+
+                # Build the affected assembly entry
+                affected_entry = {
+                    "assembly_part_num": parent_part,
+                    "revision": parent.get("RevisionNum", ""),
+                    "qty_per": qty_per,
+                    "cumulative_qty": total_qty,
+                    "bom_level": level,
+                    "direct_parent_of": current_part,
+                    "can_track_up": can_track_up,
+                    "description": parent.get("Description", ""),
+                    "mtl_seq": parent.get("MtlSeq", 0)
+                }
+
+                all_affected.append(affected_entry)
+
+                logger.debug(f"   Level {level}: {parent_part} (QtyPer: {qty_per}, Cumulative: {total_qty}, CanTrackUp: {can_track_up})")
+
+                # Recursively check if this parent has parents
+                if can_track_up:
+                    new_chain = parent_chain + [parent_part]
+                    await traverse(parent_part, level + 1, total_qty, new_chain)
+
+        # Start traversal from the component part
+        try:
+            await traverse(part_num, 1, 1.0, [part_num])
+
+            # Log summary
+            if all_affected:
+                # Count assemblies by level
+                level_counts = {}
+                for item in all_affected:
+                    lvl = item["bom_level"]
+                    level_counts[lvl] = level_counts.get(lvl, 0) + 1
+
+                logger.info(f"✅ Found {len(all_affected)} total affected assemblies for {part_num}")
+                for lvl in sorted(level_counts.keys()):
+                    logger.info(f"   Level {lvl}: {level_counts[lvl]} assemblies")
+            else:
+                logger.info(f"ℹ️  No affected assemblies found for part {part_num}")
+
+            return all_affected
+
+        except Exception as e:
+            logger.error(f"❌ Exception in find_all_affected_assemblies: {e}")
+            return all_affected  # Return what we found so far
+
+    async def calculate_assembly_cost_impact(
+        self,
+        component_price_delta: float,
+        qty_per_assembly: float,
+        assembly_part_num: str
+    ) -> Dict[str, Any]:
+        """
+        Calculate how a component price change affects an assembly's cost.
+
+        Args:
+            component_price_delta: Price difference (new_price - old_price)
+            qty_per_assembly: Quantity of component used per assembly (from BOM)
+            assembly_part_num: Assembly part number to analyze
+
+        Returns:
+            Dictionary containing:
+            - assembly_part_num: The assembly analyzed
+            - current_cost: Current assembly cost from Epicor
+            - cost_increase_per_unit: Cost increase per assembly unit
+            - new_assembly_cost: Projected new assembly cost
+            - cost_increase_pct: Percentage cost increase
+            - cost_field_used: Which cost field was used (StdCost or AvgMaterialCost)
+        """
+        try:
+            logger.info(f"Calculating cost impact for assembly: {assembly_part_num}")
+            logger.info(f"   Price delta: ${component_price_delta:.4f}, QtyPer: {qty_per_assembly}")
+
+            # Get assembly's current cost from Epicor
+            assembly_data = await self.get_part(assembly_part_num)
+
+            if not assembly_data:
+                logger.warning(f"Assembly {assembly_part_num} not found in Epicor")
+                return {
+                    "assembly_part_num": assembly_part_num,
+                    "error": f"Assembly {assembly_part_num} not found",
+                    "current_cost": 0,
+                    "cost_increase_per_unit": component_price_delta * qty_per_assembly,
+                    "new_assembly_cost": 0,
+                    "cost_increase_pct": 0,
+                    "cost_field_used": None
+                }
+
+            # Try StdCost first, fall back to AvgMaterialCost
+            current_cost = assembly_data.get("StdCost")
+            cost_field_used = "StdCost"
+
+            if current_cost is None or current_cost == 0:
+                current_cost = assembly_data.get("AvgMaterialCost", 0)
+                cost_field_used = "AvgMaterialCost"
+
+            if current_cost is None:
+                current_cost = 0
+                cost_field_used = "None (defaulted to 0)"
+
+            # Calculate cost impact
+            cost_increase_per_unit = component_price_delta * qty_per_assembly
+            new_assembly_cost = current_cost + cost_increase_per_unit
+
+            # Calculate percentage increase (handle zero cost)
+            if current_cost > 0:
+                cost_increase_pct = (cost_increase_per_unit / current_cost) * 100
+            else:
+                cost_increase_pct = 0 if cost_increase_per_unit == 0 else 100  # 100% if going from 0 to something
+
+            logger.info(f"   Current cost (${cost_field_used}): ${current_cost:.4f}")
+            logger.info(f"   Cost increase: ${cost_increase_per_unit:.4f} ({cost_increase_pct:.2f}%)")
+            logger.info(f"   New projected cost: ${new_assembly_cost:.4f}")
+
+            return {
+                "assembly_part_num": assembly_part_num,
+                "assembly_description": assembly_data.get("PartDescription", ""),
+                "current_cost": round(current_cost, 4),
+                "cost_increase_per_unit": round(cost_increase_per_unit, 4),
+                "new_assembly_cost": round(new_assembly_cost, 4),
+                "cost_increase_pct": round(cost_increase_pct, 2),
+                "cost_field_used": cost_field_used
+            }
+
+        except Exception as e:
+            logger.error(f"Exception calculating cost impact for {assembly_part_num}: {e}")
+            return {
+                "assembly_part_num": assembly_part_num,
+                "error": str(e),
+                "current_cost": 0,
+                "cost_increase_per_unit": component_price_delta * qty_per_assembly,
+                "new_assembly_cost": 0,
+                "cost_increase_pct": 0,
+                "cost_field_used": None
+            }
+
+    async def calculate_annual_impact(
+        self,
+        price_delta: float,
+        affected_assemblies: List[Dict[str, Any]],
+        weekly_demand_override: Optional[Dict[str, float]] = None,
+        use_forecast: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Estimate the annual financial impact of a component price change.
+
+        Formula: Annual Cost Delta = Price Difference × Cumulative Qty × Weekly Demand × 52
+
+        Args:
+            price_delta: Component price difference (new_price - old_price)
+            affected_assemblies: List from find_all_affected_assemblies()
+            weekly_demand_override: Optional dict mapping assembly_part_num to weekly demand
+                                   (overrides forecast data if provided for a specific part)
+            use_forecast: If True, automatically fetch forecast data from Epicor
+                         for assemblies without override values (default: False)
+
+        Returns:
+            Dictionary containing:
+            - total_annual_impact: Sum of annual impact across all assemblies
+            - total_assemblies_impacted: Count of affected assemblies
+            - impact_by_assembly: Detailed breakdown for each assembly
+        """
+        try:
+            logger.info(f"Calculating annual impact for {len(affected_assemblies)} assemblies")
+            logger.info(f"   Price delta: ${price_delta:.4f}")
+
+            if weekly_demand_override:
+                logger.info(f"   Using demand overrides for {len(weekly_demand_override)} assemblies")
+
+            # If use_forecast is enabled, fetch forecast data for assemblies
+            forecast_demand = {}
+            if use_forecast:
+                logger.info(f"   Fetching forecast data from Epicor...")
+                assembly_parts = [a.get("assembly_part_num", "") for a in affected_assemblies]
+                # Remove duplicates
+                unique_parts = list(set(p for p in assembly_parts if p))
+                forecast_demand = await self.get_assembly_demand(unique_parts)
+
+            total_annual_impact = 0.0
+            impact_by_assembly = []
+
+            for assembly in affected_assemblies:
+                assembly_part = assembly.get("assembly_part_num", "")
+                cumulative_qty = assembly.get("cumulative_qty", assembly.get("qty_per", 1.0))
+
+                # Determine weekly demand with priority:
+                # 1. Override (if provided for this part)
+                # 2. Forecast data (if use_forecast=True and data exists)
+                # 3. Default to 0
+                demand_source = "default"
+                weekly_demand = 0.0
+
+                if weekly_demand_override and assembly_part in weekly_demand_override:
+                    weekly_demand = weekly_demand_override[assembly_part]
+                    demand_source = "override"
+                elif use_forecast and assembly_part in forecast_demand:
+                    weekly_demand = forecast_demand[assembly_part]
+                    demand_source = "forecast" if weekly_demand > 0 else "forecast_zero"
+
+                # Calculate annual impact
+                # Impact = Price Delta × Cumulative Qty × Weekly Demand × 52 weeks
+                annual_demand = weekly_demand * 52
+                annual_impact = price_delta * cumulative_qty * annual_demand
+
+                total_annual_impact += annual_impact
+
+                impact_entry = {
+                    "assembly_part_num": assembly_part,
+                    "revision": assembly.get("revision", ""),
+                    "bom_level": assembly.get("bom_level", 0),
+                    "qty_per": assembly.get("qty_per", 1.0),
+                    "cumulative_qty": cumulative_qty,
+                    "weekly_demand": weekly_demand,
+                    "annual_demand": annual_demand,
+                    "cost_increase_per_unit": round(price_delta * cumulative_qty, 4),
+                    "annual_cost_impact": round(annual_impact, 2),
+                    "demand_source": demand_source
+                }
+
+                impact_by_assembly.append(impact_entry)
+
+                if weekly_demand > 0:
+                    logger.debug(f"   {assembly_part}: Weekly={weekly_demand}, Annual Impact=${annual_impact:.2f}")
+
+            # Sort by annual impact (highest first)
+            impact_by_assembly.sort(key=lambda x: x["annual_cost_impact"], reverse=True)
+
+            # Log summary
+            assemblies_with_demand = sum(1 for a in impact_by_assembly if a["weekly_demand"] > 0)
+            forecast_sources = sum(1 for a in impact_by_assembly if a["demand_source"] == "forecast")
+            logger.info(f"Annual impact calculation complete")
+            logger.info(f"   Total assemblies: {len(affected_assemblies)}")
+            logger.info(f"   Assemblies with demand data: {assemblies_with_demand}")
+            if use_forecast:
+                logger.info(f"   Demand from forecast: {forecast_sources}")
+            logger.info(f"   Total annual impact: ${total_annual_impact:,.2f}")
+
+            return {
+                "total_annual_impact": round(total_annual_impact, 2),
+                "total_assemblies_impacted": len(affected_assemblies),
+                "assemblies_with_demand_data": assemblies_with_demand,
+                "demand_from_forecast": forecast_sources if use_forecast else 0,
+                "impact_by_assembly": impact_by_assembly,
+                "price_delta": price_delta,
+                "calculation_note": "Annual Impact = Price Delta × Cumulative Qty × Weekly Demand × 52"
+            }
+
+        except Exception as e:
+            logger.error(f"Exception calculating annual impact: {e}")
+            return {
+                "total_annual_impact": 0,
+                "total_assemblies_impacted": len(affected_assemblies) if affected_assemblies else 0,
+                "assemblies_with_demand_data": 0,
+                "impact_by_assembly": [],
+                "error": str(e)
+            }
+
+    async def get_part_forecast(
+        self,
+        part_num: str,
+        weeks_ahead: int = 52,
+        plant: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get forecast/planned demand for a part from Epicor ForecastSvc.
+
+        Retrieves forecast quantities for the specified part and calculates
+        weekly demand based on future forecasts.
+
+        Args:
+            part_num: Part number to get forecast for
+            weeks_ahead: Number of weeks to look ahead (default: 52 for annual)
+            plant: Optional plant code to filter by
+
+        Returns:
+            Dictionary containing:
+            - total_forecast_qty: Sum of all forecast quantities
+            - weekly_demand: Calculated average weekly demand
+            - forecast_records: Number of forecast records found
+            - forecasts: List of individual forecast entries
+            - data_source: "epicor_forecast"
+        """
+        try:
+            logger.info(f"Getting forecast for part: {part_num}")
+
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.ForecastSvc/Forecasts"
+            headers = await self._get_headers()
+
+            # Build filter - get forecasts for this part with future dates
+            from datetime import datetime, timedelta, timezone
+            today = datetime.now(timezone.utc)
+            end_date = today + timedelta(weeks=weeks_ahead)
+
+            # Format dates for OData filter with timezone (Epicor requires timezone offset)
+            today_str = today.strftime("%Y-%m-%dT00:00:00Z")
+            end_date_str = end_date.strftime("%Y-%m-%dT00:00:00Z")
+
+            filter_parts = [
+                f"PartNum eq '{part_num}'",
+                f"ForeDate ge {today_str}",
+                f"ForeDate le {end_date_str}"
+            ]
+
+            if plant:
+                filter_parts.append(f"Plant eq '{plant}'")
+
+            params = {
+                "$filter": " and ".join(filter_parts),
+                "$select": "PartNum,ForeDate,ForeQty,ForeQtyUOM,Plant,CustNum,CustomerName",
+                "$orderby": "ForeDate asc"
+            }
+
+            logger.info(f"   Querying forecasts from {today.date()} to {end_date.date()}")
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=15.0)
+
+            if response.status_code == 200:
+                data = response.json()
+                forecasts = data.get("value", [])
+
+                # Calculate totals
+                total_qty = sum(float(f.get("ForeQty", 0)) for f in forecasts)
+                weekly_demand = total_qty / weeks_ahead if weeks_ahead > 0 else 0
+
+                logger.info(f"Found {len(forecasts)} forecast records for {part_num}")
+                logger.info(f"   Total forecast qty: {total_qty}")
+                logger.info(f"   Avg weekly demand: {weekly_demand:.2f}")
+
+                return {
+                    "part_num": part_num,
+                    "total_forecast_qty": round(total_qty, 2),
+                    "weekly_demand": round(weekly_demand, 4),
+                    "annual_demand": round(total_qty, 2),
+                    "weeks_covered": weeks_ahead,
+                    "forecast_records": len(forecasts),
+                    "forecasts": forecasts,
+                    "data_source": "epicor_forecast"
+                }
+
+            elif response.status_code == 404:
+                logger.info(f"   No forecasts found for part {part_num}")
+                return {
+                    "part_num": part_num,
+                    "total_forecast_qty": 0,
+                    "weekly_demand": 0,
+                    "annual_demand": 0,
+                    "weeks_covered": weeks_ahead,
+                    "forecast_records": 0,
+                    "forecasts": [],
+                    "data_source": "epicor_forecast",
+                    "message": "No forecast data available"
+                }
+            else:
+                logger.error(f"Error getting forecast: {response.status_code} - {response.text[:200]}")
+                return {
+                    "part_num": part_num,
+                    "total_forecast_qty": 0,
+                    "weekly_demand": 0,
+                    "annual_demand": 0,
+                    "forecast_records": 0,
+                    "forecasts": [],
+                    "error": f"API error: {response.status_code}"
+                }
+
+        except httpx.TimeoutException:
+            logger.error(f"Timeout getting forecast for {part_num}")
+            return {
+                "part_num": part_num,
+                "total_forecast_qty": 0,
+                "weekly_demand": 0,
+                "annual_demand": 0,
+                "forecast_records": 0,
+                "forecasts": [],
+                "error": "Request timeout"
+            }
+        except Exception as e:
+            logger.error(f"Exception getting forecast for {part_num}: {e}")
+            return {
+                "part_num": part_num,
+                "total_forecast_qty": 0,
+                "weekly_demand": 0,
+                "annual_demand": 0,
+                "forecast_records": 0,
+                "forecasts": [],
+                "error": str(e)
+            }
+
+    async def get_assembly_demand(
+        self,
+        assembly_part_nums: List[str],
+        weeks_ahead: int = 52
+    ) -> Dict[str, float]:
+        """
+        Get weekly demand for multiple assemblies from Epicor forecasts.
+
+        Convenience method that retrieves forecast data for a list of assemblies
+        and returns a dictionary mapping part numbers to weekly demand.
+        This can be passed directly to calculate_annual_impact().
+
+        Args:
+            assembly_part_nums: List of assembly part numbers
+            weeks_ahead: Number of weeks to look ahead (default: 52)
+
+        Returns:
+            Dictionary mapping assembly_part_num to weekly_demand
+            Example: {"ASSY-001": 25.5, "ASSY-002": 12.0}
+        """
+        logger.info(f"Getting demand data for {len(assembly_part_nums)} assemblies")
+
+        demand_data = {}
+
+        for part_num in assembly_part_nums:
+            forecast = await self.get_part_forecast(part_num, weeks_ahead)
+            weekly_demand = forecast.get("weekly_demand", 0)
+            demand_data[part_num] = weekly_demand
+
+            if weekly_demand > 0:
+                logger.debug(f"   {part_num}: {weekly_demand:.2f}/week")
+
+        assemblies_with_demand = sum(1 for d in demand_data.values() if d > 0)
+        logger.info(f"Retrieved demand for {assemblies_with_demand}/{len(assembly_part_nums)} assemblies")
+
+        return demand_data
+
+    async def check_margin_erosion(
+        self,
+        assembly_part_num: str,
+        cost_increase: float,
+        margin_thresholds: Optional[Dict[str, float]] = None
+    ) -> Dict[str, Any]:
+        """
+        Check if a cost increase will cause margin erosion below acceptable thresholds.
+
+        Margin thresholds are loaded from environment variables by default:
+        - MARGIN_THRESHOLD_CRITICAL (default 10%): < this = critical risk
+        - MARGIN_THRESHOLD_HIGH (default 15%): < this = high risk
+        - MARGIN_THRESHOLD_MEDIUM (default 20%): < this = medium risk, >= this = low risk
+
+        Args:
+            assembly_part_num: Assembly part number to check
+            cost_increase: Cost increase per unit from component price change
+            margin_thresholds: Optional custom thresholds dict (overrides env vars)
+                               Keys: critical, high, medium
+
+        Returns:
+            Dictionary containing:
+            - assembly_part_num: The assembly analyzed
+            - current_cost, new_cost, selling_price: Financial data
+            - current_margin_pct, new_margin_pct, margin_change_pct: Margin analysis
+            - risk_level: "critical", "high", "medium", or "low"
+            - requires_review: Boolean indicating if human review is needed
+            - recommendation: Human-readable recommendation text
+        """
+        try:
+            logger.info(f"Checking margin erosion for assembly: {assembly_part_num}")
+            logger.info(f"   Cost increase: ${cost_increase:.4f}")
+
+            # Use provided thresholds, or fall back to instance thresholds (from env vars)
+            if margin_thresholds is None:
+                margin_thresholds = self.margin_thresholds
+
+            # Get assembly's current cost and selling price from Epicor
+            assembly_data = await self.get_part(assembly_part_num)
+
+            if not assembly_data:
+                logger.warning(f"Assembly {assembly_part_num} not found")
+                return {
+                    "assembly_part_num": assembly_part_num,
+                    "error": f"Assembly {assembly_part_num} not found",
+                    "risk_level": "unknown",
+                    "requires_review": True,
+                    "recommendation": "Cannot analyze - assembly not found in Epicor"
+                }
+
+            # Get cost (try StdCost first, then AvgMaterialCost)
+            current_cost = assembly_data.get("StdCost")
+            if current_cost is None or current_cost == 0:
+                current_cost = assembly_data.get("AvgMaterialCost", 0) or 0
+
+            # Get selling price
+            selling_price = assembly_data.get("UnitPrice", 0) or 0
+
+            # Handle missing selling price
+            if selling_price <= 0:
+                logger.warning(f"No selling price defined for {assembly_part_num}")
+                return {
+                    "assembly_part_num": assembly_part_num,
+                    "assembly_description": assembly_data.get("PartDescription", ""),
+                    "current_cost": round(current_cost, 4),
+                    "new_cost": round(current_cost + cost_increase, 4),
+                    "cost_increase": round(cost_increase, 4),
+                    "selling_price": 0,
+                    "current_margin_pct": 0,
+                    "new_margin_pct": 0,
+                    "margin_change_pct": 0,
+                    "risk_level": "unknown",
+                    "requires_review": True,
+                    "recommendation": "Cannot calculate margin - no selling price defined",
+                    "thresholds_used": margin_thresholds
+                }
+
+            # Calculate margins
+            new_cost = current_cost + cost_increase
+            current_margin = ((selling_price - current_cost) / selling_price) * 100
+            new_margin = ((selling_price - new_cost) / selling_price) * 100
+            margin_change = new_margin - current_margin
+
+            # Determine risk level based on NEW margin
+            if new_margin < margin_thresholds["critical"]:
+                risk_level = "critical"
+                recommendation = f"CRITICAL: Margin ({new_margin:.1f}%) below {margin_thresholds['critical']}%. Require executive approval or consider selling price increase."
+            elif new_margin < margin_thresholds["high"]:
+                risk_level = "high"
+                recommendation = f"HIGH RISK: Margin ({new_margin:.1f}%) between {margin_thresholds['critical']}-{margin_thresholds['high']}%. Manager approval required."
+            elif new_margin < margin_thresholds["medium"]:
+                risk_level = "medium"
+                recommendation = f"REVIEW: Margin ({new_margin:.1f}%) between {margin_thresholds['high']}-{margin_thresholds['medium']}%. Monitor closely."
+            else:
+                risk_level = "low"
+                recommendation = f"OK: Margin ({new_margin:.1f}%) above {margin_thresholds['medium']}%. Within acceptable range."
+
+            logger.info(f"   Selling price: ${selling_price:.4f}")
+            logger.info(f"   Current cost: ${current_cost:.4f} -> New cost: ${new_cost:.4f}")
+            logger.info(f"   Margin: {current_margin:.1f}% -> {new_margin:.1f}% (change: {margin_change:.1f}%)")
+            logger.info(f"   Risk level: {risk_level.upper()}")
+
+            return {
+                "assembly_part_num": assembly_part_num,
+                "assembly_description": assembly_data.get("PartDescription", ""),
+                "current_cost": round(current_cost, 4),
+                "new_cost": round(new_cost, 4),
+                "cost_increase": round(cost_increase, 4),
+                "selling_price": round(selling_price, 4),
+                "current_margin_pct": round(current_margin, 2),
+                "new_margin_pct": round(new_margin, 2),
+                "margin_change_pct": round(margin_change, 2),
+                "risk_level": risk_level,
+                "requires_review": risk_level in ["critical", "high"],
+                "recommendation": recommendation,
+                "thresholds_used": margin_thresholds
+            }
+
+        except Exception as e:
+            logger.error(f"Exception checking margin erosion for {assembly_part_num}: {e}")
+            return {
+                "assembly_part_num": assembly_part_num,
+                "error": str(e),
+                "risk_level": "unknown",
+                "requires_review": True,
+                "recommendation": f"Error analyzing margin: {str(e)}"
+            }
+
+    async def analyze_price_change_impact(
+        self,
+        part_num: str,
+        old_price: float,
+        new_price: float,
+        weekly_demand_override: Optional[Dict[str, float]] = None,
+        margin_thresholds: Optional[Dict[str, float]] = None,
+        use_forecast: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Comprehensive BOM impact analysis for a component price change.
+
+        This method ties together all BOM impact analysis:
+        1. Find all affected assemblies (BOM implosion)
+        2. Calculate cost impact for each assembly
+        3. Check margin erosion risks for ALL affected assemblies
+        4. Estimate annual financial impact using Epicor forecast data
+        5. Generate summary and recommendations
+
+        Args:
+            part_num: Component part number with price change
+            old_price: Previous component price
+            new_price: New component price
+            weekly_demand_override: Optional dict mapping assembly_part_num to weekly demand
+                                   (overrides forecast data for specific assemblies)
+            margin_thresholds: Optional custom margin thresholds (uses env vars if not provided)
+            use_forecast: If True, automatically fetch forecast data from Epicor (default: True)
+
+        Returns:
+            Comprehensive impact analysis report (JSON-friendly for frontend):
+            - component_part_num: Component that changed
+            - old_price, new_price, price_delta, price_change_pct: Price change details
+            - summary: High-level statistics and risk counts
+            - impact_details: Detailed analysis for each affected assembly
+            - annual_impact: Annual financial impact estimates
+            - high_risk_assemblies: List of assemblies requiring review (critical/high)
+            - recommendation: Overall recommendation text
+            - thresholds_used: The margin thresholds applied
+        """
+        try:
+            logger.info("="*80)
+            logger.info("BOM IMPACT ANALYSIS - COMPREHENSIVE REPORT")
+            logger.info("="*80)
+            logger.info(f"   Component: {part_num}")
+            logger.info(f"   Old Price: ${old_price:.4f}")
+            logger.info(f"   New Price: ${new_price:.4f}")
+
+            price_delta = new_price - old_price
+            price_change_pct = ((new_price - old_price) / old_price * 100) if old_price > 0 else 0
+
+            logger.info(f"   Price Delta: ${price_delta:.4f} ({price_change_pct:+.2f}%)")
+            logger.info("-"*80)
+
+            # Step 1: Find all affected assemblies
+            logger.info("Step 1: Finding affected assemblies...")
+            affected_assemblies = await self.find_all_affected_assemblies(part_num)
+
+            if not affected_assemblies:
+                logger.info("No affected assemblies found - component may be a top-level part")
+                return {
+                    "component_part_num": part_num,
+                    "old_price": old_price,
+                    "new_price": new_price,
+                    "price_delta": round(price_delta, 4),
+                    "price_change_pct": round(price_change_pct, 2),
+                    "summary": {
+                        "total_assemblies_affected": 0,
+                        "total_annual_cost_impact": 0,
+                        "risk_summary": {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0},
+                        "requires_approval": False
+                    },
+                    "impact_details": [],
+                    "annual_impact": {"total_annual_impact": 0},
+                    "recommendation": "No assemblies affected - this part is not used as a component in any BOMs."
+                }
+
+            logger.info("-"*80)
+
+            # Step 2 & 3: Calculate cost impact and check margins for each assembly
+            logger.info("Step 2-3: Calculating cost impact and margin erosion...")
+            impact_details = []
+            risk_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
+
+            for assembly in affected_assemblies:
+                assembly_part = assembly["assembly_part_num"]
+                cumulative_qty = assembly.get("cumulative_qty", assembly.get("qty_per", 1.0))
+
+                # Calculate cost impact using cumulative qty
+                cost_increase = price_delta * cumulative_qty
+
+                # Check margin erosion
+                margin_check = await self.check_margin_erosion(
+                    assembly_part_num=assembly_part,
+                    cost_increase=cost_increase,
+                    margin_thresholds=margin_thresholds
+                )
+
+                # Track risk counts
+                risk_level = margin_check.get("risk_level", "unknown")
+                risk_counts[risk_level] = risk_counts.get(risk_level, 0) + 1
+
+                # Build combined impact entry
+                impact_entry = {
+                    # From affected assembly
+                    "assembly_part_num": assembly_part,
+                    "revision": assembly.get("revision", ""),
+                    "bom_level": assembly.get("bom_level", 0),
+                    "qty_per": assembly.get("qty_per", 1.0),
+                    "cumulative_qty": cumulative_qty,
+                    "direct_parent_of": assembly.get("direct_parent_of", ""),
+                    "description": assembly.get("description", "") or margin_check.get("assembly_description", ""),
+                    # Cost impact
+                    "cost_increase_per_unit": round(cost_increase, 4),
+                    # From margin check
+                    "current_cost": margin_check.get("current_cost", 0),
+                    "new_cost": margin_check.get("new_cost", 0),
+                    "selling_price": margin_check.get("selling_price", 0),
+                    "current_margin_pct": margin_check.get("current_margin_pct", 0),
+                    "new_margin_pct": margin_check.get("new_margin_pct", 0),
+                    "margin_change_pct": margin_check.get("margin_change_pct", 0),
+                    "risk_level": risk_level,
+                    "requires_review": margin_check.get("requires_review", False),
+                    "recommendation": margin_check.get("recommendation", "")
+                }
+
+                impact_details.append(impact_entry)
+
+            logger.info("-"*80)
+
+            # Step 4: Calculate annual impact with forecast data
+            logger.info("Step 4: Calculating annual financial impact...")
+            if use_forecast:
+                logger.info("   Using Epicor forecast data for demand...")
+            annual_impact_result = await self.calculate_annual_impact(
+                price_delta=price_delta,
+                affected_assemblies=affected_assemblies,
+                weekly_demand_override=weekly_demand_override,
+                use_forecast=use_forecast
+            )
+
+            # Merge annual impact data into impact_details
+            annual_by_assembly = {a["assembly_part_num"]: a for a in annual_impact_result.get("impact_by_assembly", [])}
+            for detail in impact_details:
+                assembly_part = detail["assembly_part_num"]
+                if assembly_part in annual_by_assembly:
+                    annual_data = annual_by_assembly[assembly_part]
+                    detail["weekly_demand"] = annual_data.get("weekly_demand", 0)
+                    detail["annual_demand"] = annual_data.get("annual_demand", 0)
+                    detail["annual_cost_impact"] = annual_data.get("annual_cost_impact", 0)
+                    detail["demand_source"] = annual_data.get("demand_source", "default")
+
+            # Sort by risk level (critical first) then by annual impact
+            risk_priority = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
+            impact_details.sort(key=lambda x: (
+                risk_priority.get(x.get("risk_level", "unknown"), 4),
+                -x.get("annual_cost_impact", 0)
+            ))
+
+            logger.info("-"*80)
+
+            # Build summary
+            total_annual_impact = annual_impact_result.get("total_annual_impact", 0)
+            requires_approval = risk_counts["critical"] > 0 or risk_counts["high"] > 0
+
+            # Get thresholds used (for transparency)
+            thresholds_used = margin_thresholds if margin_thresholds else self.margin_thresholds
+
+            # Calculate data quality metrics
+            assemblies_with_demand = annual_impact_result.get("assemblies_with_demand_data", 0)
+            assemblies_without_demand = len(affected_assemblies) - assemblies_with_demand
+            unknown_count = risk_counts.get("unknown", 0)
+
+            # Data quality warning flag - true if any assemblies have missing data
+            has_data_quality_issues = (unknown_count > 0 or assemblies_without_demand > 0)
+
+            summary = {
+                "total_assemblies_affected": len(affected_assemblies),
+                "total_annual_cost_impact": total_annual_impact,
+                "risk_summary": risk_counts,
+                "requires_approval": requires_approval,
+                "assemblies_with_demand_data": assemblies_with_demand,
+                "assemblies_without_demand_data": assemblies_without_demand,
+                "demand_from_forecast": annual_impact_result.get("demand_from_forecast", 0),
+                "assemblies_with_unknown_risk": unknown_count,
+                "has_data_quality_issues": has_data_quality_issues
+            }
+
+            # Extract high-risk assemblies (critical and high) for easy frontend access
+            high_risk_assemblies = [
+                {
+                    "assembly_part_num": d["assembly_part_num"],
+                    "description": d.get("description", ""),
+                    "risk_level": d["risk_level"],
+                    "current_margin_pct": d.get("current_margin_pct", 0),
+                    "new_margin_pct": d.get("new_margin_pct", 0),
+                    "margin_change_pct": d.get("margin_change_pct", 0),
+                    "annual_cost_impact": d.get("annual_cost_impact", 0),
+                    "recommendation": d.get("recommendation", "")
+                }
+                for d in impact_details
+                if d.get("risk_level") in ["critical", "high"]
+            ]
+
+            # Generate overall recommendation
+            recommendation = self._generate_impact_recommendation(risk_counts, total_annual_impact)
+
+            logger.info("="*80)
+            logger.info("📊 BOM IMPACT ANALYSIS COMPLETE")
+            logger.info("="*80)
+            logger.info(f"   Total assemblies affected: {len(affected_assemblies)}")
+            logger.info(f"   Risk breakdown: Critical={risk_counts['critical']}, High={risk_counts['high']}, Medium={risk_counts['medium']}, Low={risk_counts['low']}")
+            logger.info(f"   Total annual impact: ${total_annual_impact:,.2f}")
+            logger.info(f"   Requires approval: {requires_approval}")
+            logger.info(f"   High-risk assemblies: {len(high_risk_assemblies)}")
+            logger.info("="*80)
+
+            return {
+                "component_part_num": part_num,
+                "old_price": old_price,
+                "new_price": new_price,
+                "price_delta": round(price_delta, 4),
+                "price_change_pct": round(price_change_pct, 2),
+                "summary": summary,
+                "impact_details": impact_details,
+                "high_risk_assemblies": high_risk_assemblies,
+                "annual_impact": annual_impact_result,
+                "recommendation": recommendation,
+                "thresholds_used": thresholds_used
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Exception in analyze_price_change_impact: {e}")
+            return {
+                "component_part_num": part_num,
+                "old_price": old_price,
+                "new_price": new_price,
+                "price_delta": round(new_price - old_price, 4) if old_price and new_price else 0,
+                "error": str(e),
+                "summary": {
+                    "total_assemblies_affected": 0,
+                    "risk_summary": {},
+                    "requires_approval": True
+                },
+                "impact_details": [],
+                "recommendation": f"❌ Error during analysis: {str(e)}"
+            }
+
+    def _generate_impact_recommendation(
+        self,
+        risk_counts: Dict[str, int],
+        total_annual_impact: float
+    ) -> str:
+        """
+        Generate a human-readable recommendation based on impact analysis.
+
+        Args:
+            risk_counts: Dict with counts by risk level
+            total_annual_impact: Total annual financial impact
+
+        Returns:
+            Recommendation string
+        """
+        if risk_counts.get("critical", 0) > 0:
+            return (
+                f"🚨 CRITICAL: {risk_counts['critical']} assemblies have margin below 10%. "
+                f"Price update requires executive approval. Consider selling price adjustments. "
+                f"Total annual impact: ${total_annual_impact:,.2f}"
+            )
+        elif risk_counts.get("high", 0) > 0:
+            return (
+                f"⚠️ HIGH RISK: {risk_counts['high']} assemblies have margin between 10-15%. "
+                f"Manager approval required before proceeding. "
+                f"Total annual impact: ${total_annual_impact:,.2f}"
+            )
+        elif risk_counts.get("medium", 0) > 0:
+            return (
+                f"ℹ️ REVIEW: {risk_counts['medium']} assemblies approaching margin threshold (15-20%). "
+                f"Monitor closely after update. "
+                f"Total annual impact: ${total_annual_impact:,.2f}"
+            )
+        else:
+            low_count = risk_counts.get("low", 0)
+            unknown_count = risk_counts.get("unknown", 0)
+            if low_count > 0:
+                return (
+                    f"✅ LOW RISK: All {low_count} assemblies maintain healthy margins (>20%). "
+                    f"Safe to proceed with price update. "
+                    f"Total annual impact: ${total_annual_impact:,.2f}"
+                )
+            elif unknown_count > 0:
+                return (
+                    f"⚠️ UNKNOWN: {unknown_count} assemblies could not be analyzed (missing price/cost data). "
+                    f"Review manually before proceeding."
+                )
+            else:
+                return "ℹ️ No assemblies affected by this price change."
+
+    async def validate_supplier_part_for_email(
+        self,
+        part_num: str,
+        supplier_id: str
+    ) -> Dict[str, Any]:
+        """
+        Perform comprehensive Epicor validation for a supplier-part combination.
+
+        This runs all three validations in sequence:
+        1. Check if the part exists in Epicor
+        2. Check if the supplier exists in Epicor
+        3. Check if the supplier-part relationship exists (supplier is authorized to supply this part)
+
+        Args:
+            part_num: Part number from the email
+            supplier_id: Supplier ID from the email
+
+        Returns:
+            Dictionary with validation results:
+            {
+                "all_valid": bool,
+                "part_validated": bool,
+                "part_data": dict or None,
+                "part_error": str or None,
+                "supplier_validated": bool,
+                "supplier_data": dict or None,
+                "supplier_error": str or None,
+                "supplier_part_validated": bool,
+                "supplier_part_data": dict or None,
+                "supplier_part_error": str or None,
+                "validation_errors": list of error messages,
+                "can_proceed_with_bom_analysis": bool
+            }
+        """
+        logger.info("="*80)
+        logger.info("EPICOR VALIDATION - PRE-BOM ANALYSIS CHECK")
+        logger.info("="*80)
+        logger.info(f"   Part: {part_num}")
+        logger.info(f"   Supplier: {supplier_id}")
+
+        result = {
+            "all_valid": False,
+            "part_validated": False,
+            "part_data": None,
+            "part_error": None,
+            "supplier_validated": False,
+            "supplier_data": None,
+            "supplier_error": None,
+            "supplier_part_validated": False,
+            "supplier_part_data": None,
+            "supplier_part_error": None,
+            "validation_errors": [],
+            "can_proceed_with_bom_analysis": False
+        }
+
+        # Step 1: Validate part exists in Epicor
+        logger.info("-"*80)
+        logger.info("Step 1: Checking if part exists in Epicor...")
+        try:
+            part_data = await self.get_part(part_num)
+            if part_data:
+                result["part_validated"] = True
+                result["part_data"] = {
+                    "part_num": part_num,
+                    "description": part_data.get("PartDescription", ""),
+                    "type_code": part_data.get("TypeCode", ""),
+                    "uom": part_data.get("IUM", ""),
+                    "current_cost": part_data.get("StdCost") or part_data.get("AvgMaterialCost", 0)
+                }
+                logger.info(f"   ✅ Part validated: {part_num}")
+                logger.info(f"      Description: {result['part_data']['description']}")
+            else:
+                result["part_error"] = f"Part {part_num} not found in Epicor"
+                result["validation_errors"].append(result["part_error"])
+                logger.warning(f"   ❌ Part not found: {part_num}")
+        except Exception as e:
+            result["part_error"] = f"Error validating part: {str(e)}"
+            result["validation_errors"].append(result["part_error"])
+            logger.error(f"   ❌ Error validating part: {e}")
+
+        # Step 2: Validate supplier exists in Epicor
+        logger.info("-"*80)
+        logger.info("Step 2: Checking if supplier exists in Epicor...")
+        try:
+            vendor_data = await self.get_vendor_by_id(supplier_id)
+            if vendor_data:
+                result["supplier_validated"] = True
+                result["supplier_data"] = {
+                    "supplier_id": supplier_id,
+                    "vendor_num": vendor_data.get("VendorNum"),
+                    "name": vendor_data.get("Name", ""),
+                    "active": vendor_data.get("Inactive", True) is False  # Epicor uses Inactive flag
+                }
+                logger.info(f"   ✅ Supplier validated: {supplier_id}")
+                logger.info(f"      Name: {result['supplier_data']['name']}")
+                logger.info(f"      VendorNum: {result['supplier_data']['vendor_num']}")
+            else:
+                result["supplier_error"] = f"Supplier {supplier_id} not found in Epicor"
+                result["validation_errors"].append(result["supplier_error"])
+                logger.warning(f"   ❌ Supplier not found: {supplier_id}")
+        except Exception as e:
+            result["supplier_error"] = f"Error validating supplier: {str(e)}"
+            result["validation_errors"].append(result["supplier_error"])
+            logger.error(f"   ❌ Error validating supplier: {e}")
+
+        # Step 3: Validate supplier-part relationship (only if both part and supplier exist)
+        logger.info("-"*80)
+        logger.info("Step 3: Checking supplier-part relationship...")
+        if result["part_validated"] and result["supplier_validated"]:
+            try:
+                supplier_part = await self.verify_supplier_part(supplier_id, part_num)
+                if supplier_part:
+                    result["supplier_part_validated"] = True
+                    result["supplier_part_data"] = {
+                        "vendor_num": supplier_part.get("VendorNum"),
+                        "vendor_name": supplier_part.get("VendorName"),
+                        "part_num": supplier_part.get("PartNum"),
+                        "vendor_part_num": supplier_part.get("VendPartNum", ""),
+                        "lead_time": supplier_part.get("LeadTime", 0),
+                        "last_price": supplier_part.get("LastPrice", 0)
+                    }
+                    logger.info(f"   ✅ Supplier-Part relationship verified")
+                    logger.info(f"      Supplier {supplier_id} is authorized to supply {part_num}")
+                else:
+                    result["supplier_part_error"] = (
+                        f"Supplier {supplier_id} is not authorized to supply part {part_num} in Epicor. "
+                        f"The supplier exists and the part exists, but there is no supplier-part relationship "
+                        f"configured in Epicor's SupplierPartSvc."
+                    )
+                    result["validation_errors"].append(result["supplier_part_error"])
+                    logger.warning(f"   ❌ Supplier-Part relationship NOT found")
+                    logger.warning(f"      Supplier {supplier_id} exists, Part {part_num} exists")
+                    logger.warning(f"      But supplier is not set up to supply this part in Epicor")
+            except Exception as e:
+                result["supplier_part_error"] = f"Error verifying supplier-part relationship: {str(e)}"
+                result["validation_errors"].append(result["supplier_part_error"])
+                logger.error(f"   ❌ Error checking supplier-part relationship: {e}")
+        else:
+            skip_reason = []
+            if not result["part_validated"]:
+                skip_reason.append("part not validated")
+            if not result["supplier_validated"]:
+                skip_reason.append("supplier not validated")
+            logger.info(f"   ⏭️  Skipped supplier-part check ({', '.join(skip_reason)})")
+
+        # Determine overall validation status
+        result["all_valid"] = (
+            result["part_validated"] and
+            result["supplier_validated"] and
+            result["supplier_part_validated"]
+        )
+
+        # BOM analysis requires BOTH part AND supplier-part relationship to be verified
+        # This ensures we only run BOM implosion for parts that have a valid supplier link
+        result["can_proceed_with_bom_analysis"] = (
+            result["part_validated"] and
+            result["supplier_part_validated"]
+        )
+
+        logger.info("-"*80)
+        if result["all_valid"]:
+            logger.info("✅ ALL VALIDATIONS PASSED - Ready for BOM analysis and Epicor sync")
+        elif result["can_proceed_with_bom_analysis"]:
+            # Part + Supplier-Part validated, but supplier may have issues
+            logger.warning("⚠️  PARTIAL VALIDATION - BOM analysis will proceed")
+            logger.warning(f"   Issues: {', '.join(result['validation_errors'])}")
+        else:
+            logger.error("❌ VALIDATION FAILED - Cannot proceed with BOM analysis")
+            logger.error(f"   Requires: part_validated AND supplier_part_validated")
+            logger.error(f"   Errors: {', '.join(result['validation_errors'])}")
+        logger.info("="*80)
+
+        return result
+
+    async def process_supplier_price_change(
+        self,
+        part_num: str,
+        supplier_id: str,
+        old_price: float,
+        new_price: float,
+        effective_date: Optional[str] = None,
+        email_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Process a supplier price change email end-to-end.
+
+        This is the main orchestration method for the automated workflow:
+        1. Validates the component and supplier in Epicor
+        2. Finds all affected assemblies (BOM implosion)
+        3. Calculates annual cost impact using Epicor forecast data
+        4. Checks margin erosion for ALL affected assemblies
+        5. Generates a comprehensive JSON report for frontend display
+
+        Args:
+            part_num: Component part number from email
+            supplier_id: Supplier ID from email (e.g., "FAST1")
+            old_price: Previous price from email
+            new_price: New price from email
+            effective_date: Optional effective date from email (ISO format)
+            email_metadata: Optional dict with email info (subject, from, date, etc.)
+
+        Returns:
+            Comprehensive JSON-friendly report containing:
+            - status: "success", "warning", or "error"
+            - component: Validated component info from Epicor
+            - supplier: Validated supplier info from Epicor
+            - price_change: Price change details
+            - bom_impact: Results from analyze_price_change_impact
+            - actions_required: List of required actions based on risk levels
+            - processing_errors: List of any errors encountered (continues on errors)
+            - timestamp: ISO timestamp of when analysis was performed
+        """
+        from datetime import datetime
+
+        logger.info("="*80)
+        logger.info("PROCESSING SUPPLIER PRICE CHANGE")
+        logger.info("="*80)
+        logger.info(f"   Part: {part_num}")
+        logger.info(f"   Supplier: {supplier_id}")
+        logger.info(f"   Price Change: ${old_price:.4f} -> ${new_price:.4f}")
+        if effective_date:
+            logger.info(f"   Effective Date: {effective_date}")
+
+        processing_errors = []
+        timestamp = datetime.utcnow().isoformat() + "Z"
+
+        # Initialize result structure
+        result = {
+            "status": "success",
+            "timestamp": timestamp,
+            "processing_errors": processing_errors,
+            "component": None,
+            "supplier": None,
+            "price_change": {
+                "part_num": part_num,
+                "supplier_id": supplier_id,
+                "old_price": old_price,
+                "new_price": new_price,
+                "price_delta": round(new_price - old_price, 4),
+                "price_change_pct": round(((new_price - old_price) / old_price * 100), 2) if old_price > 0 else 0,
+                "effective_date": effective_date
+            },
+            "email_metadata": email_metadata,
+            "bom_impact": None,
+            "actions_required": [],
+            "can_auto_approve": False
+        }
+
+        # Step 1: Validate component exists in Epicor
+        logger.info("-"*80)
+        logger.info("Step 1: Validating component in Epicor...")
+        try:
+            component_data = await self.get_part(part_num)
+            if component_data:
+                result["component"] = {
+                    "part_num": part_num,
+                    "description": component_data.get("PartDescription", ""),
+                    "type_code": component_data.get("TypeCode", ""),
+                    "uom": component_data.get("IUM", ""),
+                    "current_cost": component_data.get("StdCost") or component_data.get("AvgMaterialCost", 0),
+                    "validated": True
+                }
+                logger.info(f"   Component validated: {component_data.get('PartDescription', part_num)}")
+            else:
+                result["component"] = {"part_num": part_num, "validated": False, "error": "Part not found in Epicor"}
+                processing_errors.append(f"Component {part_num} not found in Epicor")
+                logger.warning(f"   Component {part_num} not found in Epicor")
+        except Exception as e:
+            result["component"] = {"part_num": part_num, "validated": False, "error": str(e)}
+            processing_errors.append(f"Error validating component: {str(e)}")
+            logger.error(f"   Error validating component: {e}")
+
+        # Step 2: Validate supplier exists in Epicor
+        logger.info("-"*80)
+        logger.info("Step 2: Validating supplier in Epicor...")
+        try:
+            vendor_data = await self.get_vendor_by_id(supplier_id)
+            if vendor_data:
+                result["supplier"] = {
+                    "supplier_id": supplier_id,
+                    "vendor_num": vendor_data.get("VendorNum"),
+                    "name": vendor_data.get("Name", ""),
+                    "validated": True
+                }
+                logger.info(f"   Supplier validated: {vendor_data.get('Name', supplier_id)}")
+            else:
+                result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": "Supplier not found"}
+                processing_errors.append(f"Supplier {supplier_id} not found in Epicor")
+                logger.warning(f"   Supplier {supplier_id} not found in Epicor")
+        except Exception as e:
+            result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": str(e)}
+            processing_errors.append(f"Error validating supplier: {str(e)}")
+            logger.error(f"   Error validating supplier: {e}")
+
+        # Step 3: Perform comprehensive BOM impact analysis
+        logger.info("-"*80)
+        logger.info("Step 3: Performing BOM impact analysis...")
+        try:
+            bom_impact = await self.analyze_price_change_impact(
+                part_num=part_num,
+                old_price=old_price,
+                new_price=new_price,
+                use_forecast=True  # Automatically use Epicor forecast data
+            )
+            result["bom_impact"] = bom_impact
+
+            if "error" in bom_impact:
+                processing_errors.append(f"BOM analysis error: {bom_impact['error']}")
+                logger.error(f"   BOM analysis error: {bom_impact['error']}")
+        except Exception as e:
+            result["bom_impact"] = {"error": str(e)}
+            processing_errors.append(f"Error in BOM analysis: {str(e)}")
+            logger.error(f"   Exception in BOM analysis: {e}")
+
+        # Step 4: Determine required actions based on analysis
+        logger.info("-"*80)
+        logger.info("📋 Step 4: Determining required actions...")
+        actions = []
+
+        if result["bom_impact"] and "summary" in result["bom_impact"]:
+            summary = result["bom_impact"]["summary"]
+            risk_summary = summary.get("risk_summary", {})
+
+            # Check for critical/high risk items
+            critical_count = risk_summary.get("critical", 0)
+            high_count = risk_summary.get("high", 0)
+            medium_count = risk_summary.get("medium", 0)
+
+            if critical_count > 0:
+                actions.append({
+                    "action": "EXECUTIVE_APPROVAL_REQUIRED",
+                    "priority": "critical",
+                    "description": f"{critical_count} assemblies have margins below {self.margin_thresholds['critical']}%",
+                    "assemblies_affected": critical_count
+                })
+
+            if high_count > 0:
+                actions.append({
+                    "action": "MANAGER_APPROVAL_REQUIRED",
+                    "priority": "high",
+                    "description": f"{high_count} assemblies have margins between {self.margin_thresholds['critical']}%-{self.margin_thresholds['high']}%",
+                    "assemblies_affected": high_count
+                })
+
+            if medium_count > 0:
+                actions.append({
+                    "action": "REVIEW_RECOMMENDED",
+                    "priority": "medium",
+                    "description": f"{medium_count} assemblies approaching margin threshold",
+                    "assemblies_affected": medium_count
+                })
+
+            # Check for assemblies with unknown risk (missing selling price data)
+            unknown_count = risk_summary.get("unknown", 0)
+            if unknown_count > 0:
+                actions.append({
+                    "action": "MANUAL_REVIEW_REQUIRED",
+                    "priority": "warning",
+                    "description": f"{unknown_count} assemblies have missing price data - cannot calculate margins",
+                    "assemblies_affected": unknown_count,
+                    "reason": "Missing selling price in Epicor"
+                })
+
+            # Check if price update can be auto-approved
+            # Prevent auto-approval when there are critical, high risk, OR unknown risk assemblies
+            can_auto_approve = (critical_count == 0 and high_count == 0 and unknown_count == 0)
+            result["can_auto_approve"] = can_auto_approve
+
+            if can_auto_approve:
+                actions.append({
+                    "action": "AUTO_APPROVE_ELIGIBLE",
+                    "priority": "low",
+                    "description": "All affected assemblies maintain healthy margins - eligible for automatic price update"
+                })
+
+            # Add price update action
+            actions.append({
+                "action": "UPDATE_EPICOR_PRICE",
+                "priority": "required",
+                "description": f"Update part {part_num} price from ${old_price:.4f} to ${new_price:.4f}",
+                "requires_approval": not can_auto_approve
+            })
+
+        result["actions_required"] = actions
+
+        # Step 5: Set overall status
+        if processing_errors:
+            if result["bom_impact"] and "summary" in result["bom_impact"]:
+                result["status"] = "warning"  # Partial success
+            else:
+                result["status"] = "error"  # Failed
+        else:
+            result["status"] = "success"
+
+        # Final logging
+        logger.info("="*80)
+        logger.info("🔄 SUPPLIER PRICE CHANGE PROCESSING COMPLETE")
+        logger.info("="*80)
+        logger.info(f"   Status: {result['status'].upper()}")
+        logger.info(f"   Processing errors: {len(processing_errors)}")
+        logger.info(f"   Actions required: {len(actions)}")
+        logger.info(f"   Can auto-approve: {result['can_auto_approve']}")
+        if result["bom_impact"] and "summary" in result["bom_impact"]:
+            logger.info(f"   Total assemblies affected: {result['bom_impact']['summary']['total_assemblies_affected']}")
+            logger.info(f"   Total annual impact: ${result['bom_impact']['summary']['total_annual_cost_impact']:,.2f}")
+        logger.info("="*80)
+
+        return result
+
+    async def get_vendor_by_id(self, vendor_id: str) -> Optional[Dict[str, Any]]:
         """
         Get vendor information by external VendorID
 
@@ -145,16 +1593,17 @@ class EpicorAPIService:
         """
         try:
             url = f"{self.base_url}/{self.company_id}/Erp.BO.VendorSvc/Vendors"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             # Filter by VendorID (external ID)
             params = {
                 "$filter": f"VendorID eq '{vendor_id}'"
             }
 
-            logger.info(f"🔍 Looking up vendor: {vendor_id}")
+            logger.info(f"Looking up vendor: {vendor_id}")
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             if response.status_code == 200:
                 data = response.json()
@@ -164,20 +1613,23 @@ class EpicorAPIService:
                     vendor = results[0]
                     vendor_num = vendor.get("VendorNum")
                     vendor_name = vendor.get("Name")
-                    logger.info(f"✅ Vendor found: VendorNum={vendor_num}, Name={vendor_name}")
+                    logger.info(f"Vendor found: VendorNum={vendor_num}, Name={vendor_name}")
                     return vendor
                 else:
-                    logger.warning(f"⚠️ Vendor not found: {vendor_id}")
+                    logger.warning(f"Vendor not found: {vendor_id}")
                     return None
             else:
-                logger.error(f"❌ Error looking up vendor: {response.status_code} - {response.text}")
+                logger.error(f"Error looking up vendor: {response.status_code} - {response.text}")
                 return None
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout looking up vendor: {vendor_id}")
+            return None
         except Exception as e:
-            logger.error(f"❌ Exception looking up vendor: {e}")
+            logger.error(f"Exception looking up vendor: {e}")
             return None
 
-    def get_all_vendor_emails(self) -> List[Dict[str, Any]]:
+    async def get_all_vendor_emails(self) -> List[Dict[str, Any]]:
         """
         Fetch all vendor emails from Epicor VendorSvc
         Used for vendor verification to prevent AI token waste on random emails
@@ -190,15 +1642,16 @@ class EpicorAPIService:
         """
         try:
             url = f"{self.base_url}/{self.company_id}/Erp.BO.VendorSvc/Vendors"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             params = {
                 "$select": "VendorID,Name,EMailAddress",
                 "$filter": "EMailAddress ne null and EMailAddress ne ''"
             }
 
-            logger.info("🔍 Fetching vendor emails from Epicor VendorSvc...")
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            logger.info("Fetching vendor emails from Epicor VendorSvc...")
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=30.0)
 
             if response.status_code == 200:
                 data = response.json()
@@ -217,17 +1670,20 @@ class EpicorAPIService:
                             "email": email.lower().strip() if email else None
                         })
 
-                logger.info(f"✅ Fetched {len(result)} vendors with email addresses")
+                logger.info(f"Fetched {len(result)} vendors with email addresses")
                 return result
             else:
-                logger.error(f"❌ Failed to fetch vendors: {response.status_code} - {response.text[:200]}")
+                logger.error(f"Failed to fetch vendors: {response.status_code} - {response.text[:200]}")
                 return []
 
+        except httpx.TimeoutException:
+            logger.error("Timeout fetching vendor emails")
+            return []
         except Exception as e:
-            logger.error(f"❌ Exception fetching vendor emails: {e}")
+            logger.error(f"Exception fetching vendor emails: {e}")
             return []
 
-    def verify_supplier_part(self, supplier_id: str, part_num: str) -> Optional[Dict[str, Any]]:
+    async def verify_supplier_part(self, supplier_id: str, part_num: str) -> Optional[Dict[str, Any]]:
         """
         Verify supplier-part relationship using SupplierPartSvc (2-step process)
 
@@ -243,12 +1699,12 @@ class EpicorAPIService:
             Supplier part data including VendorNum, VendorName, etc., or None if not found
         """
         try:
-            logger.info(f"🔍 Verifying supplier-part link: Supplier={supplier_id}, Part={part_num}")
+            logger.info(f"Verifying supplier-part link: Supplier={supplier_id}, Part={part_num}")
 
             # Step 1: Get VendorNum from VendorID
-            vendor = self.get_vendor_by_id(supplier_id)
+            vendor = await self.get_vendor_by_id(supplier_id)
             if not vendor:
-                logger.warning(f"⚠️ Supplier {supplier_id} not found in Epicor")
+                logger.warning(f"Supplier {supplier_id} not found in Epicor")
                 return None
 
             vendor_num = vendor.get("VendorNum")
@@ -258,7 +1714,7 @@ class EpicorAPIService:
 
             # Step 2: Query SupplierPartSvc using VendorNum and PartNum
             url = f"{self.base_url}/{self.company_id}/Erp.BO.SupplierPartSvc/SupplierParts"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             # Filter by VendorNum (internal ID) and PartNum
             filter_query = f"VendorNum eq {vendor_num} and PartNum eq '{part_num}'"
@@ -269,7 +1725,8 @@ class EpicorAPIService:
             logger.info(f"   Step 2: Querying SupplierPartSvc")
             logger.info(f"   Filter: {filter_query}")
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             if response.status_code == 200:
                 data = response.json()
@@ -280,21 +1737,24 @@ class EpicorAPIService:
                     # Add vendor name to the result for convenience
                     supplier_part["VendorName"] = vendor_name
                     supplier_part["VendorVendorID"] = supplier_id
-                    logger.info(f"✅ Supplier-part verified: VendorNum={vendor_num}, VendorName={vendor_name}")
+                    logger.info(f"Supplier-part verified: VendorNum={vendor_num}, VendorName={vendor_name}")
                     return supplier_part
                 else:
-                    logger.warning(f"⚠️ Supplier-part link not found: {supplier_id} / {part_num}")
+                    logger.warning(f"Supplier-part link not found: {supplier_id} / {part_num}")
                     logger.warning(f"   Supplier exists but part is not set up for this supplier in Epicor")
                     return None
             else:
-                logger.error(f"❌ Error querying supplier-part: {response.status_code} - {response.text}")
+                logger.error(f"Error querying supplier-part: {response.status_code} - {response.text}")
                 return None
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout verifying supplier-part: {supplier_id} / {part_num}")
+            return None
         except Exception as e:
-            logger.error(f"❌ Exception verifying supplier-part: {e}")
+            logger.error(f"Exception verifying supplier-part: {e}")
             return None
 
-    def get_price_list_parts(self, part_num: str) -> Optional[List[Dict[str, Any]]]:
+    async def get_price_list_parts(self, part_num: str) -> Optional[List[Dict[str, Any]]]:
         """
         Get all price list entries for a part
 
@@ -306,15 +1766,16 @@ class EpicorAPIService:
         """
         try:
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLstParts"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             params = {
                 "$filter": f"PartNum eq '{part_num}'"
             }
 
-            logger.info(f"🔍 Querying price lists for part: {part_num}")
+            logger.info(f"Querying price lists for part: {part_num}")
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             # Debug: Log the actual URL being called
             logger.info(f"   Request URL: {response.url}")
@@ -324,21 +1785,38 @@ class EpicorAPIService:
                 results = data.get("value", [])
 
                 if results:
-                    logger.info(f"✅ Found {len(results)} price list entries for part {part_num}")
+                    logger.info(f"Found {len(results)} price list entries for part {part_num}")
                     return results
                 else:
-                    logger.warning(f"⚠️ No price list entries found for part {part_num}")
+                    logger.warning(f"No price list entries found for part {part_num}")
                     return []
             else:
-                logger.error(f"❌ Error querying price lists: {response.status_code} - {response.text}")
+                logger.error(f"Error querying price lists: {response.status_code} - {response.text}")
                 return None
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout querying price lists for part: {part_num}")
+            return None
         except Exception as e:
-            logger.error(f"❌ Exception querying price lists: {e}")
+            logger.error(f"Exception querying price lists: {e}")
             return None
 
-    def get_price_list(self, list_code: str, part_num: str, uom_code: str = "EA") -> Optional[Dict[str, Any]]:
+    # ========================================================================
+    # DEPRECATED: PriceLstSvc Methods
+    # These methods are deprecated in favor of VendPartSvc methods below.
+    # VendPartSvc is the correct Epicor service for supplier pricing as it:
+    # - Supports effective dates at the part level (not header level)
+    # - Allows multiple price records for same Part/Vendor with different dates
+    # - Has CommentText and Reference fields for traceability
+    #
+    # Use batch_update_vendpart_prices_direct() instead for new implementations.
+    # These methods are kept for backward compatibility only.
+    # ========================================================================
+
+    async def get_price_list(self, list_code: str, part_num: str, uom_code: str = "EA") -> Optional[Dict[str, Any]]:
         """
+        DEPRECATED: Use VendPartSvc methods instead.
+
         Get specific price list entry using filter instead of key
 
         Args:
@@ -352,16 +1830,17 @@ class EpicorAPIService:
         try:
             # Use filter instead of key-based access to handle special characters
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLstParts"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             # Build filter with all three key fields
             params = {
                 "$filter": f"ListCode eq '{list_code}' and PartNum eq '{part_num}' and UOMCode eq '{uom_code}'"
             }
 
-            logger.info(f"🔍 Getting price list: ListCode={list_code}, Part={part_num}, UOM={uom_code}")
+            logger.info(f"Getting price list: ListCode={list_code}, Part={part_num}, UOM={uom_code}")
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             if response.status_code == 200:
                 data = response.json()
@@ -369,20 +1848,23 @@ class EpicorAPIService:
 
                 if results:
                     price_list = results[0]  # Take first match
-                    logger.info(f"✅ Retrieved price list entry")
+                    logger.info(f"Retrieved price list entry")
                     return price_list
                 else:
-                    logger.warning(f"⚠️ Price list entry not found")
+                    logger.warning(f"Price list entry not found")
                     return None
             else:
-                logger.error(f"❌ Error retrieving price list: {response.status_code} - {response.text}")
+                logger.error(f"Error retrieving price list: {response.status_code} - {response.text}")
                 return None
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout retrieving price list: {list_code}/{part_num}")
+            return None
         except Exception as e:
-            logger.error(f"❌ Exception retrieving price list: {e}")
+            logger.error(f"Exception retrieving price list: {e}")
             return None
 
-    def get_all_price_lists(self) -> Optional[List[Dict[str, Any]]]:
+    async def get_all_price_lists(self) -> Optional[List[Dict[str, Any]]]:
         """
         Get all price lists for the company
 
@@ -391,30 +1873,34 @@ class EpicorAPIService:
         """
         try:
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLsts"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             params = {
                 "$filter": f"Company eq '{self.company_id}'"
             }
 
-            logger.info(f"🔍 Fetching all price lists for company {self.company_id}")
+            logger.info(f"Fetching all price lists for company {self.company_id}")
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             if response.status_code == 200:
                 data = response.json()
                 results = data.get("value", [])
-                logger.info(f"✅ Found {len(results)} price lists")
+                logger.info(f"Found {len(results)} price lists")
                 return results
             else:
-                logger.error(f"❌ Error fetching price lists: {response.status_code} - {response.text}")
+                logger.error(f"Error fetching price lists: {response.status_code} - {response.text}")
                 return None
 
+        except httpx.TimeoutException:
+            logger.error("Timeout fetching price lists")
+            return None
         except Exception as e:
-            logger.error(f"❌ Exception fetching price lists: {e}")
+            logger.error(f"Exception fetching price lists: {e}")
             return None
 
-    def find_supplier_price_list(self, supplier_id: str, supplier_name: str = None) -> Optional[Dict[str, Any]]:
+    async def find_supplier_price_list(self, supplier_id: str, supplier_name: str = None) -> Optional[Dict[str, Any]]:
         """
         Find existing price list for a supplier by searching all price lists
 
@@ -430,10 +1916,10 @@ class EpicorAPIService:
             Price list header dict if found, None otherwise
         """
         try:
-            logger.info(f"🔍 Searching for existing price list for supplier: {supplier_id}")
+            logger.info(f"Searching for existing price list for supplier: {supplier_id}")
 
             # Get all price lists
-            all_lists = self.get_all_price_lists()
+            all_lists = await self.get_all_price_lists()
 
             if not all_lists:
                 logger.info(f"   No price lists found in system")
@@ -446,26 +1932,26 @@ class EpicorAPIService:
 
                 # Match by code containing supplier_id
                 if supplier_id.upper() in list_code.upper():
-                    logger.info(f"✅ Found matching price list by code: {list_code}")
+                    logger.info(f"Found matching price list by code: {list_code}")
                     return price_list
 
                 # Match by description containing supplier_id or supplier_name
                 if supplier_id.upper() in description.upper():
-                    logger.info(f"✅ Found matching price list by description: {list_code}")
+                    logger.info(f"Found matching price list by description: {list_code}")
                     return price_list
 
                 if supplier_name and supplier_name.upper() in description.upper():
-                    logger.info(f"✅ Found matching price list by supplier name: {list_code}")
+                    logger.info(f"Found matching price list by supplier name: {list_code}")
                     return price_list
 
             logger.info(f"   No existing price list found for supplier {supplier_id}")
             return None
 
         except Exception as e:
-            logger.error(f"❌ Exception searching for supplier price list: {e}")
+            logger.error(f"Exception searching for supplier price list: {e}")
             return None
 
-    def check_price_list_exists(self, list_code: str, part_num: str, uom_code: str = "EA") -> bool:
+    async def check_price_list_exists(self, list_code: str, part_num: str, uom_code: str = "EA") -> bool:
         """
         Check if a price list entry exists for a specific part (Step B decision point)
 
@@ -478,23 +1964,23 @@ class EpicorAPIService:
             True if price list exists, False otherwise
         """
         try:
-            logger.info(f"📋 Step B: Checking if price list exists...")
+            logger.info(f"Step B: Checking if price list exists...")
             logger.info(f"   ListCode={list_code}, Part={part_num}, UOM={uom_code}")
 
-            price_list = self.get_price_list(list_code, part_num, uom_code)
+            price_list = await self.get_price_list(list_code, part_num, uom_code)
 
             if price_list:
-                logger.info(f"   ✅ Price list EXISTS - will update existing entry")
+                logger.info(f"   Price list EXISTS - will update existing entry")
                 return True
             else:
-                logger.info(f"   ℹ️  Price list DOES NOT EXIST - will create new entry")
+                logger.info(f"   Price list DOES NOT EXIST - will create new entry")
                 return False
 
         except Exception as e:
-            logger.error(f"❌ Exception checking price list existence: {e}")
+            logger.error(f"Exception checking price list existence: {e}")
             return False
 
-    def get_or_create_supplier_price_list(
+    async def get_or_create_supplier_price_list(
         self,
         supplier_id: str,
         supplier_name: str = None,
@@ -517,12 +2003,12 @@ class EpicorAPIService:
         """
         try:
             # Step 1: Search for existing price list for this supplier
-            logger.info(f"🔍 Step 1: Searching for existing price list for supplier: {supplier_id}")
-            existing_list = self.find_supplier_price_list(supplier_id, supplier_name)
+            logger.info(f"Step 1: Searching for existing price list for supplier: {supplier_id}")
+            existing_list = await self.find_supplier_price_list(supplier_id, supplier_name)
 
             if existing_list:
                 list_code = existing_list.get("ListCode")
-                logger.info(f"✅ Using existing supplier price list: {list_code}")
+                logger.info(f"Using existing supplier price list: {list_code}")
                 return {
                     "status": "success",
                     "message": "Supplier price list exists",
@@ -538,9 +2024,9 @@ class EpicorAPIService:
                 list_code = supplier_id
             else:
                 list_code = supplier_id[:10]
-                logger.warning(f"⚠️  Supplier ID '{supplier_id}' exceeds 10 chars, truncating to '{list_code}'")
+                logger.warning(f"Supplier ID '{supplier_id}' exceeds 10 chars, truncating to '{list_code}'")
 
-            logger.info(f"📝 Step 2: Creating new supplier price list: {list_code}")
+            logger.info(f"Step 2: Creating new supplier price list: {list_code}")
 
             # Prepare description with 30-char limit
             if supplier_name:
@@ -574,7 +2060,7 @@ class EpicorAPIService:
 
             # POST to Update endpoint
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             ds = {
                 "PriceLst": [new_price_list]
@@ -587,10 +2073,11 @@ class EpicorAPIService:
             if start_date:
                 logger.info(f"   StartDate: {start_date}")
 
-            response = requests.post(update_url, json=payload, headers=headers, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, json=payload, headers=headers, timeout=10.0)
 
             if response.status_code == 200:
-                logger.info(f"✅ Supplier price list created successfully: {list_code}")
+                logger.info(f"Supplier price list created successfully: {list_code}")
                 return {
                     "status": "success",
                     "message": "Supplier price list created",
@@ -599,7 +2086,7 @@ class EpicorAPIService:
                     "start_date": start_date
                 }
             else:
-                logger.error(f"❌ Failed to create price list: {response.status_code}")
+                logger.error(f"Failed to create price list: {response.status_code}")
                 logger.error(f"   Response: {response.text[:500]}")
                 return {
                     "status": "error",
@@ -608,8 +2095,16 @@ class EpicorAPIService:
                     "status_code": response.status_code
                 }
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout creating supplier price list: {supplier_id}")
+            safe_list_code = supplier_id[:10] if len(supplier_id) <= 10 else supplier_id[:10]
+            return {
+                "status": "error",
+                "message": "Request timeout",
+                "list_code": safe_list_code
+            }
         except Exception as e:
-            logger.error(f"❌ Exception in get_or_create_supplier_price_list: {e}")
+            logger.error(f"Exception in get_or_create_supplier_price_list: {e}")
             # Generate safe list code for error response
             safe_list_code = supplier_id[:10] if len(supplier_id) <= 10 else supplier_id[:10]
             return {
@@ -618,7 +2113,7 @@ class EpicorAPIService:
                 "list_code": safe_list_code
             }
 
-    def create_price_list_entry(
+    async def create_price_list_entry(
         self,
         part_num: str,
         base_price: float,
@@ -647,7 +2142,7 @@ class EpicorAPIService:
             if list_code is None:
                 list_code = self.default_price_list
 
-            logger.info(f"   📝 Step B (NO path): Creating new price list entry")
+            logger.info(f"   Step B (NO path): Creating new price list entry")
             logger.info(f"      ListCode: {list_code}")
             logger.info(f"      PartNum: {part_num}")
             logger.info(f"      BasePrice: ${base_price}")
@@ -668,11 +2163,11 @@ class EpicorAPIService:
 
             # Note: Effective dates are managed at header level only (Step C)
             # Parts inherit the StartDate from the price list header
-            logger.info(f"      ℹ️  Effective date will be managed at header level")
+            logger.info(f"      Effective date will be managed at header level")
 
             # POST to Update endpoint
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             ds = {
                 "PriceLstParts": [new_entry]
@@ -681,10 +2176,11 @@ class EpicorAPIService:
             payload = {"ds": ds}
 
             logger.info(f"      Saving new price list entry...")
-            response = requests.post(update_url, headers=headers, json=payload, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, headers=headers, json=payload, timeout=10.0)
 
             if response.status_code == 200:
-                logger.info(f"      ✅ Price list entry created successfully")
+                logger.info(f"      Price list entry created successfully")
                 return {
                     "status": "success",
                     "message": "Price list entry created",
@@ -695,7 +2191,7 @@ class EpicorAPIService:
                 }
             else:
                 error_msg = response.text
-                logger.error(f"      ❌ Failed to create entry: {response.status_code}")
+                logger.error(f"      Failed to create entry: {response.status_code}")
                 logger.error(f"         Response: {error_msg[:300]}")
 
                 return {
@@ -705,8 +2201,16 @@ class EpicorAPIService:
                     "part_num": part_num
                 }
 
+        except httpx.TimeoutException:
+            logger.error(f"      Timeout creating price list entry: {part_num}")
+            return {
+                "status": "error",
+                "message": "Request timeout",
+                "list_code": list_code if list_code else "unknown",
+                "part_num": part_num
+            }
         except Exception as e:
-            logger.error(f"      ❌ Exception creating price list entry: {e}")
+            logger.error(f"      Exception creating price list entry: {e}")
             return {
                 "status": "error",
                 "message": str(e),
@@ -714,7 +2218,7 @@ class EpicorAPIService:
                 "part_num": part_num
             }
 
-    def create_part(
+    async def create_part(
         self,
         part_num: str,
         description: str,
@@ -745,7 +2249,7 @@ class EpicorAPIService:
         """
         try:
             # Check if part already exists
-            existing_part = self.get_part(part_num)
+            existing_part = await self.get_part(part_num)
             if existing_part:
                 return {
                     "status": "error",
@@ -755,7 +2259,7 @@ class EpicorAPIService:
 
             # Prepare POST request
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/Parts"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             # Build part payload
             payload = {
@@ -784,13 +2288,14 @@ class EpicorAPIService:
             if additional_fields:
                 payload.update(additional_fields)
 
-            logger.info(f"🔄 Creating part {part_num}...")
+            logger.info(f"Creating part {part_num}...")
 
             # Make POST request
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(url, json=payload, headers=headers, timeout=30.0)
 
             if response.status_code in [200, 201]:
-                logger.info(f"✅ Successfully created part {part_num}")
+                logger.info(f"Successfully created part {part_num}")
                 return {
                     "status": "success",
                     "message": f"Part created successfully",
@@ -798,7 +2303,7 @@ class EpicorAPIService:
                     "data": response.json()
                 }
             else:
-                logger.error(f"❌ Failed to create part {part_num}: {response.status_code} - {response.text}")
+                logger.error(f"Failed to create part {part_num}: {response.status_code} - {response.text}")
                 return {
                     "status": "error",
                     "message": f"HTTP {response.status_code}: {response.text}",
@@ -806,48 +2311,55 @@ class EpicorAPIService:
                     "status_code": response.status_code
                 }
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout creating part {part_num}")
+            return {
+                "status": "error",
+                "message": "Request timeout",
+                "part_num": part_num
+            }
         except Exception as e:
-            logger.error(f"❌ Exception creating part {part_num}: {e}")
+            logger.error(f"Exception creating part {part_num}: {e}")
             return {
                 "status": "error",
                 "message": str(e),
                 "part_num": part_num
             }
-    
-    def update_part_price(
-        self, 
-        part_num: str, 
+
+    async def update_part_price(
+        self,
+        part_num: str,
         new_price: float,
         price_per_code: str = "E",
         additional_fields: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Update part price in Epicor ERP
-        
+
         Args:
             part_num: Part number to update
             new_price: New unit price
             price_per_code: Price per code (default: "E" for Each)
             additional_fields: Optional additional fields to update
-            
+
         Returns:
             Dictionary with status and message
         """
         try:
             # First, get the current part data (required for PATCH)
-            current_part = self.get_part(part_num)
-            
+            current_part = await self.get_part(part_num)
+
             if not current_part:
                 return {
                     "status": "error",
                     "message": f"Part {part_num} not found in Epicor",
                     "part_num": part_num
                 }
-            
+
             # Prepare PATCH request
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PartSvc/Parts(Company='{self.company_id}',PartNum='{part_num}')"
-            headers = self._get_headers()
-            
+            headers = await self._get_headers()
+
             # Build update payload
             payload = {
                 "Company": self.company_id,
@@ -855,18 +2367,19 @@ class EpicorAPIService:
                 "UnitPrice": new_price,
                 "PricePerCode": price_per_code
             }
-            
+
             # Add any additional fields
             if additional_fields:
                 payload.update(additional_fields)
-            
-            logger.info(f"🔄 Updating part {part_num} price to {new_price}")
-            
+
+            logger.info(f"Updating part {part_num} price to {new_price}")
+
             # Make PATCH request
-            response = requests.patch(url, json=payload, headers=headers, timeout=10)
-            
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.patch(url, json=payload, headers=headers, timeout=10.0)
+
             if response.status_code in [200, 204]:
-                logger.info(f"✅ Successfully updated part {part_num} price to {new_price}")
+                logger.info(f"Successfully updated part {part_num} price to {new_price}")
                 return {
                     "status": "success",
                     "message": f"Price updated successfully",
@@ -875,23 +2388,30 @@ class EpicorAPIService:
                     "new_price": new_price
                 }
             else:
-                logger.error(f"❌ Failed to update part {part_num}: {response.status_code} - {response.text}")
+                logger.error(f"Failed to update part {part_num}: {response.status_code} - {response.text}")
                 return {
                     "status": "error",
                     "message": f"HTTP {response.status_code}: {response.text}",
                     "part_num": part_num,
                     "status_code": response.status_code
                 }
-                
+
+        except httpx.TimeoutException:
+            logger.error(f"Timeout updating part {part_num}")
+            return {
+                "status": "error",
+                "message": "Request timeout",
+                "part_num": part_num
+            }
         except Exception as e:
-            logger.error(f"❌ Exception updating part {part_num}: {e}")
+            logger.error(f"Exception updating part {part_num}: {e}")
             return {
                 "status": "error",
                 "message": str(e),
                 "part_num": part_num
             }
 
-    def update_price_list_header_dates(
+    async def update_price_list_header_dates(
         self,
         list_code: str,
         start_date: str,
@@ -912,7 +2432,7 @@ class EpicorAPIService:
             Dictionary with status and message
         """
         try:
-            logger.info(f"📋 Step C: Updating price list header with effective dates...")
+            logger.info(f"Step C: Updating price list header with effective dates...")
             logger.info(f"   ListCode: {list_code}")
             logger.info(f"   StartDate: {start_date}")
             if end_date:
@@ -926,17 +2446,18 @@ class EpicorAPIService:
 
             # Step 1: Get the current price list header
             url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/PriceLsts"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             params = {
                 "$filter": f"ListCode eq '{list_code}'"
             }
 
             logger.info(f"   Fetching price list header...")
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
 
             if response.status_code != 200:
-                logger.error(f"❌ Failed to fetch price list header: {response.status_code}")
+                logger.error(f"Failed to fetch price list header: {response.status_code}")
                 return {
                     "status": "error",
                     "message": f"Failed to fetch price list header: HTTP {response.status_code}",
@@ -947,7 +2468,7 @@ class EpicorAPIService:
             results = data.get("value", [])
 
             if not results:
-                logger.error(f"❌ Price list header not found: {list_code}")
+                logger.error(f"Price list header not found: {list_code}")
                 return {
                     "status": "error",
                     "message": f"Price list header not found: {list_code}",
@@ -971,10 +2492,10 @@ class EpicorAPIService:
             payload = {"ds": ds}
 
             logger.info(f"   Updating price list header...")
-            response = requests.post(update_url, json=payload, headers=headers, timeout=10)
+            response = await client.post(update_url, json=payload, headers=headers, timeout=10.0)
 
             if response.status_code == 200:
-                logger.info(f"✅ Step C Complete: Price list header dates updated")
+                logger.info(f"Step C Complete: Price list header dates updated")
                 logger.info(f"   StartDate: {start_date}")
                 if end_date:
                     logger.info(f"   EndDate: {end_date}")
@@ -986,7 +2507,7 @@ class EpicorAPIService:
                     "end_date": end_date
                 }
             else:
-                logger.error(f"❌ Failed to update price list header: {response.status_code}")
+                logger.error(f"Failed to update price list header: {response.status_code}")
                 logger.error(f"   Response: {response.text[:500]}")
                 return {
                     "status": "error",
@@ -995,15 +2516,22 @@ class EpicorAPIService:
                     "status_code": response.status_code
                 }
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout updating price list header: {list_code}")
+            return {
+                "status": "error",
+                "message": "Request timeout",
+                "list_code": list_code
+            }
         except Exception as e:
-            logger.error(f"❌ Exception updating price list header: {e}")
+            logger.error(f"Exception updating price list header: {e}")
             return {
                 "status": "error",
                 "message": str(e),
                 "list_code": list_code
             }
 
-    def update_price_list(
+    async def update_price_list(
         self,
         list_code: str,
         part_num: str,
@@ -1026,7 +2554,7 @@ class EpicorAPIService:
         """
         try:
             # Step 1: Get the current price list entry (includes all required fields)
-            current_entry = self.get_price_list(list_code, part_num, uom_code)
+            current_entry = await self.get_price_list(list_code, part_num, uom_code)
 
             if not current_entry:
                 return {
@@ -1042,18 +2570,18 @@ class EpicorAPIService:
             if effective_date and 'T' not in effective_date:
                 effective_date = f"{effective_date}T00:00:00"
 
-            logger.info(f"🔄 Updating price list: ListCode={list_code}, Part={part_num}, Price={new_price}, EffectiveDate={effective_date}")
+            logger.info(f"Updating price list: ListCode={list_code}, Part={part_num}, Price={new_price}, EffectiveDate={effective_date}")
 
             # Step 2: Update the entry fields
             current_entry["BasePrice"] = new_price
             current_entry["RowMod"] = "U"  # U = Update
 
-            logger.info(f"   ℹ️  Effective date ({effective_date}) managed at header level (Step C)")
-            logger.info(f"   ℹ️  This part will inherit the StartDate from price list header")
+            logger.info(f"   Effective date ({effective_date}) managed at header level (Step C)")
+            logger.info(f"   This part will inherit the StartDate from price list header")
 
             # Step 3: Call Update method with the modified dataset
             update_url = f"{self.base_url}/{self.company_id}/Erp.BO.PriceLstSvc/Update"
-            headers = self._get_headers()
+            headers = await self._get_headers()
 
             # Build the dataset structure
             ds = {
@@ -1064,11 +2592,12 @@ class EpicorAPIService:
             payload = {"ds": ds}
 
             logger.info(f"   Calling Update method...")
-            response = requests.post(update_url, json=payload, headers=headers, timeout=10)
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, json=payload, headers=headers, timeout=10.0)
 
             if response.status_code == 200:
-                logger.info(f"✅ Successfully updated price list for part {part_num}")
-                logger.info(f"   Old Price: ${old_price} → New Price: ${new_price}")
+                logger.info(f"Successfully updated price list for part {part_num}")
+                logger.info(f"   Old Price: ${old_price} -> New Price: ${new_price}")
                 logger.info(f"   Effective Date: {effective_date}")
                 return {
                     "status": "success",
@@ -1080,7 +2609,7 @@ class EpicorAPIService:
                     "effective_date": effective_date
                 }
             else:
-                logger.error(f"❌ Failed to update price list: {response.status_code} - {response.text[:500]}")
+                logger.error(f"Failed to update price list: {response.status_code} - {response.text[:500]}")
                 return {
                     "status": "error",
                     "message": f"HTTP {response.status_code}: {response.text[:200]}",
@@ -1089,8 +2618,16 @@ class EpicorAPIService:
                     "status_code": response.status_code
                 }
 
+        except httpx.TimeoutException:
+            logger.error(f"Timeout updating price list: {list_code}/{part_num}")
+            return {
+                "status": "error",
+                "message": "Request timeout",
+                "part_num": part_num,
+                "list_code": list_code
+            }
         except Exception as e:
-            logger.error(f"❌ Exception updating price list: {e}")
+            logger.error(f"Exception updating price list: {e}")
             return {
                 "status": "error",
                 "message": str(e),
@@ -1098,7 +2635,7 @@ class EpicorAPIService:
                 "list_code": list_code
             }
 
-    def update_supplier_part_price(
+    async def update_supplier_part_price(
         self,
         supplier_id: str,
         part_num: str,
@@ -1107,6 +2644,13 @@ class EpicorAPIService:
         uom_code: str = "EA"
     ) -> Dict[str, Any]:
         """
+        DEPRECATED: Use update_vendpart_price_direct() or batch_update_vendpart_prices_direct() instead.
+
+        This method uses PriceLstSvc which has limitations:
+        - Effective dates are managed at header level (not per-part)
+        - No comment/reference fields for traceability
+        - Re-verifies supplier on every call
+
         Complete 4-step workflow to update supplier part price with effective date
 
         This method implements the workflow from the diagram:
@@ -1136,12 +2680,12 @@ class EpicorAPIService:
             logger.info("-"*80)
 
             # ========== STEP A: SUPPLIER VERIFICATION ==========
-            logger.info(f"📋 STEP A: SUPPLIER VERIFICATION")
-            logger.info(f"   🔄 Retrieving vendor number...")
-            supplier_part = self.verify_supplier_part(supplier_id, part_num)
+            logger.info(f"STEP A: SUPPLIER VERIFICATION")
+            logger.info(f"   Retrieving vendor number...")
+            supplier_part = await self.verify_supplier_part(supplier_id, part_num)
 
             if not supplier_part:
-                logger.error(f"❌ Step A Failed: Supplier-part relationship not found")
+                logger.error(f"Step A Failed: Supplier-part relationship not found")
                 return {
                     "status": "error",
                     "message": f"Supplier-part relationship not found for Supplier={supplier_id}, Part={part_num}",
@@ -1152,24 +2696,24 @@ class EpicorAPIService:
 
             vendor_num = supplier_part.get("VendorNum")
             vendor_name = supplier_part.get("VendorName")
-            logger.info(f"✅ STEP A COMPLETE")
+            logger.info(f"STEP A COMPLETE")
             logger.info(f"   VendorNum: {vendor_num}")
             logger.info(f"   VendorName: {vendor_name}")
             logger.info("-"*80)
 
             # ========== STEP B: PRICE LIST CREATION ==========
-            logger.info(f"📋 STEP B: PRICE LIST CREATION")
+            logger.info(f"STEP B: PRICE LIST CREATION")
 
             # Get or create supplier-specific price list (SUPPLIER_{supplier_id})
-            logger.info(f"   🔄 Getting or creating supplier-specific price list...")
-            price_list_result = self.get_or_create_supplier_price_list(
+            logger.info(f"   Getting or creating supplier-specific price list...")
+            price_list_result = await self.get_or_create_supplier_price_list(
                 supplier_id=supplier_id,
                 supplier_name=vendor_name,
                 effective_date=effective_date
             )
 
             if price_list_result.get("status") != "success":
-                logger.error(f"❌ Step B Failed: Could not get/create supplier price list")
+                logger.error(f"Step B Failed: Could not get/create supplier price list")
                 return {
                     "status": "error",
                     "message": f"Failed to get/create supplier price list: {price_list_result.get('message')}",
@@ -1183,17 +2727,17 @@ class EpicorAPIService:
             price_list_created = price_list_result.get("created", False)
 
             if price_list_created:
-                logger.info(f"   ✅ Created new supplier price list: {list_code}")
+                logger.info(f"   Created new supplier price list: {list_code}")
             else:
-                logger.info(f"   ✅ Using existing supplier price list: {list_code}")
+                logger.info(f"   Using existing supplier price list: {list_code}")
 
             # Check if price list entry exists for this part (Step B decision point)
-            price_list_exists = self.check_price_list_exists(list_code, part_num, uom_code)
+            price_list_exists = await self.check_price_list_exists(list_code, part_num, uom_code)
 
             if not price_list_exists:
-                logger.info(f"   🔄 Creating new price list entry...")
+                logger.info(f"   Creating new price list entry...")
                 # Create new price list entry following template workflow
-                create_result = self.create_price_list_entry(
+                create_result = await self.create_price_list_entry(
                     part_num=part_num,
                     base_price=new_price,
                     effective_date=effective_date,
@@ -1202,7 +2746,7 @@ class EpicorAPIService:
                 )
 
                 if create_result.get("status") != "success":
-                    logger.error(f"❌ Step B Failed: Could not create price list entry")
+                    logger.error(f"Step B Failed: Could not create price list entry")
                     return {
                         "status": "error",
                         "message": f"Failed to create price list entry: {create_result.get('message')}",
@@ -1212,7 +2756,7 @@ class EpicorAPIService:
                         "step_failed": "Step B: Price List Creation"
                     }
 
-                logger.info(f"✅ STEP B COMPLETE: Price list entry created")
+                logger.info(f"STEP B COMPLETE: Price list entry created")
                 logger.info(f"   ListCode: {list_code}")
                 logger.info("-"*80)
 
@@ -1232,36 +2776,36 @@ class EpicorAPIService:
                     "list_code": list_code
                 }
 
-            logger.info(f"✅ STEP B COMPLETE: Price list entry exists")
+            logger.info(f"STEP B COMPLETE: Price list entry exists")
             logger.info(f"   ListCode: {list_code}")
             logger.info("-"*80)
 
             # ========== STEP C: EFFECTIVE DATE MANAGEMENT ==========
-            logger.info(f"📋 STEP C: EFFECTIVE DATE MANAGEMENT")
-            logger.info(f"   🔄 Updating header-level effective dates...")
+            logger.info(f"STEP C: EFFECTIVE DATE MANAGEMENT")
+            logger.info(f"   Updating header-level effective dates...")
 
             # Update the price list header with effective dates
-            header_result = self.update_price_list_header_dates(
+            header_result = await self.update_price_list_header_dates(
                 list_code=list_code,
                 start_date=effective_date
             )
 
             if header_result.get("status") != "success":
-                logger.warning(f"⚠️  Step C Warning: Could not update header dates")
+                logger.warning(f"Step C Warning: Could not update header dates")
                 logger.warning(f"   {header_result.get('message')}")
                 logger.warning(f"   Continuing with price update...")
             else:
-                logger.info(f"✅ STEP C COMPLETE: Header dates updated")
+                logger.info(f"STEP C COMPLETE: Header dates updated")
                 logger.info(f"   StartDate: {effective_date}")
 
             logger.info("-"*80)
 
             # ========== STEP D: PRICE UPDATE ==========
-            logger.info(f"📋 STEP D: PRICE UPDATE")
-            logger.info(f"   🔄 Updating part price (inherits dates from header)...")
+            logger.info(f"STEP D: PRICE UPDATE")
+            logger.info(f"   Updating part price (inherits dates from header)...")
 
             # Update the part price (which inherits effective dates from header)
-            update_result = self.update_price_list(
+            update_result = await self.update_price_list(
                 list_code=list_code,
                 part_num=part_num,
                 new_price=new_price,
@@ -1299,7 +2843,7 @@ class EpicorAPIService:
                 "supplier_id": supplier_id
             }
 
-    def batch_update_prices(
+    async def batch_update_prices(
         self,
         products: List[Dict[str, Any]],
         supplier_id: Optional[str] = None,
@@ -1307,6 +2851,11 @@ class EpicorAPIService:
         use_new_workflow: bool = True
     ) -> Dict[str, Any]:
         """
+        DEPRECATED: Use batch_update_vendpart_prices_direct() instead.
+
+        This method uses PriceLstSvc which requires re-verification on each call.
+        The new VendPartSvc workflow uses pre-validated vendor_num for faster updates.
+
         Update multiple part prices from extracted email data
 
         Args:
@@ -1318,6 +2867,7 @@ class EpicorAPIService:
         Returns:
             Dictionary with batch update results
         """
+        logger.warning("DEPRECATED: batch_update_prices() is deprecated. Use batch_update_vendpart_prices_direct() instead.")
         results = {
             "total": len(products),
             "successful": 0,
@@ -1329,15 +2879,14 @@ class EpicorAPIService:
 
         # Log workflow information
         if use_new_workflow:
-            logger.info(f"🔄 Using NEW workflow: PriceLstSvc with supplier verification and effective dates")
+            logger.info(f"Using NEW workflow: PriceLstSvc with supplier verification and effective dates")
             logger.info(f"   Supplier ID: {supplier_id or 'Not provided'}")
             logger.info(f"   Effective Date: {effective_date or 'Not provided'}")
         else:
-            logger.info(f"🔄 Using LEGACY workflow: PartSvc (direct part price update)")
+            logger.info(f"Using LEGACY workflow: PartSvc (direct part price update)")
 
         for product in products:
-            # Try product_id first, fallback to product_code for backward compatibility
-            part_num = product.get("product_id") or product.get("product_code")
+            part_num = product.get("product_id")
             new_price_str = product.get("new_price")
 
             # Validate data
@@ -1379,7 +2928,7 @@ class EpicorAPIService:
             # Choose workflow based on parameters
             if use_new_workflow and supplier_id and effective_date:
                 # NEW WORKFLOW: Use PriceLstSvc with supplier verification
-                update_result = self.update_supplier_part_price(
+                update_result = await self.update_supplier_part_price(
                     supplier_id=supplier_id,
                     part_num=part_num,
                     new_price=new_price,
@@ -1388,8 +2937,8 @@ class EpicorAPIService:
             else:
                 # LEGACY WORKFLOW: Use PartSvc (backward compatibility)
                 if use_new_workflow:
-                    logger.warning(f"⚠️ Missing supplier_id or effective_date for {part_num}, falling back to legacy workflow")
-                update_result = self.update_part_price(part_num, new_price)
+                    logger.warning(f"Missing supplier_id or effective_date for {part_num}, falling back to legacy workflow")
+                update_result = await self.update_part_price(part_num, new_price)
 
             if update_result["status"] == "success":
                 results["successful"] += 1
@@ -1418,7 +2967,761 @@ class EpicorAPIService:
 
             results["details"].append(detail)
 
-        logger.info(f"📊 Batch update complete: {results['successful']} successful, {results['failed']} failed, {results['skipped']} skipped")
+        logger.info(f"Batch update complete: {results['successful']} successful, {results['failed']} failed, {results['skipped']} skipped")
+
+        return results
+
+    # ========================================================================
+    # VENDPARTSVC METHODS - Direct supplier price updates
+    # ========================================================================
+
+    async def check_vendpart_exists(
+        self,
+        vendor_num: int,
+        part_num: str,
+        effective_date: str,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if a VendPart record exists for the given combination.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            effective_date: Effective date in ISO format
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            Existing VendPart record or None if not found
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            # Query VendPartSvc for existing record
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/VendParts"
+            headers = await self._get_headers()
+
+            # Build filter for composite key
+            filter_query = (
+                f"VendorNum eq {vendor_num} "
+                f"and PartNum eq '{part_num}' "
+                f"and EffectiveDate eq {effective_date} "
+                f"and PUM eq '{pum}' "
+                f"and OpCode eq '{op_code}'"
+            )
+
+            params = {
+                "$filter": filter_query,
+                "$select": "Company,PartNum,OpCode,PUM,EffectiveDate,VendorNum,BaseUnitPrice,VenPartNum,SysRowID,RowMod,PricePerCode,CurrencyCode,CommentText,Reference"
+            }
+
+            logger.info(f"Checking VendPart exists: VendorNum={vendor_num}, Part={part_num}, Date={effective_date}")
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
+
+            if response.status_code == 200:
+                data = response.json()
+                records = data.get("value", [])
+
+                if records:
+                    logger.info(f"   Found existing VendPart record")
+                    return records[0]
+                else:
+                    logger.info(f"   No existing VendPart record found")
+                    return None
+            else:
+                logger.error(f"Error checking VendPart: {response.status_code} - {response.text[:200]}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Exception checking VendPart: {e}")
+            return None
+
+    async def get_vendpart_by_id(
+        self,
+        vendor_num: int,
+        part_num: str,
+        effective_date: str,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a VendPart record by its composite key using GetByID method.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            effective_date: Effective date in ISO format
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            VendPart record or None if not found
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/GetByID"
+            headers = await self._get_headers()
+
+            payload = {
+                "partNum": part_num,
+                "opCode": op_code,
+                "pum": pum,
+                "effectiveDate": effective_date,
+                "vendorNum": vendor_num
+            }
+
+            logger.info(f"Getting VendPart by ID: VendorNum={vendor_num}, Part={part_num}")
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
+
+            if response.status_code == 200:
+                data = response.json()
+                vend_parts = data.get("returnObj", {}).get("VendPart", [])
+
+                if vend_parts:
+                    logger.info(f"   Retrieved VendPart record successfully")
+                    return vend_parts[0]
+                else:
+                    logger.info(f"   No VendPart record found")
+                    return None
+            else:
+                logger.error(f"Error getting VendPart by ID: {response.status_code} - {response.text[:200]}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Exception getting VendPart by ID: {e}")
+            return None
+
+    async def create_vendpart_record(
+        self,
+        vendor_num: int,
+        part_num: str,
+        base_price: float,
+        effective_date: str,
+        comment_text: str = None,
+        reference: str = None,
+        ven_part_num: str = None,
+        pum: str = "EA",
+        op_code: str = "",
+        currency_code: str = "USD",
+        price_per_code: str = "E"
+    ) -> Dict[str, Any]:
+        """
+        Create a new VendPart record using GetNewVendPart + Update workflow.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            base_price: Price to set
+            effective_date: Effective date in ISO format
+            comment_text: Comment for traceability
+            reference: Reference (e.g., email ID)
+            ven_part_num: Vendor's part number (optional)
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+            currency_code: Currency code (default: "USD")
+            price_per_code: Price per code (default: "E" = Each)
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            logger.info(f"Creating new VendPart: VendorNum={vendor_num}, Part={part_num}, Price={base_price}")
+
+            # Step 1: Get new record template
+            get_new_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/GetNewVendPart"
+            headers = await self._get_headers()
+
+            get_new_payload = {
+                "ds": {},
+                "partNum": part_num,
+                "opCode": op_code,
+                "pum": pum,
+                "effectiveDate": effective_date,
+                "vendorNum": vendor_num
+            }
+
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(get_new_url, json=get_new_payload, headers=headers, timeout=10.0)
+
+            if response.status_code != 200:
+                logger.error(f"GetNewVendPart failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "status": "error",
+                    "message": f"GetNewVendPart failed: HTTP {response.status_code}",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+            data = response.json()
+            ds = data.get("ds", {})
+            vend_parts = ds.get("VendPart", [])
+
+            if not vend_parts:
+                return {
+                    "status": "error",
+                    "message": "GetNewVendPart returned no template",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+            # Step 2: Populate the template with our values
+            new_record = vend_parts[0]
+            new_record["BaseUnitPrice"] = base_price
+            new_record["PricePerCode"] = price_per_code
+            new_record["CurrencyCode"] = currency_code
+            new_record["RowMod"] = "A"  # Add
+
+            if ven_part_num:
+                new_record["VenPartNum"] = ven_part_num
+            if comment_text:
+                new_record["CommentText"] = comment_text
+            if reference:
+                new_record["Reference"] = reference
+
+            # Step 3: Call Update to save the record
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/Update"
+
+            update_payload = {
+                "ds": {
+                    "VendPart": [new_record]
+                }
+            }
+
+            logger.info(f"   Saving new VendPart record...")
+            response = await client.post(update_url, json=update_payload, headers=headers, timeout=10.0)
+
+            if response.status_code == 200:
+                logger.info(f"   Successfully created VendPart record")
+                return {
+                    "status": "success",
+                    "message": "VendPart record created successfully",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num,
+                    "new_price": base_price,
+                    "effective_date": effective_date,
+                    "operation": "create"
+                }
+            else:
+                logger.error(f"Update failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "status": "error",
+                    "message": f"Update failed: HTTP {response.status_code} - {response.text[:200]}",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+        except Exception as e:
+            logger.error(f"Exception creating VendPart: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "vendor_num": vendor_num
+            }
+
+    async def update_vendpart_record(
+        self,
+        vendor_num: int,
+        part_num: str,
+        base_price: float,
+        effective_date: str,
+        comment_text: str = None,
+        reference: str = None,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Update an existing VendPart record using GetByID + Update workflow.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated)
+            part_num: Internal part number
+            base_price: New price to set
+            effective_date: Effective date in ISO format
+            comment_text: Comment for traceability
+            reference: Reference (e.g., email ID)
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            # Ensure effective_date has time component
+            if effective_date and 'T' not in effective_date:
+                effective_date = f"{effective_date}T00:00:00Z"
+
+            logger.info(f"Updating VendPart: VendorNum={vendor_num}, Part={part_num}, Price={base_price}")
+
+            # Step 1: Get existing record
+            existing = await self.get_vendpart_by_id(vendor_num, part_num, effective_date, pum, op_code)
+
+            if not existing:
+                return {
+                    "status": "error",
+                    "message": "VendPart record not found for update",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+            old_price = existing.get("BaseUnitPrice")
+
+            # Step 2: Modify the record
+            existing["BaseUnitPrice"] = base_price
+            existing["RowMod"] = "U"  # Update
+
+            if comment_text:
+                existing["CommentText"] = comment_text
+            if reference:
+                existing["Reference"] = reference
+
+            # Step 3: Call Update to save changes
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/Update"
+            headers = await self._get_headers()
+
+            update_payload = {
+                "ds": {
+                    "VendPart": [existing]
+                }
+            }
+
+            logger.info(f"   Saving updated VendPart record...")
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, json=update_payload, headers=headers, timeout=10.0)
+
+            if response.status_code == 200:
+                logger.info(f"   Successfully updated VendPart record: ${old_price} -> ${base_price}")
+                return {
+                    "status": "success",
+                    "message": "VendPart record updated successfully",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num,
+                    "old_price": old_price,
+                    "new_price": base_price,
+                    "effective_date": effective_date,
+                    "operation": "update"
+                }
+            else:
+                logger.error(f"Update failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "status": "error",
+                    "message": f"Update failed: HTTP {response.status_code} - {response.text[:200]}",
+                    "part_num": part_num,
+                    "vendor_num": vendor_num
+                }
+
+        except Exception as e:
+            logger.error(f"Exception updating VendPart: {e}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "vendor_num": vendor_num
+            }
+
+    async def update_vendpart_price_direct(
+        self,
+        vendor_num: int,
+        part_num: str,
+        new_price: float,
+        effective_date: str,
+        email_id: str = None,
+        comment: str = None,
+        old_price: float = None,
+        pum: str = "EA",
+        op_code: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Direct VendPartSvc update - NO verification step.
+        Assumes vendor_num is pre-validated from Phase 1.
+
+        Used by "Mark as Processed" flow.
+
+        Args:
+            vendor_num: Epicor VendorNum (pre-validated from BomImpactResult)
+            part_num: Internal part number
+            new_price: New price to set
+            effective_date: Effective date in ISO format
+            email_id: Email ID for Reference field (traceability)
+            comment: Comment text for traceability
+            old_price: Previous price (for logging purposes)
+            pum: Purchase Unit of Measure (default: "EA")
+            op_code: Operation code (default: "" for raw materials)
+
+        Returns:
+            Dictionary with status and details
+        """
+        try:
+            logger.info("="*80)
+            logger.info(f"VENDPARTSVC DIRECT UPDATE (No Verification)")
+            logger.info("="*80)
+            logger.info(f"   VendorNum: {vendor_num} (pre-validated)")
+            logger.info(f"   Part: {part_num}")
+            logger.info(f"   New Price: ${new_price}")
+            logger.info(f"   Effective Date: {effective_date}")
+            logger.info("-"*80)
+
+            # Build reference and comment for traceability
+            reference = f"EMAIL-{email_id}" if email_id else None
+            from datetime import datetime
+            update_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            comment_text = comment or f"Price updated via email agent on {update_timestamp}"
+            if old_price is not None:
+                comment_text += f" - Old: ${old_price}, New: ${new_price}"
+
+            # Step 1: Check if VendPart record exists for this effective date
+            logger.info(f"Step 1: Checking if VendPart record exists...")
+            existing = await self.check_vendpart_exists(vendor_num, part_num, effective_date, pum, op_code)
+
+            if existing:
+                # Step 2A: UPDATE existing record
+                logger.info(f"Step 2: Updating existing VendPart record...")
+                result = await self.update_vendpart_record(
+                    vendor_num=vendor_num,
+                    part_num=part_num,
+                    base_price=new_price,
+                    effective_date=effective_date,
+                    comment_text=comment_text,
+                    reference=reference,
+                    pum=pum,
+                    op_code=op_code
+                )
+            else:
+                # Step 2B: CREATE new record
+                logger.info(f"Step 2: Creating new VendPart record...")
+                result = await self.create_vendpart_record(
+                    vendor_num=vendor_num,
+                    part_num=part_num,
+                    base_price=new_price,
+                    effective_date=effective_date,
+                    comment_text=comment_text,
+                    reference=reference,
+                    pum=pum,
+                    op_code=op_code
+                )
+
+            if result["status"] == "success":
+                logger.info(f"✅ VENDPARTSVC DIRECT UPDATE COMPLETE")
+                logger.info("="*80)
+            else:
+                logger.error(f"❌ VENDPARTSVC UPDATE FAILED: {result.get('message')}")
+                logger.error("="*80)
+
+            # Add email_id to result for reference
+            result["email_id"] = email_id
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Exception in direct VendPart update: {e}")
+            logger.error("="*80)
+            return {
+                "status": "error",
+                "message": str(e),
+                "part_num": part_num,
+                "vendor_num": vendor_num
+            }
+
+    async def batch_update_vendpart_prices_direct(
+        self,
+        products: List[Dict[str, Any]],
+        effective_date: str,
+        email_id: str = None,
+        comment: str = None
+    ) -> Dict[str, Any]:
+        """
+        Batch VendPartSvc update using UpdateExt - single API call for all parts.
+        Each product dict must include pre-validated vendor_num.
+
+        Used by "Mark as Processed" flow for multiple products.
+
+        Args:
+            products: List of dicts with: part_num, new_price, vendor_num, old_price (optional)
+            effective_date: Effective date for all updates
+            email_id: Email ID for Reference field (traceability)
+            comment: Comment text for traceability
+
+        Returns:
+            Dictionary with batch update results
+        """
+        results = {
+            "total": len(products),
+            "successful": 0,
+            "failed": 0,
+            "skipped": 0,
+            "details": [],
+            "workflow_used": "VendPartSvc UpdateExt (single API call)"
+        }
+
+        logger.info("="*80)
+        logger.info(f"BATCH VENDPARTSVC UPDATE (UpdateExt) - {len(products)} products")
+        logger.info("="*80)
+        logger.info(f"   Effective Date: {effective_date}")
+        logger.info(f"   Email ID: {email_id or 'Not provided'}")
+        logger.info("-"*80)
+
+        # Ensure effective_date has time component
+        if effective_date and 'T' not in effective_date:
+            effective_date = f"{effective_date}T00:00:00Z"
+
+        # Build reference and comment for traceability
+        # Note: Epicor Reference field has max 30 chars, so truncate if needed
+        if email_id:
+            # Use last 24 chars of email_id to fit within 30 char limit (6 for "EMAIL-")
+            short_id = email_id[-24:] if len(email_id) > 24 else email_id
+            reference = f"EMAIL-{short_id}"
+        else:
+            reference = None
+        from datetime import datetime
+        update_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        # Include full email_id in comment for full traceability (Reference is truncated)
+        base_comment = comment or "Price updated via email agent"
+        comment_text = f"{base_comment} on {update_timestamp}"
+        if email_id:
+            comment_text = f"{comment_text} | Email: {email_id}"
+
+        # Build VendPart records for UpdateExt
+        vendpart_records = []
+        skipped_products = []
+
+        for product in products:
+            part_num = product.get("part_num")
+            new_price = product.get("new_price")
+            vendor_num = product.get("vendor_num")
+            old_price = product.get("old_price")
+            product_name = product.get("product_name", "Unknown")
+
+            # Validate required fields
+            if not part_num:
+                results["skipped"] += 1
+                results["details"].append({
+                    "product": product_name,
+                    "status": "skipped",
+                    "reason": "Missing part_num"
+                })
+                skipped_products.append(product)
+                continue
+
+            if vendor_num is None:
+                results["skipped"] += 1
+                results["details"].append({
+                    "part_num": part_num,
+                    "product": product_name,
+                    "status": "skipped",
+                    "reason": "Missing vendor_num (not pre-validated)"
+                })
+                skipped_products.append(product)
+                continue
+
+            if new_price is None:
+                results["skipped"] += 1
+                results["details"].append({
+                    "part_num": part_num,
+                    "product": product_name,
+                    "status": "skipped",
+                    "reason": "Missing new_price"
+                })
+                skipped_products.append(product)
+                continue
+
+            # Parse price if it's a string
+            try:
+                if isinstance(new_price, str):
+                    clean_price = new_price.replace("$", "").replace(",", "").strip()
+                    new_price = float(clean_price)
+                else:
+                    new_price = float(new_price)
+            except (ValueError, TypeError) as e:
+                results["failed"] += 1
+                results["details"].append({
+                    "part_num": part_num,
+                    "product": product_name,
+                    "status": "failed",
+                    "reason": f"Invalid price format: {product.get('new_price')}"
+                })
+                continue
+
+            # Build VendPart record for UpdateExt
+            # Note: UpdateExt handles create vs update automatically
+            vendpart_record = {
+                "Company": self.company_id,
+                "PartNum": part_num,
+                "OpCode": "",  # Empty for raw materials
+                "PUM": "EA",
+                "EffectiveDate": effective_date,
+                "VendorNum": vendor_num,
+                "BaseUnitPrice": new_price,
+                "PricePerCode": "E",  # E = Each
+                "CurrencyCode": "USD",
+                "RowMod": "A"  # UpdateExt handles add vs update
+            }
+
+            if reference:
+                vendpart_record["Reference"] = reference
+            if comment_text:
+                # Include old price in comment if available
+                if old_price is not None:
+                    vendpart_record["CommentText"] = f"{comment_text} - Old: ${old_price}, New: ${new_price}"
+                else:
+                    vendpart_record["CommentText"] = comment_text
+
+            vendpart_records.append({
+                "record": vendpart_record,
+                "part_num": part_num,
+                "product_name": product_name,
+                "vendor_num": vendor_num,
+                "old_price": old_price,
+                "new_price": new_price
+            })
+
+        # If no valid records, return early
+        if not vendpart_records:
+            logger.warning("No valid products to update")
+            logger.info("="*80)
+            return results
+
+        logger.info(f"   Prepared {len(vendpart_records)} VendPart records for UpdateExt")
+
+        # Call UpdateExt with all records in a single API call
+        try:
+            update_url = f"{self.base_url}/{self.company_id}/Erp.BO.VendPartSvc/UpdateExt"
+            headers = await self._get_headers()
+
+            payload = {
+                "ds": {
+                    "VendPart": [r["record"] for r in vendpart_records]
+                },
+                "continueProcessingOnError": True,  # Process all, report failures
+                "rollbackParentOnChildError": False  # Don't rollback on individual failures
+            }
+
+            logger.info(f"   Calling UpdateExt with {len(vendpart_records)} records...")
+            client = await HTTPClientManager.get_epicor_client()
+            response = await client.post(update_url, json=payload, headers=headers, timeout=60.0)
+
+            if response.status_code == 200:
+                response_data = response.json()
+
+                # Check for BOUpdError in response (partial failures)
+                # Note: UpdateExt returns errors in returnObj.BOUpdError, not ds.BOUpdError
+                bo_upd_errors = response_data.get("returnObj", {}).get("BOUpdError", [])
+                error_map = {}
+                for err in bo_upd_errors:
+                    # Map errors to table/row for matching
+                    table_name = err.get("TableName", "")
+                    row_id = err.get("RowIdent", "")
+                    error_msg = err.get("ErrorText", "Unknown error")
+                    error_map[f"{table_name}:{row_id}"] = error_msg
+
+                # Process results
+                for record_info in vendpart_records:
+                    part_num = record_info["part_num"]
+                    product_name = record_info["product_name"]
+                    vendor_num = record_info["vendor_num"]
+                    old_price = record_info["old_price"]
+                    new_price = record_info["new_price"]
+
+                    # Check if this record had an error
+                    # Note: Error matching may need adjustment based on actual Epicor response format
+                    has_error = False
+                    error_message = None
+
+                    for key, msg in error_map.items():
+                        if part_num in key:
+                            has_error = True
+                            error_message = msg
+                            break
+
+                    if has_error:
+                        results["failed"] += 1
+                        results["details"].append({
+                            "part_num": part_num,
+                            "product": product_name,
+                            "status": "failed",
+                            "vendor_num": vendor_num,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "effective_date": effective_date,
+                            "message": error_message
+                        })
+                    else:
+                        results["successful"] += 1
+                        results["details"].append({
+                            "part_num": part_num,
+                            "product": product_name,
+                            "status": "success",
+                            "vendor_num": vendor_num,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "effective_date": effective_date,
+                            "operation": "batch_update",
+                            "message": "Updated via UpdateExt"
+                        })
+
+                logger.info(f"   ✅ UpdateExt completed successfully")
+
+            else:
+                # Entire batch failed
+                error_text = response.text[:500]
+                logger.error(f"   ❌ UpdateExt failed: {response.status_code} - {error_text}")
+
+                # Mark all as failed
+                for record_info in vendpart_records:
+                    results["failed"] += 1
+                    results["details"].append({
+                        "part_num": record_info["part_num"],
+                        "product": record_info["product_name"],
+                        "status": "failed",
+                        "vendor_num": record_info["vendor_num"],
+                        "old_price": record_info["old_price"],
+                        "new_price": record_info["new_price"],
+                        "effective_date": effective_date,
+                        "message": f"UpdateExt failed: HTTP {response.status_code}"
+                    })
+
+        except httpx.TimeoutException:
+            logger.error(f"   ❌ UpdateExt timeout")
+            for record_info in vendpart_records:
+                results["failed"] += 1
+                results["details"].append({
+                    "part_num": record_info["part_num"],
+                    "product": record_info["product_name"],
+                    "status": "failed",
+                    "message": "Request timeout"
+                })
+
+        except Exception as e:
+            logger.error(f"   ❌ UpdateExt exception: {e}")
+            for record_info in vendpart_records:
+                results["failed"] += 1
+                results["details"].append({
+                    "part_num": record_info["part_num"],
+                    "product": record_info["product_name"],
+                    "status": "failed",
+                    "message": str(e)
+                })
+
+        logger.info("="*80)
+        logger.info(f"BATCH UPDATE COMPLETE (UpdateExt)")
+        logger.info(f"   Successful: {results['successful']}")
+        logger.info(f"   Failed: {results['failed']}")
+        logger.info(f"   Skipped: {results['skipped']}")
+        logger.info("="*80)
 
         return results
 

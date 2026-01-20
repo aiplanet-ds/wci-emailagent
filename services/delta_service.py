@@ -14,17 +14,7 @@ from typing import Dict, List, Optional, Any
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-
-# Database imports
-from database.config import SessionLocal
-from database.services.user_service import UserService
-from database.services.email_service import EmailService
-from database.services.delta_service import DeltaService as DBDeltaService
-from database.services.email_state_service import EmailStateService as DBEmailStateService
-
-# Import LLM-powered detection service
-from services.llm_detector import llm_is_price_change_email
-from utils.processors import process_all_content
+import aiofiles
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -88,23 +78,16 @@ class DeltaEmailService:
         logger.warning("save_active_users is deprecated - user activation is now managed per-user")
     
     async def add_user_to_monitoring(self, user_email: str):
-        """Add a user to email monitoring by activating them in database"""
-        try:
-            async with SessionLocal() as db:
-                user, created = await UserService.get_or_create_user(db, user_email)
-                if not user.is_active:
-                    await UserService.activate_user(db, user.id)
-                    await db.commit()
-                    logger.info(f"✅ User added to monitoring list")
-                else:
-                    logger.info(f"ℹ️  User already in monitoring list")
-
-                # Count active users
-                active_users = await UserService.get_all_users(db, active_only=True)
-                logger.info(f"📊 Total active users: {len(active_users)}")
-        except Exception as e:
-            logger.error(f"Error adding user to monitoring: {e}")
-
+        """Add a user to email monitoring"""
+        active_users = await self.load_active_users()
+        if user_email not in active_users:
+            active_users.append(user_email)
+            await self.save_active_users(active_users)
+            logger.info(f"✅ User added to monitoring list")
+            logger.info(f"📊 Total active users: {len(active_users)}")
+        else:
+            logger.info(f"ℹ️  User already in monitoring list")
+    
     async def remove_user_from_monitoring(self, user_email: str):
         """Remove a user from email monitoring by deactivating them in database"""
         try:
@@ -130,105 +113,91 @@ class DeltaEmailService:
     async def get_user_delta_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
         """Get delta messages for a user"""
         try:
-            return self.graph_client.get_user_delta_messages(user_email, delta_token)
+            return await self.graph_client.get_user_delta_messages(user_email, delta_token)
         except Exception as e:
             logger.error(f"Error getting delta messages for {user_email}: {e}")
             return {"messages": [], "delta_token": delta_token}
     
-    def is_price_change_email(self, user_email: str, message: Dict) -> Dict[str, Any]:
-        """
-        Determine if an email is a price change notification using LLM-powered detection.
-
-        Args:
-            user_email: Email address of the user (for fetching full message)
-            message: Email message dict from Microsoft Graph
-
-        Returns:
-            Dict with detection results including is_price_change, confidence, reasoning
-        """
-        try:
-            # Extract basic metadata
-            subject = message.get('subject', 'No Subject')
-            sender_info = message.get('from', {}).get('emailAddress', {})
-            sender = sender_info.get('address', '') if sender_info else ''
-            date_received = message.get('receivedDateTime', '')
-            message_id = message.get('id', '')
-            has_attachments = message.get('hasAttachments', False)
-
-            # Prepare metadata for LLM
-            metadata = {
-                'subject': subject,
-                'sender': sender,
-                'date': date_received,
-                'message_id': message_id,
-                'has_attachments': has_attachments
-            }
-
-            # Get full message content with attachments
-            logger.info(f"   🤖 Fetching full email content for LLM analysis...")
-            full_message = self.graph_client.get_user_message_by_id(user_email, message_id)
-
-            # Extract email body
-            email_body = ""
-            body_data = full_message.get("body", {})
-            if body_data:
-                email_body = body_data.get("content", "")
-
-            # Process attachments (if any)
-            attachment_paths = []  # Empty list if no attachments
-            if full_message.get("hasAttachments", False):
-                attachments = self.graph_client.get_user_message_attachments(user_email, message_id)
-
-                # Create user-specific downloads directory for temp attachment storage
-                safe_email = user_email.replace("@", "_at_").replace(".", "_dot_")
-                user_downloads_dir = os.path.join("downloads", safe_email)
-                os.makedirs(user_downloads_dir, exist_ok=True)
-
-                for att in attachments:
-                    if att.get("@odata.type", "").endswith("fileAttachment"):
-                        filename = att.get("name", "unknown")
-                        content_bytes = att.get("contentBytes")
-
-                        if content_bytes:
-                            try:
-                                # Decode and save attachment
-                                if isinstance(content_bytes, str):
-                                    decoded_content = base64.b64decode(content_bytes)
-                                else:
-                                    decoded_content = content_bytes
-
-                                path = os.path.join(user_downloads_dir, filename)
-                                with open(path, "wb") as f:
-                                    f.write(decoded_content)
-
-                                attachment_paths.append(path)
-                                logger.info(f"   📎 Saved attachment for analysis: {filename}")
-                            except Exception as e:
-                                logger.warning(f"   ⚠️  Could not save attachment {filename}: {e}")
-
-            # Process all content (body + attachments)
-            combined_content = process_all_content(email_body, attachment_paths)
-
-            # Call LLM detector
-            logger.info(f"   🤖 Analyzing with LLM detector...")
-            detection_result = llm_is_price_change_email(combined_content, metadata)
-
-            return detection_result
-
-        except Exception as e:
-            logger.error(f"   ❌ Error in LLM price change detection: {e}")
-            # Return negative result on error to avoid false positives
-            return {
-                "is_price_change": False,
-                "confidence": 0.0,
-                "reasoning": f"Detection error: {str(e)}",
-                "meets_threshold": False,
-                "error": str(e)
-            }
+    def is_price_change_email(self, message: Dict) -> bool:
+        """Determine if an email is likely about price changes using liberal filtering"""
+        subject = message.get('subject', '').lower()
+        sender_info = message.get('from', {}).get('emailAddress', {})
+        sender = sender_info.get('address', '').lower() if sender_info else ''
+        has_attachments = message.get('hasAttachments', False)
+        
+        # Priority keywords - strong indicators of price changes
+        priority_keywords = [
+            'price change', 'pricing update', 'cost adjustment', 'rate change',
+            'price increase', 'price decrease', 'new pricing', 'pricing effective',
+            'cost increase', 'rate adjustment', 'tariff change', 'fee update'
+        ]
+        
+        # General price-related keywords
+        price_keywords = [
+            'price', 'pricing', 'cost', 'rate', 'rates', 'tariff', 'fee', 'fees',
+            'quote', 'quotation', 'invoice', 'bill', 'billing', 'charge', 'charges'
+        ]
+        
+        # Change-related keywords
+        change_keywords = [
+            'change', 'update', 'revised', 'new', 'effective', 'increase', 'decrease',
+            'adjustment', 'modify', 'modified', 'amendment', 'notice', 'notification'
+        ]
+        
+        # Business/supplier keywords
+        business_keywords = [
+            'supplier', 'vendor', 'contract', 'agreement', 'terms', 'conditions',
+            'procurement', 'purchase', 'order', 'catalog', 'catalogue'
+        ]
+        
+        # Financial indicators
+        financial_indicators = ['$', '€', '£', '¥', '%', 'usd', 'eur', 'gbp']
+        
+        # High priority: Strong price change indicators in subject
+        if any(keyword in subject for keyword in priority_keywords):
+            return True
+        
+        # Medium-high priority: Has attachments + any price/change keywords
+        if has_attachments and (
+            any(keyword in subject for keyword in price_keywords) or
+            any(keyword in subject for keyword in change_keywords)
+        ):
+            return True
+        
+        # Medium priority: Price keywords + change keywords combination
+        has_price_keyword = any(keyword in subject for keyword in price_keywords)
+        has_change_keyword = any(keyword in subject for keyword in change_keywords)
+        if has_price_keyword and has_change_keyword:
+            return True
+        
+        # Medium priority: Financial indicators + business context
+        has_financial = any(indicator in subject for indicator in financial_indicators)
+        has_business = any(keyword in subject for keyword in business_keywords)
+        if has_financial and (has_business or has_change_keyword):
+            return True
+        
+        # Lower priority: Business sender with price/financial keywords
+        business_sender_domains = [
+            'supplier', 'vendor', 'corp', 'company', 'inc', 'ltd', 'llc',
+            'procurement', 'sales', 'billing', 'finance', 'accounting'
+        ]
+        is_business_sender = any(domain in sender for domain in business_sender_domains)
+        if is_business_sender and (has_price_keyword or has_financial):
+            return True
+        
+        # Catch common invoice/billing patterns
+        invoice_patterns = [
+            'invoice', 'bill', 'billing', 'payment', 'due', 'statement',
+            'account', 'balance', 'outstanding', 'remittance'
+        ]
+        if any(pattern in subject for pattern in invoice_patterns):
+            return True
+        
+        return False
 
     async def process_user_messages(self, user_email: str, messages: List[Dict]):
         """Process new messages for a user with vendor verification and liberal price change filtering"""
-        from main import process_user_message
+        from email_processor import process_user_message
         from services.vendor_verification_service import vendor_verification_service
 
         processed_count = 0
@@ -274,20 +243,10 @@ class DeltaEmailService:
                         method = verification_result['method']
                         logger.info(f"   ✅ VERIFIED VENDOR ({method})")
 
-                        # STEP 2: LLM DETECTION (only for verified vendors)
-                        logger.info(f"   🤖 Running LLM price change detection...")
-                        detection_result = self.is_price_change_email(user_email, message)
-
-                        if detection_result.get("meets_threshold", False):
-                            confidence = detection_result.get("confidence", 0.0)
-                            reasoning = detection_result.get("reasoning", "N/A")
-                            logger.info(f"   ✅ PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
-                            logger.info(f"   💡 Reasoning: {reasoning}")
-
-                            # Get full message details (we'll need it for processing)
+                            # Get full message details
                             full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
 
-                            # STEP 3: AI EXTRACTION
+                            # Process the message
                             await asyncio.to_thread(process_user_message, full_message, user_email)
 
                             # Mark as vendor verified and processed
@@ -327,8 +286,8 @@ class DeltaEmailService:
                         logger.info(f"   💾 Saving basic metadata (LLM detection will run after approval)")
                         logger.info(f"   💰 Token savings: Skipping LLM detection until approved")
 
-                        # Get full message for metadata
-                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                            # Get full message for metadata
+                            full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
 
                         # Save minimal email metadata WITHOUT LLM detection or extraction
                         await self._save_flagged_email_metadata(full_message, user_email)
@@ -366,35 +325,17 @@ class DeltaEmailService:
                                 logger.warning(f"   ⚠️  EmailState already exists for {message_id} - skipping state update")
                                 await db.commit()
 
-                        flagged_count += 1
-
-                else:
-                    # Verification disabled - run LLM detection and process normally
-                    logger.info(f"   ℹ️  Vendor verification disabled")
-
-                    # STEP 2: LLM DETECTION
-                    logger.info(f"   🤖 Running LLM price change detection...")
-                    detection_result = self.is_price_change_email(user_email, message)
-
-                    if detection_result.get("meets_threshold", False):
-                        confidence = detection_result.get("confidence", 0.0)
-                        reasoning = detection_result.get("reasoning", "N/A")
-                        logger.info(f"   ✅ PRICE CHANGE DETECTED (Confidence: {confidence:.2f})")
-                        logger.info(f"   💡 Reasoning: {reasoning}")
+                            flagged_count += 1
+                    else:
+                        # Verification disabled - process normally
+                        logger.info(f"   ℹ️  Vendor verification disabled - processing")
 
                         # Get full message details
-                        full_message = self.graph_client.get_user_message_by_id(user_email, message['id'])
+                        full_message = await self.graph_client.get_user_message_by_id(user_email, message['id'])
 
-                        # STEP 3: AI EXTRACTION
+                        # Process the message
                         await asyncio.to_thread(process_user_message, full_message, user_email)
                         processed_count += 1
-                    else:
-                        # Not a price change email
-                        confidence = detection_result.get("confidence", 0.0)
-                        reasoning = detection_result.get("reasoning", "N/A")
-                        skipped_count += 1
-                        logger.info(f"   ⏭️  Not a price change email - SKIPPED (Confidence: {confidence:.2f})")
-                        logger.info(f"   💡 Reasoning: {reasoning}")
 
                 # Small delay to avoid overwhelming the system
                 await asyncio.sleep(1)
@@ -418,50 +359,48 @@ class DeltaEmailService:
         subject = msg.get('subject', '(no subject)')
         sender_info = msg.get('from', {}).get('emailAddress', {})
         sender = sender_info.get('address', '(no sender)')
-        date_received_str = msg.get('receivedDateTime', '')
-        has_attachments = msg.get('hasAttachments', False)
+        date_received = msg.get('receivedDateTime', '(no date)')
 
-        # Parse date
-        try:
-            date_received = datetime.fromisoformat(date_received_str.replace('Z', '+00:00'))
-            if date_received.tzinfo:
-                date_received = date_received.replace(tzinfo=None)
-        except:
-            date_received = datetime.utcnow()
+        # Save minimal metadata (no AI extraction)
+        flagged_data = {
+            "email_metadata": {
+                "subject": subject,
+                "sender": sender,
+                "date": date_received,
+                "message_id": message_id
+            },
+            "flagged": True,
+            "flagged_reason": "Unverified vendor email - pending manual approval",
+            "supplier_info": {
+                "supplier_id": None,
+                "supplier_name": None,
+                "contact_person": None,
+                "contact_email": sender,
+                "contact_phone": None
+            },
+            "price_change_summary": {
+                "change_type": None,
+                "effective_date": None,
+                "notification_date": None,
+                "reason": "Awaiting verification",
+                "overall_impact": None
+            },
+            "affected_products": [],
+            "additional_details": {
+                "terms_and_conditions": None,
+                "payment_terms": None,
+                "minimum_order_quantity": None,
+                "notes": "This email requires manual verification before AI extraction"
+            }
+        }
 
-        # Extract email body
-        email_body = ""
-        body_data = msg.get("body", {})
-        if body_data:
-            email_body = body_data.get("content", "")
+        output_filename = f"price_change_{message_id}.json"
+        output_path = os.path.join(user_output_dir, output_filename)
 
-        # Save minimal email record to database (no AI extraction yet)
-        async with SessionLocal() as db:
-            # Get user
-            user, _ = await UserService.get_or_create_user(db, user_email)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(flagged_data, f, indent=2, ensure_ascii=False)
 
-            # Create minimal email record
-            email_record = await EmailService.get_email_by_message_id(db, message_id)
-            if not email_record:
-                email_record = await EmailService.create_email(
-                    db,
-                    message_id=message_id,
-                    user_id=user.id,
-                    subject=subject,
-                    sender_email=sender,
-                    received_at=date_received,
-                    has_attachments=has_attachments,
-                    body_text=email_body,
-                    # No AI-extracted fields yet - will be populated after approval
-                    supplier_info={"contact_email": sender},
-                    price_change_summary={"reason": "Awaiting verification and LLM detection"},
-                    affected_products=[],
-                    additional_details={"notes": "This email requires manual approval. LLM detection and AI extraction will run after approval."},
-                    raw_email_data=msg
-                )
-                await db.commit()
-
-        logger.info(f"   💾 Saved flagged email metadata to database (email_id: {email_record.id})")
+        logger.info(f"   💾 Saved flagged email metadata: {output_filename}")
 
     async def poll_user_emails(self, user_email: str):
         """Poll emails for a specific user"""

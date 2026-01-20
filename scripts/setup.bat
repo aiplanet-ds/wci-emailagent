@@ -42,7 +42,7 @@ echo    python scripts\migrate_json_to_db.py --dry-run
 echo    python scripts\migrate_json_to_db.py
 echo.
 echo 2. Start the application:
-echo    python start.py
+echo    python main.py
 echo.
 echo 3. Or run everything in Docker:
 echo    docker-compose up -d

@@ -263,7 +263,7 @@ The application container is configured with hot reload enabled:
 # In docker-compose.yml
 volumes:
   - .:/app  # Maps your local code to container
-command: uvicorn start:app --host 0.0.0.0 --port 8000 --reload
+command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Any changes to Python files will automatically restart the server.

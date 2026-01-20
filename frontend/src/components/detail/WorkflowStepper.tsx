@@ -1,4 +1,4 @@
-import { Mail, Bot, Database, Check } from 'lucide-react';
+import { Bot, Check, Database, Mail } from 'lucide-react';
 
 interface WorkflowStep {
   id: number;
@@ -6,13 +6,36 @@ interface WorkflowStep {
   description: string;
   icon: React.ElementType;
   color: string;
+  isComplete: boolean;
 }
 
 interface WorkflowStepperProps {
   hasEpicorSync: boolean;
+  verificationStatus: string;
+  llmDetectionPerformed: boolean;
 }
 
-export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
+export function WorkflowStepper({ hasEpicorSync, verificationStatus, llmDetectionPerformed }: WorkflowStepperProps) {
+  // Determine which steps are complete based on actual state
+  // Step 1 (Email Detection): Always complete once email is received
+  const isStep1Complete = true;
+
+  // Step 2 (AI Extraction): Only complete when email is approved AND LLM detection has been performed
+  const isApproved = verificationStatus === 'verified' || verificationStatus === 'manually_approved';
+  const isStep2Complete = isApproved && llmDetectionPerformed;
+
+  // Step 3 (Epicor Integration): Only complete when synced to Epicor
+  const isStep3Complete = hasEpicorSync;
+
+  // Determine descriptions based on state
+  const getStep2Description = () => {
+    if (isStep2Complete) return 'Data extracted';
+    if (verificationStatus === 'pending_review') return 'Pending approval';
+    if (verificationStatus === 'rejected') return 'Rejected';
+    if (isApproved && !llmDetectionPerformed) return 'Pending extraction';
+    return 'Pending';
+  };
+
   const steps: WorkflowStep[] = [
     {
       id: 1,
@@ -20,20 +43,23 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
       description: 'Content extracted',
       icon: Mail,
       color: 'text-blue-600',
+      isComplete: isStep1Complete,
     },
     {
       id: 2,
       name: 'AI Extraction',
-      description: 'Data extracted',
+      description: getStep2Description(),
       icon: Bot,
       color: 'text-purple-600',
+      isComplete: isStep2Complete,
     },
     {
       id: 3,
       name: 'Epicor Integration',
-      description: hasEpicorSync ? 'Sync complete' : 'Pending sync',
+      description: isStep3Complete ? 'Sync complete' : 'Pending sync',
       icon: Database,
-      color: hasEpicorSync ? 'text-green-600' : 'text-gray-400',
+      color: isStep3Complete ? 'text-green-600' : 'text-gray-400',
+      isComplete: isStep3Complete,
     },
   ];
 
@@ -50,13 +76,13 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
                 className={`
                   flex items-center justify-center w-8 h-8 rounded-full border
                   ${
-                    step.id <= 2 || (step.id === 3 && hasEpicorSync)
+                    step.isComplete
                       ? 'bg-white border-green-500'
                       : 'bg-gray-50 border-gray-300'
                   }
                 `}
               >
-                {step.id <= 2 || (step.id === 3 && hasEpicorSync) ? (
+                {step.isComplete ? (
                   <Check className="h-4 w-4 text-green-500" />
                 ) : (
                   <step.icon className={`h-4 w-4 ${step.color}`} />
@@ -67,11 +93,7 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
                 <div
                   className={`
                     text-xs font-medium
-                    ${
-                      step.id <= 2 || (step.id === 3 && hasEpicorSync)
-                        ? 'text-gray-900'
-                        : 'text-gray-500'
-                    }
+                    ${step.isComplete ? 'text-gray-900' : 'text-gray-500'}
                   `}
                 >
                   {step.name}
@@ -80,13 +102,13 @@ export function WorkflowStepper({ hasEpicorSync }: WorkflowStepperProps) {
               </div>
             </div>
 
-            {/* Connector Line */}
+            {/* Connector Line - green if both current step AND next step are complete */}
             {index < steps.length - 1 && (
               <div
                 className={`
                   flex-1 h-px mx-3 mt-[-1.5rem]
                   ${
-                    step.id < 3 || (step.id === 2 && hasEpicorSync)
+                    step.isComplete && steps[index + 1].isComplete
                       ? 'bg-green-500'
                       : 'bg-gray-300'
                   }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { InboxFilters } from '../components/inbox/InboxFilters';
-import { InboxTable } from '../components/inbox/InboxTable';
 import { EmailDetailDrawer } from '../components/detail/EmailDetailDrawer';
+import { InboxFilters } from '../components/inbox/InboxFilters';
+import { InboxTable, type ViewMode } from '../components/inbox/InboxTable';
 import { useEmails } from '../hooks/useEmails';
 import type { EmailFilter } from '../types/email';
 
@@ -9,6 +9,7 @@ export function Inbox() {
   const [filter, setFilter] = useState<EmailFilter>('all');
   const [search, setSearch] = useState('');
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('thread');
 
   const { data: emailsData, isLoading, error } = useEmails(filter, search);
 
@@ -29,6 +30,8 @@ export function Inbox() {
           onFilterChange={setFilter}
           search={search}
           onSearchChange={setSearch}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
         />
 
         {/* Email List */}
@@ -46,6 +49,7 @@ export function Inbox() {
               emails={emailsData?.emails || []}
               selectedEmailId={selectedEmailId}
               onEmailSelect={setSelectedEmailId}
+              viewMode={viewMode}
             />
 
             {/* Stats */}
@@ -61,6 +65,7 @@ export function Inbox() {
         <EmailDetailDrawer
           messageId={selectedEmailId}
           onClose={() => setSelectedEmailId(null)}
+          onEmailSelect={setSelectedEmailId}
         />
       )}
     </>

@@ -66,6 +66,24 @@ class EmailService:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_emails_by_conversation_id(
+        db: AsyncSession,
+        conversation_id: str,
+        user_id: int,
+    ) -> List[Email]:
+        """Get all emails in a conversation thread, sorted chronologically"""
+        from sqlalchemy import asc
+        result = await db.execute(
+            select(Email)
+            .where(
+                Email.conversation_id == conversation_id,
+                Email.user_id == user_id
+            )
+            .order_by(asc(Email.received_at))
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def create_email(
         db: AsyncSession,
         message_id: str,
@@ -82,6 +100,12 @@ class EmailService:
         affected_products: Optional[list] = None,
         additional_details: Optional[dict] = None,
         raw_email_data: Optional[dict] = None,
+        # Threading fields
+        conversation_id: Optional[str] = None,
+        conversation_index: Optional[str] = None,
+        is_reply: bool = False,
+        is_forward: bool = False,
+        thread_subject: Optional[str] = None,
     ) -> Email:
         """Create a new email record"""
         email = Email(
@@ -99,6 +123,12 @@ class EmailService:
             affected_products=affected_products,
             additional_details=additional_details,
             raw_email_data=raw_email_data,
+            # Threading fields
+            conversation_id=conversation_id,
+            conversation_index=conversation_index,
+            is_reply=is_reply,
+            is_forward=is_forward,
+            thread_subject=thread_subject,
         )
         db.add(email)
         await db.flush()

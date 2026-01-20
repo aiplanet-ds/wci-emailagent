@@ -10,10 +10,14 @@ Usage:
 
 import asyncio
 import sys
+import logging
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from database.config import init_db, engine
 from database.models import Base
@@ -21,14 +25,14 @@ from database.models import Base
 
 async def main():
     """Initialize database tables"""
-    print("=" * 60)
-    print("Database Initialization")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Database Initialization")
+    logger.info("=" * 60)
 
     try:
-        print("\nCreating database tables...")
+        logger.info("Creating database tables...")
         await init_db()
-        print("✓ Database tables created successfully")
+        logger.info("Database tables created successfully")
 
         # List all tables
         from sqlalchemy import inspect
@@ -39,16 +43,16 @@ async def main():
 
             tables = await conn.run_sync(get_tables)
 
-        print(f"\n✓ Created {len(tables)} tables:")
+        logger.info(f"Created {len(tables)} tables:")
         for table in sorted(tables):
-            print(f"  - {table}")
+            logger.info(f"  - {table}")
 
-        print("\n" + "=" * 60)
-        print("Database initialization complete!")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Database initialization complete!")
+        logger.info("=" * 60)
 
     except Exception as e:
-        print(f"\n✗ Error initializing database: {e}")
+        logger.error(f"Error initializing database: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

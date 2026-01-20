@@ -4,9 +4,13 @@ This helps identify what ListType value to use when creating new price lists
 """
 
 import sys
+import logging
 from pathlib import Path
 # Add parent directory to path to allow imports from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 import os
 import requests
@@ -20,6 +24,7 @@ API_KEY = os.getenv("EPICOR_API_KEY")
 BEARER_TOKEN = os.getenv("EPICOR_BEARER_TOKEN")
 COMPANY_ID = os.getenv("EPICOR_COMPANY_ID")
 
+
 def get_headers():
     headers = {
         "Content-Type": "application/json",
@@ -31,104 +36,106 @@ def get_headers():
         headers["X-api-Key"] = API_KEY
     return headers
 
-print("=" * 80)
-print("DISCOVERING LISTTYPE VALUES IN EPICOR PRICE LISTS")
-print("=" * 80)
 
-# Query all price lists
-url = f"{BASE_URL}/{COMPANY_ID}/Erp.BO.PriceLstSvc/PriceLsts"
-params = {
-    "$filter": f"Company eq '{COMPANY_ID}'",
-    "$top": "100"  # Get up to 100 price lists
-}
+def main():
+    logger.info("=" * 80)
+    logger.info("DISCOVERING LISTTYPE VALUES IN EPICOR PRICE LISTS")
+    logger.info("=" * 80)
 
-print(f"\nQuerying price lists...")
-print(f"URL: {url}")
+    # Query all price lists
+    url = f"{BASE_URL}/{COMPANY_ID}/Erp.BO.PriceLstSvc/PriceLsts"
+    params = {
+        "$filter": f"Company eq '{COMPANY_ID}'",
+        "$top": "100"  # Get up to 100 price lists
+    }
 
-response = requests.get(url, headers=get_headers(), params=params, timeout=10)
+    logger.info("Querying price lists...")
+    logger.info(f"URL: {url}")
 
-print(f"\nStatus: {response.status_code}")
+    response = requests.get(url, headers=get_headers(), params=params, timeout=10)
 
-if response.status_code == 200:
-    data = response.json()
-    price_lists = data.get("value", [])
+    logger.info(f"Status: {response.status_code}")
 
-    print(f"\nFound {len(price_lists)} price lists")
+    if response.status_code == 200:
+        data = response.json()
+        price_lists = data.get("value", [])
 
-    if price_lists:
-        # Extract all ListType values
-        list_types = []
-        list_type_examples = {}
+        logger.info(f"Found {len(price_lists)} price lists")
 
-        for pl in price_lists:
-            list_type = pl.get("ListType", "NOT SET")
-            list_code = pl.get("ListCode", "")
-            description = pl.get("ListDescription", "")
+        if price_lists:
+            # Extract all ListType values
+            list_types = []
+            list_type_examples = {}
 
-            list_types.append(list_type)
+            for pl in price_lists:
+                list_type = pl.get("ListType", "NOT SET")
+                list_code = pl.get("ListCode", "")
+                description = pl.get("ListDescription", "")
 
-            # Store an example for each ListType
-            if list_type not in list_type_examples:
-                list_type_examples[list_type] = {
-                    "ListCode": list_code,
-                    "ListDescription": description,
-                    "full_record": pl
-                }
+                list_types.append(list_type)
 
-        # Count occurrences of each ListType
-        type_counts = Counter(list_types)
+                # Store an example for each ListType
+                if list_type not in list_type_examples:
+                    list_type_examples[list_type] = {
+                        "ListCode": list_code,
+                        "ListDescription": description,
+                        "full_record": pl
+                    }
 
-        print("\n" + "=" * 80)
-        print("LISTTYPE ANALYSIS")
-        print("=" * 80)
+            # Count occurrences of each ListType
+            type_counts = Counter(list_types)
 
-        print(f"\nUnique ListType values found: {len(type_counts)}")
-        print("\nListType Distribution:")
-        for list_type, count in type_counts.most_common():
-            percentage = (count / len(price_lists)) * 100
-            print(f"  '{list_type}': {count} price lists ({percentage:.1f}%)")
+            logger.info("=" * 80)
+            logger.info("LISTTYPE ANALYSIS")
+            logger.info("=" * 80)
 
-        # Show examples of each ListType
-        print("\n" + "=" * 80)
-        print("EXAMPLES OF EACH LISTTYPE")
-        print("=" * 80)
+            logger.info(f"Unique ListType values found: {len(type_counts)}")
+            logger.info("ListType Distribution:")
+            for list_type, count in type_counts.most_common():
+                percentage = (count / len(price_lists)) * 100
+                logger.info(f"  '{list_type}': {count} price lists ({percentage:.1f}%)")
 
-        for list_type, example in list_type_examples.items():
-            print(f"\nListType: '{list_type}'")
-            print(f"  Example Code: {example['ListCode']}")
-            print(f"  Example Description: {example['ListDescription']}")
+            # Show examples of each ListType
+            logger.info("=" * 80)
+            logger.info("EXAMPLES OF EACH LISTTYPE")
+            logger.info("=" * 80)
 
-        # Determine most common ListType
-        most_common_type = type_counts.most_common(1)[0][0]
+            for list_type, example in list_type_examples.items():
+                logger.info(f"ListType: '{list_type}'")
+                logger.info(f"  Example Code: {example['ListCode']}")
+                logger.info(f"  Example Description: {example['ListDescription']}")
 
-        print("\n" + "=" * 80)
-        print("RECOMMENDATION")
-        print("=" * 80)
+            # Determine most common ListType
+            most_common_type = type_counts.most_common(1)[0][0]
 
-        print(f"\nMost commonly used ListType: '{most_common_type}'")
-        print(f"Used in {type_counts[most_common_type]} out of {len(price_lists)} price lists")
+            logger.info("=" * 80)
+            logger.info("RECOMMENDATION")
+            logger.info("=" * 80)
 
-        print(f"\nFor creating new supplier price lists, use:")
-        print(f"  ListType: '{most_common_type}'")
+            logger.info(f"Most commonly used ListType: '{most_common_type}'")
+            logger.info(f"Used in {type_counts[most_common_type]} out of {len(price_lists)} price lists")
 
-        # Show full structure of one price list
-        print("\n" + "=" * 80)
-        print("FULL STRUCTURE OF A SAMPLE PRICE LIST")
-        print("=" * 80)
+            logger.info(f"For creating new supplier price lists, use:")
+            logger.info(f"  ListType: '{most_common_type}'")
 
-        sample = list_type_examples[most_common_type]['full_record']
-        print(f"\nSample Price List: {sample.get('ListCode')}")
-        print("\nAll fields:")
-        for key, value in sorted(sample.items()):
-            if key not in ['SysRowID', 'SysRevID', 'RowMod'] and value is not None:
-                print(f"  {key}: {value}")
+            # Show full structure of one price list
+            logger.info("=" * 80)
+            logger.info("FULL STRUCTURE OF A SAMPLE PRICE LIST")
+            logger.info("=" * 80)
 
-        # Generate code snippet
-        print("\n" + "=" * 80)
-        print("CODE SNIPPET TO USE")
-        print("=" * 80)
+            sample = list_type_examples[most_common_type]['full_record']
+            logger.info(f"Sample Price List: {sample.get('ListCode')}")
+            logger.info("All fields:")
+            for key, value in sorted(sample.items()):
+                if key not in ['SysRowID', 'SysRevID', 'RowMod'] and value is not None:
+                    logger.info(f"  {key}: {value}")
 
-        print(f"""
+            # Generate code snippet
+            logger.info("=" * 80)
+            logger.info("CODE SNIPPET TO USE")
+            logger.info("=" * 80)
+
+            logger.info(f"""
 Add this field to your price list creation payload:
 
 new_price_list = {{
@@ -144,16 +151,20 @@ new_price_list = {{
 }}
 """)
 
+        else:
+            logger.warning("NO PRICE LISTS FOUND")
+            logger.info("This could mean:")
+            logger.info("  1. No price lists exist in your Epicor system")
+            logger.info("  2. The filter query is incorrect")
+            logger.info("  3. Authentication or permissions issue")
     else:
-        print("\nNO PRICE LISTS FOUND")
-        print("\nThis could mean:")
-        print("  1. No price lists exist in your Epicor system")
-        print("  2. The filter query is incorrect")
-        print("  3. Authentication or permissions issue")
-else:
-    print(f"\nERROR: {response.status_code}")
-    print(f"Response: {response.text[:500]}")
+        logger.error(f"ERROR: {response.status_code}")
+        logger.error(f"Response: {response.text[:500]}")
 
-print("\n" + "=" * 80)
-print("Discovery complete!")
-print("=" * 80)
+    logger.info("=" * 80)
+    logger.info("Discovery complete!")
+    logger.info("=" * 80)
+
+
+if __name__ == "__main__":
+    main()

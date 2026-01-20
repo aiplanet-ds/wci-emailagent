@@ -25,16 +25,18 @@ from database.models import (
     EpicorSyncResult,
     DeltaToken,
     AuditLog,
+    OAuthToken,
 )
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# Override sqlalchemy.url with DATABASE_URL from env if available
+# Get DATABASE_URL from environment (required)
 database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable is required for migrations")
+config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

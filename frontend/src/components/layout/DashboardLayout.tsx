@@ -16,7 +16,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const pendingCount = pendingData?.total || 0;
 
   const handleLogout = () => {
-    window.location.href = 'http://localhost:8000/logout';
+    window.location.href = import.meta.env.VITE_LOGOUT_URL;
   };
 
   const isActive = (path: string) => location.pathname === path;

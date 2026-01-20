@@ -37,6 +37,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: wci-emailagent-app
+    env_file:
+      - .env
     environment:
       # Database
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-wci_user}:${DB_PASSWORD:-wci_password}@postgres:5432/${DB_NAME:-wci_emailagent}
@@ -95,12 +97,14 @@ services:
         reservations:
           cpus: '1'
           memory: 1G
-    command: uvicorn start:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        ENV_FILE: .env
     container_name: wci-emailagent-frontend
     ports:
       - "3000:80"

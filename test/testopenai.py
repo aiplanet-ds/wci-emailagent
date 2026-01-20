@@ -1,6 +1,18 @@
 import os
+import logging
+from dotenv import load_dotenv
 from openai import AzureOpenAI
-client = AzureOpenAI(    api_version="2024-12-01-preview",    azure_endpoint="https://akkodisai.openai.azure.com/",    api_key="CqpbS6BuNg5LEO4vuVq0RCyRMcVFe545bfGRGfu0J9nSJvAHAvS9JQQJ99BIACYeBjFXJ3w3AAABACOGkJU6")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+client = AzureOpenAI(
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_API_ENDPOINT"),
+    api_key=os.getenv("AZURE_OPENAI_API_KEY")
+)
 try:
         completion = client.chat.completions.create(
             model="gpt-4.1",
@@ -9,6 +21,6 @@ try:
             ],
             max_tokens=100
         )
-        print(completion.choices[0].message.content)
+        logger.info(completion.choices[0].message.content)
 except Exception as e:
-    print(f"An error occurred: {e}")
+    logger.error(f"An error occurred: {e}")

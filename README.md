@@ -38,8 +38,8 @@ email-intelligence-system/
 │   │── refresh_epicor_token.py
 │   │── discover_price_lists.py
 │   │── discover_list_types.py
-│── main.py                 # Core email processing logic
-│── start.py                # FastAPI web application with OAuth routes
+│── email_processor.py      # Core email processing logic
+│── main.py                 # FastAPI web application with OAuth routes
 │── requirements.txt        # Python dependencies
 │── .env.template           # Environment configuration template
 │── README.md
@@ -124,7 +124,7 @@ For the multi-user OAuth to work, ensure your Azure app registration has:
 
 1. **Start the Application:**
    ```cmd
-   python start.py
+   python main.py
    ```
 
 2. **Access the Web Interface:**
@@ -255,13 +255,10 @@ The system uses **Microsoft Graph Delta Queries** for efficient email monitoring
 ### Development
 ```cmd
 # Start web application
-python webhook.py
+python main.py
 
 # Access web interface
 # http://localhost:8000
-
-# CLI processing
-python main.py
 ```
 
 ### Production Setup
@@ -271,7 +268,7 @@ python main.py
 # Configure HTTPS if needed
 
 # Start application
-python webhook.py
+python main.py
 ```
 
 ---
@@ -348,4 +345,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Ready to transform your email workflow? Start with `python webhook.py` and visit `http://localhost:8000`!** 🚀
+**Ready to transform your email workflow? Start with `python main.py` and visit `http://localhost:8000`!** 🚀

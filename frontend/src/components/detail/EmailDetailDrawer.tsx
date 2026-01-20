@@ -1,28 +1,32 @@
-import { X, Mail, CheckCircle2, Circle, Shield, ChevronDown } from 'lucide-react';
-import { useState } from 'react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Mail, MessageSquare, Pin, Reply, Shield, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { useBomImpact } from '../../hooks/useBomImpact';
+import { useEmailDetail, useGenerateFollowup, useRawEmailContent, useThreadHistory, useToggleEmailPin, useUpdateEmailProcessed } from '../../hooks/useEmails';
+import { formatDate } from '../../lib/utils';
+import type { MissingField } from '../../types/email';
+import { AttachmentList } from '../email/AttachmentList';
+import { EmailBodyViewer } from '../email/EmailBodyViewer';
 import { Badge } from '../ui/Badge';
-import { VerificationBadge } from '../ui/VerificationBadge';
-import { PriceChangeBadge } from '../ui/PriceChangeBadge';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
-import { formatDate } from '../../lib/utils';
-import { SupplierInfo } from './SupplierInfo';
+import { PriceChangeBadge } from '../ui/PriceChangeBadge';
+import { VerificationBadge } from '../ui/VerificationBadge';
+import { BomImpactPanel } from './BomImpactPanel';
+import { FollowupModal } from './FollowupModal';
+import { MissingFieldsChecklist } from './MissingFieldsChecklist';
 import { PriceChangeSummary } from './PriceChangeSummary';
 import { ProductsTable } from './ProductsTable';
-import { MissingFieldsChecklist } from './MissingFieldsChecklist';
-import { FollowupModal } from './FollowupModal';
+import { SupplierInfo } from './SupplierInfo';
+import { ThreadTimeline } from './ThreadTimeline';
 import { WorkflowStepper } from './WorkflowStepper';
-import { EmailBodyViewer } from '../email/EmailBodyViewer';
-import { AttachmentList } from '../email/AttachmentList';
-import { useEmailDetail, useUpdateEmailProcessed, useGenerateFollowup, useRawEmailContent } from '../../hooks/useEmails';
-import type { MissingField } from '../../types/email';
 
 interface EmailDetailDrawerProps {
   messageId: string | null;
   onClose: () => void;
+  onEmailSelect?: (messageId: string) => void;
 }
 
-export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps) {
+export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDetailDrawerProps) {
   const [showFollowupModal, setShowFollowupModal] = useState(false);
   const [followupDraft, setFollowupDraft] = useState('');
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -31,10 +35,53 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
 
   const { data, isLoading } = useEmailDetail(messageId);
   const { data: rawEmail, isLoading: isLoadingRaw } = useRawEmailContent(messageId);
+  const { data: bomImpactData } = useBomImpact(messageId);
+  const { data: threadData } = useThreadHistory(messageId);
   const updateProcessed = useUpdateEmailProcessed();
   const generateFollowup = useGenerateFollowup();
+  const togglePin = useToggleEmailPin();
+
+  // Thread navigation
+  const threadInfo = useMemo(() => {
+    if (!threadData || threadData.total_count <= 1) {
+      return { hasThread: false, currentIndex: -1, total: 0, prevId: null, nextId: null };
+    }
+    const currentIndex = threadData.emails.findIndex(e => e.message_id === messageId);
+    return {
+      hasThread: true,
+      currentIndex,
+      total: threadData.total_count,
+      prevId: currentIndex > 0 ? threadData.emails[currentIndex - 1].message_id : null,
+      nextId: currentIndex < threadData.emails.length - 1 ? threadData.emails[currentIndex + 1].message_id : null,
+    };
+  }, [threadData, messageId]);
 
   if (!messageId) return null;
+
+  const handleEmailSelect = (newMessageId: string) => {
+    if (onEmailSelect) {
+      onEmailSelect(newMessageId);
+    }
+  };
+
+  // Check if all BOM impact products have been decided (approved or rejected)
+  const isPriceChange = data?.state?.is_price_change;
+  const verificationStatus = data?.state?.verification_status;
+  const hasBomImpacts = bomImpactData?.impacts && bomImpactData.impacts.length > 0;
+  const allBomImpactsDecided = hasBomImpacts
+    ? bomImpactData.impacts.every((i) => i.approved || i.rejected || i.status === 'error')
+    : true; // If no BOM impacts, consider it decided
+
+  // Determine why the button might be disabled
+  const isVerificationBlocking = verificationStatus === 'pending_review' || verificationStatus === 'rejected';
+  const isNotPriceChange = isPriceChange === false;
+  const isBomImpactBlocking = isPriceChange && hasBomImpacts && !allBomImpactsDecided;
+
+  // Disable "Mark as Processed" when:
+  // 1. Verification is pending or rejected
+  // 2. Email is NOT a price change (only price change emails should be processed/synced)
+  // 3. For price change emails: BOM impacts not all decided
+  const canMarkAsProcessed = !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking;
 
   const handleToggleProcessed = async (force = false) => {
     if (!data) return;
@@ -104,6 +151,47 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
           </div>
         ) : data ? (
           <>
+            {/* Thread Indicator Banner */}
+            {threadInfo.hasThread && (
+              <div className="bg-blue-50 border-b border-blue-200 px-6 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-blue-700">
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="font-medium">Part of a conversation thread</span>
+                  <span className="text-blue-500">
+                    ({threadInfo.currentIndex + 1} of {threadInfo.total})
+                  </span>
+                </div>
+                {onEmailSelect && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => threadInfo.prevId && handleEmailSelect(threadInfo.prevId)}
+                      disabled={!threadInfo.prevId}
+                      className={`p-1 rounded ${
+                        threadInfo.prevId
+                          ? 'text-blue-600 hover:bg-blue-100'
+                          : 'text-blue-300 cursor-not-allowed'
+                      }`}
+                      title="Previous email in thread"
+                    >
+                      <ChevronLeft className="h-5 w-5" />
+                    </button>
+                    <button
+                      onClick={() => threadInfo.nextId && handleEmailSelect(threadInfo.nextId)}
+                      disabled={!threadInfo.nextId}
+                      className={`p-1 rounded ${
+                        threadInfo.nextId
+                          ? 'text-blue-600 hover:bg-blue-100'
+                          : 'text-blue-300 cursor-not-allowed'
+                      }`}
+                      title="Next email in thread"
+                    >
+                      <ChevronRight className="h-5 w-5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Header */}
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 z-10">
               <div className="flex items-start justify-between">
@@ -146,34 +234,86 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={onClose}
-                  className="text-gray-400 hover:text-gray-600 ml-4 flex-shrink-0"
-                >
-                  <X className="h-6 w-6" />
-                </button>
+                <div className="flex items-center gap-2 ml-4 flex-shrink-0">
+                  <button
+                    onClick={() => messageId && togglePin.mutate({ messageId, pinned: !data.state.pinned })}
+                    className={`p-1.5 rounded hover:bg-gray-100 transition-colors ${
+                      data.state.pinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                    title={data.state.pinned ? 'Unpin email' : 'Pin email'}
+                  >
+                    <Pin className="h-5 w-5" fill={data.state.pinned ? 'currentColor' : 'none'} />
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-6 w-6" />
+                  </button>
+                </div>
               </div>
 
               {/* Actions */}
-              <div className="mt-4 flex gap-3">
-                <Button
-                  onClick={() => handleToggleProcessed()}
-                  variant={data.state.processed ? 'outline' : 'default'}
-                  disabled={updateProcessed.isPending}
-                  className="flex items-center gap-2"
-                >
-                  {data.state.processed ? (
-                    <>
-                      <Circle className="h-4 w-4" />
-                      Mark as Unprocessed
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      {updateProcessed.isPending ? 'Processing...' : 'Mark as Processed'}
-                    </>
+              <div className="mt-4 flex flex-col gap-2">
+                <div className="flex gap-3 flex-wrap">
+                  <Button
+                    onClick={() => handleToggleProcessed()}
+                    variant={data.state.processed ? 'outline' : 'default'}
+                    disabled={updateProcessed.isPending || (!data.state.processed && !canMarkAsProcessed)}
+                    className="flex items-center gap-2"
+                  >
+                    {data.state.processed ? (
+                      <>
+                        <Circle className="h-4 w-4" />
+                        Mark as Unprocessed
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        {updateProcessed.isPending ? 'Processing...' : 'Mark as Processed'}
+                      </>
+                    )}
+                  </Button>
+                  {/* Reply to Thread button */}
+                  {threadInfo.hasThread && (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        // Open email client with reply-all to thread
+                        const subject = `Re: ${data.email_data.email_metadata.subject}`;
+                        const to = data.email_data.email_metadata.sender;
+                        window.open(`mailto:${to}?subject=${encodeURIComponent(subject)}`, '_blank');
+                      }}
+                      className="flex items-center gap-2"
+                    >
+                      <Reply className="h-4 w-4" />
+                      Reply to Thread
+                    </Button>
                   )}
-                </Button>
+                </div>
+                {/* Warning messages when button is disabled */}
+                {!data.state.processed && isVerificationBlocking && (
+                  <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>
+                      {verificationStatus === 'pending_review'
+                        ? 'Email is pending vendor verification. Please verify or approve the vendor first.'
+                        : 'Email was rejected during vendor verification and cannot be processed.'}
+                    </span>
+                  </div>
+                )}
+                {!data.state.processed && !isVerificationBlocking && isNotPriceChange && (
+                  <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>This email is not a price change notification and does not require Epicor sync.</span>
+                  </div>
+                )}
+                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && isBomImpactBlocking && (
+                  <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Please approve or reject all products in BOM Impact Analysis before marking as processed</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -230,12 +370,25 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                 </div>
               )}
 
+              {/* Thread Timeline - Show conversation history */}
+              {threadInfo.hasThread && onEmailSelect && (
+                <ThreadTimeline
+                  messageId={messageId}
+                  currentMessageId={messageId}
+                  onEmailSelect={handleEmailSelect}
+                />
+              )}
+
               <div className="border-t border-gray-200 pt-4">
                 <h4 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wide">Extracted Data</h4>
               </div>
 
               {/* Workflow Stepper - Shows 3-Stage Workflow */}
-              <WorkflowStepper hasEpicorSync={!!data.epicor_status} />
+              <WorkflowStepper
+                hasEpicorSync={!!data.epicor_status}
+                verificationStatus={data.state.verification_status}
+                llmDetectionPerformed={data.state.llm_detection_performed}
+              />
 
               {/* Vendor Verification Status */}
               {data.state.verification_status && (
@@ -289,7 +442,15 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
               <PriceChangeSummary summary={data.email_data.price_change_summary} />
 
               {/* Products Table */}
-              <ProductsTable products={data.email_data.affected_products} />
+              <ProductsTable
+                products={data.email_data.affected_products}
+                validationResults={data.state.epicor_validation_result}
+              />
+
+              {/* BOM Impact Analysis - Show for price change emails */}
+              {data.state.is_price_change && (
+                <BomImpactPanel messageId={messageId} />
+              )}
 
               {/* Missing Fields Checklist */}
               {data.validation.all_missing_fields.length > 0 && (
@@ -366,9 +527,15 @@ export function EmailDetailDrawer({ messageId, onClose }: EmailDetailDrawerProps
                             </div>
                           )}
 
-                          {detail.list_code && (
+                          {detail.vendor_num && (
                             <div className="text-gray-600 mb-1">
-                              List: <span className="font-medium">{detail.list_code}</span>
+                              Vendor #: <span className="font-medium">{detail.vendor_num}</span>
+                            </div>
+                          )}
+
+                          {detail.operation && (
+                            <div className="text-gray-600 mb-1">
+                              Operation: <span className="font-medium capitalize">{detail.operation}</span>
                             </div>
                           )}
 

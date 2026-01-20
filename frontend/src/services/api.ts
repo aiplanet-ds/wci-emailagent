@@ -1,16 +1,24 @@
 import axios from 'axios';
+import type { DashboardStats } from '../types/dashboard';
 import type {
-  EmailListResponse,
+  BomImpactApprovalRequest,
+  BomImpactApprovalResponse,
+  BomImpactRejectionRequest,
+  BomImpactResponse,
   EmailDetailResponse,
+  EmailFilter,
+  EmailListResponse,
   FollowupRequest,
   FollowupResponse,
+  ThreadBomImpactResponse,
+  ThreadHistoryResponse,
   UserInfo,
-  EmailFilter,
   VendorCacheStatus
 } from '../types/email';
-import type { DashboardStats } from '../types/dashboard';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// In production, VITE_API_BASE_URL can be empty to use relative URLs (nginx proxy)
+// In development, it should be set to the backend URL (e.g., http://localhost:8000)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
 // Create axios instance with credentials
 const api = axios.create({
@@ -108,6 +116,80 @@ export const emailApi = {
   // Get raw email content (body and attachments)
   async getRawEmailContent(messageId: string): Promise<any> {
     const { data } = await api.get(`/api/emails/${messageId}/raw`);
+    return data;
+  },
+
+  // Get thread history for an email
+  async getThreadHistory(messageId: string): Promise<ThreadHistoryResponse> {
+    const { data } = await api.get<ThreadHistoryResponse>(`/api/emails/${messageId}/thread`);
+    return data;
+  },
+
+  // Get aggregated BOM impact for a thread
+  async getThreadBomImpact(messageId: string): Promise<ThreadBomImpactResponse> {
+    const { data } = await api.get<ThreadBomImpactResponse>(`/api/emails/${messageId}/thread/bom-impact`);
+    return data;
+  },
+
+  // Pin or unpin an email
+  async toggleEmailPin(messageId: string, pinned: boolean): Promise<{ success: boolean; message_id: string; pinned: boolean; pinned_at: string | null }> {
+    const { data } = await api.patch(`/api/emails/${messageId}/pin`, { pinned });
+    return data;
+  },
+
+  // ============================================================================
+  // BOM IMPACT ANALYSIS API
+  // ============================================================================
+
+  // Get BOM impact analysis results for an email
+  async getBomImpact(messageId: string): Promise<BomImpactResponse> {
+    const { data } = await api.get<BomImpactResponse>(`/api/emails/${messageId}/bom-impact`);
+    return data;
+  },
+
+  // Approve a specific product's BOM impact for Epicor sync
+  async approveBomImpact(
+    messageId: string,
+    productIndex: number,
+    request?: BomImpactApprovalRequest
+  ): Promise<BomImpactApprovalResponse> {
+    const { data } = await api.post<BomImpactApprovalResponse>(
+      `/api/emails/${messageId}/bom-impact/${productIndex}/approve`,
+      request || {}
+    );
+    return data;
+  },
+
+  // Approve all products in an email for Epicor sync
+  async approveAllBomImpacts(
+    messageId: string,
+    request?: BomImpactApprovalRequest
+  ): Promise<BomImpactApprovalResponse> {
+    const { data } = await api.post<BomImpactApprovalResponse>(
+      `/api/emails/${messageId}/bom-impact/approve-all`,
+      request || {}
+    );
+    return data;
+  },
+
+  // Reject a specific product's BOM impact (will not sync to Epicor)
+  async rejectBomImpact(
+    messageId: string,
+    productIndex: number,
+    request?: BomImpactRejectionRequest
+  ): Promise<BomImpactApprovalResponse> {
+    const { data } = await api.post<BomImpactApprovalResponse>(
+      `/api/emails/${messageId}/bom-impact/${productIndex}/reject`,
+      request || {}
+    );
+    return data;
+  },
+
+  // Re-run BOM impact analysis for an email
+  async reanalyzeBomImpact(messageId: string): Promise<BomImpactResponse> {
+    const { data } = await api.post<BomImpactResponse>(
+      `/api/emails/${messageId}/reanalyze-bom-impact`
+    );
     return data;
   },
 };
