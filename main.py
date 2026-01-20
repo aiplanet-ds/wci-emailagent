@@ -38,9 +38,13 @@ app.add_middleware(
 )
 
 # Add session middleware for user authentication
+# SESSION_SECRET is required - generating at runtime causes session loss on restart
+session_secret = os.getenv("SESSION_SECRET")
+if not session_secret:
+    raise ValueError("SESSION_SECRET environment variable is required. Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET", secrets.token_hex(32)),
+    secret_key=session_secret,
     max_age=24 * 60 * 60  # 24 hours
 )
 
@@ -296,8 +300,15 @@ async def shutdown_event():
 # Run the server when executed directly
 if __name__ == "__main__":
     import uvicorn
+
+    # Configuration from environment variables
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    # Only enable reload in development (disabled by default for production safety)
+    reload_enabled = os.getenv("RELOAD", "false").lower() == "true"
+
     logger.info("Starting Email Intelligence System...")
     logger.info("Access the web interface at the configured URL")
     logger.info("OAuth authentication required")
     logger.info("Delta query polling for email monitoring")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host=host, port=port, reload=reload_enabled)

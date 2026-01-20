@@ -28,7 +28,10 @@ class EpicorAPIService:
         self.api_key = os.getenv("EPICOR_API_KEY")
         self.bearer_token = os.getenv("EPICOR_BEARER_TOKEN")
         self.company_id = os.getenv("EPICOR_COMPANY_ID")
-        self.default_price_list = os.getenv("EPICOR_DEFAULT_PRICE_LIST", "UNA1")
+        self.default_price_list = os.getenv("EPICOR_DEFAULT_PRICE_LIST")
+
+        if not self.default_price_list:
+            logger.warning("EPICOR_DEFAULT_PRICE_LIST not set - price list operations may fail")
 
         # Load margin thresholds from environment with defaults
         # These define the margin percentage levels for risk classification
