@@ -33,9 +33,16 @@ export function Settings() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  // Load polling interval on mount
+  // Load polling interval on mount and refresh periodically
   useEffect(() => {
     loadPollingInterval();
+
+    // Auto-refresh every 30 seconds to keep "Next Poll" time updated
+    const refreshInterval = setInterval(() => {
+      loadPollingInterval();
+    }, 30000);
+
+    return () => clearInterval(refreshInterval);
   }, []);
 
   const loadPollingInterval = async () => {

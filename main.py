@@ -225,20 +225,13 @@ async def startup_event():
     logger.info("=" * 80)
 
     # Database initialization
-    logger.info("[DB] Initializing database connection...")
+    logger.info("[DB] Verifying database connection...")
     try:
         from database.config import init_db, engine
-        from sqlalchemy import text
 
-        # Test database connection
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        logger.info("Database connection successful")
-
-        # Ensure all tables exist
-        logger.info("[DB] Creating/verifying database tables...")
+        # Verify database connection (tables are created by Alembic migrations)
         await init_db()
-        logger.info("Database tables ready")
+        logger.info("Database connection verified (tables managed by Alembic migrations)")
 
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")

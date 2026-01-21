@@ -11,7 +11,9 @@
       "Bash(curl:*)",
       "Bash(python:*)",
       "Bash(git log:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
