@@ -64,11 +64,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db():
-    """Initialize database - create all tables"""
-    from database.models import Base
+    """
+    Initialize database connection.
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    Note: Table creation is handled by Alembic migrations.
+    This function only verifies the database connection is working.
+    Run 'alembic upgrade head' to create/update tables.
+    """
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+        # Connection verified - tables are managed by Alembic migrations
 
 
 async def close_db():
