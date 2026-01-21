@@ -838,35 +838,28 @@ async def update_email_state(
                         "product_name": bom_result.product_name
                     })
 
-            # If no products to update, use affected_products as fallback (legacy behavior)
+            # If no products to update, return error (no fallback)
             if not products:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "No approved BomImpactResults with vendor_num found - falling back to legacy workflow"
+                raise HTTPException(
+                    status_code=400,
+                    detail="No approved products with vendor_num found. Please ensure all products have been verified and approved in BOM Impact Analysis."
                 )
-                # Fallback to old batch_update_prices method
-                affected_products = email_data.get("affected_products", [])
-                epicor_result = await epicor_service.batch_update_prices(
-                    products=affected_products,
-                    supplier_id=supplier_info.get("supplier_id"),
-                    effective_date=effective_date
-                )
-            else:
-                # Use new VendPartSvc direct update (no verification)
-                # Build comment with supplier name and reason for price change
-                supplier_name = supplier_info.get('supplier_name', 'Unknown Supplier')
-                price_change_reason = price_summary.get('reason', '')
-                if price_change_reason:
-                    comment = f"Price update from {supplier_name} - Reason: {price_change_reason}"
-                else:
-                    comment = f"Price update from {supplier_name}"
 
-                epicor_result = await epicor_service.batch_update_vendpart_prices_direct(
-                    products=products,
-                    effective_date=effective_date,
-                    email_id=message_id,
-                    comment=comment
-                )
+            # Use VendPartSvc direct update (no verification)
+            # Build comment with supplier name and reason for price change
+            supplier_name = supplier_info.get('supplier_name', 'Unknown Supplier')
+            price_change_reason = price_summary.get('reason', '')
+            if price_change_reason:
+                comment = f"Price update from {supplier_name} - Reason: {price_change_reason}"
+            else:
+                comment = f"Price update from {supplier_name}"
+
+            epicor_result = await epicor_service.batch_update_vendpart_prices_direct(
+                products=products,
+                effective_date=effective_date,
+                email_id=message_id,
+                comment=comment
+            )
 
             # Save epicor result to DATABASE (not JSON file)
             # Determine sync status based on results
