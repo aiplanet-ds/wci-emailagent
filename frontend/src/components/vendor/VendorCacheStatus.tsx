@@ -139,7 +139,12 @@ export function VendorCacheStatus() {
       {/* Error Message */}
       {refreshMutation.isError && (
         <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800">
-          ❌ Failed to refresh cache. Please try again.
+          <div className="font-medium">Failed to refresh vendor cache</div>
+          <div className="mt-1 text-red-700">
+            {(refreshMutation.error as any)?.response?.data?.detail ||
+             (refreshMutation.error as Error)?.message ||
+             'Please check your Epicor API credentials and try again.'}
+          </div>
         </div>
       )}
     </Card>

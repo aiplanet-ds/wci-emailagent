@@ -56,19 +56,18 @@ class VendorVerificationService:
             return True
 
     async def fetch_vendors_from_epicor(self) -> List[Dict[str, Any]]:
-        """Fetch vendor emails from Epicor VendorSvc"""
-        try:
-            from services.epicor_service import EpicorAPIService
+        """Fetch vendor emails from Epicor VendorSvc
 
-            epicor_service = EpicorAPIService()
-            vendors = await epicor_service.get_all_vendor_emails()
+        Raises:
+            Exception: If Epicor API call fails (e.g., invalid API key, network error)
+        """
+        from services.epicor_service import EpicorAPIService
 
-            logger.info(f"✅ Fetched {len(vendors)} vendors from Epicor")
-            return vendors
+        epicor_service = EpicorAPIService()
+        vendors = await epicor_service.get_all_vendor_emails()
 
-        except Exception as e:
-            logger.error(f"❌ Error fetching vendors from Epicor: {e}")
-            return []
+        logger.info(f"✅ Fetched {len(vendors)} vendors from Epicor")
+        return vendors
 
     async def build_verified_cache(self) -> Dict[str, Any]:
         """Build verified vendor cache in database from Epicor data"""

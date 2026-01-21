@@ -19,6 +19,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class EpicorAPIError(Exception):
+    """Custom exception for Epicor API errors"""
+    pass
+
+
 class EpicorAPIService:
     """Service for interacting with Epicor ERP API"""
     
@@ -1676,15 +1681,18 @@ class EpicorAPIService:
                 logger.info(f"Fetched {len(result)} vendors with email addresses")
                 return result
             else:
-                logger.error(f"Failed to fetch vendors: {response.status_code} - {response.text[:200]}")
-                return []
+                error_msg = f"Failed to fetch vendors: {response.status_code} - {response.text[:500]}"
+                logger.error(error_msg)
+                raise EpicorAPIError(error_msg)
 
         except httpx.TimeoutException:
             logger.error("Timeout fetching vendor emails")
-            return []
+            raise EpicorAPIError("Timeout fetching vendor emails from Epicor")
+        except EpicorAPIError:
+            raise
         except Exception as e:
             logger.error(f"Exception fetching vendor emails: {e}")
-            return []
+            raise EpicorAPIError(f"Exception fetching vendor emails: {e}")
 
     async def verify_supplier_part(self, supplier_id: str, part_num: str) -> Optional[Dict[str, Any]]:
         """
