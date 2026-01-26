@@ -1,0 +1,30 @@
+# Build stage
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+ARG ENV_FILE=.env.production
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ .
+RUN if [ "${ENV_FILE}" != ".env" ]; then cp ${ENV_FILE} .env 2>/dev/null || true; fi
+RUN npm run build
+
+# Production stage
+FROM nginx:alpine
+
+# Copy built files
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Copy ACA nginx config
+COPY azure-container-apps/nginx.aca.conf /etc/nginx/conf.d/default.conf
+
+# Copy entrypoint script
+COPY azure-container-apps/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 80
+
+ENTRYPOINT ["/entrypoint.sh"]

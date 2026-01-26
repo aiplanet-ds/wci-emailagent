@@ -1,0 +1,129 @@
+# Azure Container Instances Deployment Template
+# Usage: az container create --resource-group <rg-name> --file aci-deploy.yaml
+#
+# Prerequisites:
+# 1. Azure Container Registry with images pushed
+# 2. Azure Database for PostgreSQL created
+# 3. Update all placeholder values below
+
+apiVersion: 2021-10-01
+location: eastus  # Change to your preferred region
+name: wci-emailagent
+properties:
+  containers:
+    # Backend API Container
+    - name: backend
+      properties:
+        image: <your-acr-name>.azurecr.io/wci-backend:prod
+        resources:
+          requests:
+            cpu: 1
+            memoryInGb: 2
+        ports:
+          - port: 8000
+        environmentVariables:
+          # Azure AD Configuration
+          - name: AZ_TENANT_ID
+            value: "common"
+          - name: AZ_CLIENT_ID
+            value: "<your-azure-client-id>"
+          - name: AZ_CLIENT_SECRET
+            secureValue: "<your-azure-client-secret>"
+
+          # Epicor Configuration
+          - name: EPICOR_BASE_URL
+            value: "<your-epicor-url>"
+          - name: EPICOR_API_KEY
+            secureValue: "<your-epicor-api-key>"
+          - name: EPICOR_COMPANY_ID
+            value: "<your-company-id>"
+          - name: EPICOR_DEFAULT_PRICE_LIST
+            value: "UNA1"
+          - name: EPICOR_TOKEN_URL
+            value: "https://login.epicor.com/connect/token"
+          - name: EPICOR_CLIENT_ID
+            value: "<your-epicor-client-id>"
+          - name: EPICOR_CLIENT_SECRET
+            secureValue: "<your-epicor-client-secret>"
+
+          # Azure OpenAI Configuration
+          - name: AZURE_OPENAI_API_KEY
+            secureValue: "<your-openai-key>"
+          - name: AZURE_OPENAI_API_ENDPOINT
+            value: "<your-openai-endpoint>"
+          - name: AZURE_OPENAI_DEPLOYMENT_NAME
+            value: "gpt-4.1"
+          - name: AZURE_OPENAI_API_VERSION
+            value: "2024-12-01-preview"
+
+          # Session & Security
+          - name: SESSION_SECRET
+            secureValue: "<generate-with-openssl-rand-hex-32>"
+
+          # Azure PostgreSQL Database
+          # Format: postgresql+asyncpg://user:password@server.postgres.database.azure.com:5432/dbname?sslmode=require
+          - name: DATABASE_URL
+            secureValue: "postgresql+asyncpg://<db-user>:<db-password>@<server-name>.postgres.database.azure.com:5432/wci_emailagent?sslmode=require"
+          - name: DB_POOL_SIZE
+            value: "20"
+          - name: DB_MAX_OVERFLOW
+            value: "10"
+          - name: DB_ECHO
+            value: "false"
+
+          # CORS - Update with your ACI public URL after deployment
+          - name: CORS_ALLOWED_ORIGINS
+            value: "http://wci-emailagent.eastus.azurecontainer.io"
+
+          # Vendor Verification
+          - name: VENDOR_VERIFICATION_ENABLED
+            value: "true"
+          - name: VENDOR_CACHE_TTL_HOURS
+            value: "24"
+          - name: VENDOR_DOMAIN_MATCHING_ENABLED
+            value: "true"
+
+          # Margin Thresholds
+          - name: MARGIN_THRESHOLD_CRITICAL
+            value: "10.0"
+          - name: MARGIN_THRESHOLD_HIGH
+            value: "15.0"
+          - name: MARGIN_THRESHOLD_MEDIUM
+            value: "20.0"
+
+        command:
+          - "sh"
+          - "-c"
+          - "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
+
+    # Frontend Container (Nginx)
+    - name: frontend
+      properties:
+        image: <your-acr-name>.azurecr.io/wci-frontend:prod
+        resources:
+          requests:
+            cpu: 0.5
+            memoryInGb: 0.5
+        ports:
+          - port: 80
+
+  # Azure Container Registry Credentials
+  imageRegistryCredentials:
+    - server: <your-acr-name>.azurecr.io
+      username: <acr-username>
+      password: <acr-password>
+
+  # Public IP Configuration
+  ipAddress:
+    type: Public
+    ports:
+      - protocol: tcp
+        port: 80
+    dnsNameLabel: wci-emailagent  # Results in: wci-emailagent.<region>.azurecontainer.io
+
+  osType: Linux
+
+tags:
+  environment: production
+  application: wci-emailagent
+type: Microsoft.ContainerInstance/containerGroups
