@@ -797,6 +797,35 @@ async def update_email_state(
                 }
             )
 
+        # Check supplier validation status from email state
+        state = await EmailStateService.get_state_by_message_id(db, message_id)
+        epicor_validation = state.epicor_validation_result if state else None
+        if epicor_validation:
+            summary = epicor_validation.get("summary", {})
+            if summary.get("suppliers_validated", 0) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Cannot process - Supplier ID not verified in Epicor",
+                        "blockers": ["Supplier ID not found in Epicor. Email cannot be processed."]
+                    }
+                )
+
+        # Check BOM impact supplier-part validation
+        bom_impacts = await BomImpactService.get_by_email_id(db, email.id)
+        unverified_parts = [
+            b.part_num for b in bom_impacts
+            if not b.supplier_part_validated and b.status != 'error'
+        ]
+        if unverified_parts:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Cannot process - unverified part-supplier relationships",
+                    "blockers": [f"Parts with unverified supplier relationship: {', '.join(unverified_parts)}"]
+                }
+            )
+
         # If there are warnings and user hasn't confirmed, ask for confirmation
         if sync_check["warnings"] and not force:
             return {

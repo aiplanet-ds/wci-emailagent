@@ -72,6 +72,15 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
     ? bomImpactData.impacts.every((i) => i.approved || i.rejected || i.status === 'error')
     : true; // If no BOM impacts, consider it decided
 
+  // Check if supplier ID is unverified (from validation results)
+  const validationResults = data?.state?.epicor_validation_result;
+  const isSupplierUnverified = validationResults && validationResults.summary?.suppliers_validated === 0;
+
+  // Check if any product has unverified supplier-part relationship (from BOM impacts)
+  const hasUnverifiedSupplierPart = hasBomImpacts && bomImpactData.impacts.some(
+    (i) => !i.supplier_part_validated && i.status !== 'error'
+  );
+
   // Determine why the button might be disabled
   const isVerificationBlocking = verificationStatus === 'pending_review' || verificationStatus === 'rejected';
   const isNotPriceChange = isPriceChange === false;
@@ -81,7 +90,9 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
   // 1. Verification is pending or rejected
   // 2. Email is NOT a price change (only price change emails should be processed/synced)
   // 3. For price change emails: BOM impacts not all decided
-  const canMarkAsProcessed = !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking;
+  // 4. Supplier ID not verified in Epicor
+  // 5. Part-supplier relationship not verified
+  const canMarkAsProcessed = !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && !isSupplierUnverified && !hasUnverifiedSupplierPart;
 
   const handleToggleProcessed = async (force = false) => {
     if (!data) return;
@@ -312,6 +323,18 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
                     <AlertCircle className="h-4 w-4" />
                     <span>Please approve or reject all products in BOM Impact Analysis before marking as processed</span>
+                  </div>
+                )}
+                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && isSupplierUnverified && (
+                  <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Supplier ID not found in Epicor. This email cannot be processed.</span>
+                  </div>
+                )}
+                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && !isSupplierUnverified && hasUnverifiedSupplierPart && (
+                  <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>One or more products have unverified part-supplier relationships. This email cannot be processed.</span>
                   </div>
                 )}
               </div>
