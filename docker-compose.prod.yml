@@ -102,8 +102,8 @@ services:
         reservations:
           cpus: '1'
           memory: 1G
-    # Production: no --reload flag
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    # Production: no --reload flag, run migrations first
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
 
   frontend:
     build:
