@@ -26,6 +26,8 @@ from database.models import (
     DeltaToken,
     AuditLog,
     OAuthToken,
+    BomImpactResult,
+    SystemSettings,
 )
 
 # this is the Alembic Config object, which provides
@@ -36,7 +38,8 @@ config = context.config
 database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise ValueError("DATABASE_URL environment variable is required for migrations")
-config.set_main_option("sqlalchemy.url", database_url)
+# Escape % characters for configparser interpolation
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

@@ -22,6 +22,9 @@ load_dotenv()
 
 app = FastAPI(title="WCI Email Agent API", version="1.0.0")
 
+# Frontend URL for post-auth redirects
+FRONTEND_URL = os.getenv("FRONTEND_URL", "/")
+
 # Load CORS origins from environment variable (comma-separated)
 cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
 if not cors_origins_env:
@@ -92,7 +95,7 @@ async def home(request: Request, error: str = None):
     """Home page - redirect to success if logged in, otherwise show login"""
     user_email = request.session.get("user_email")
     if user_email and multi_auth.is_user_authenticated(user_email):
-        return RedirectResponse(url="/success", status_code=302)
+        return RedirectResponse(url=FRONTEND_URL, status_code=302)
     return templates.TemplateResponse("login.html", {"request": request, "error": error})
 
 @app.get("/login")
@@ -103,7 +106,8 @@ async def login(request: Request):
     request.session["oauth_state"] = state
     
     # Get OAuth authorization URL
-    redirect_uri = str(request.url_for("auth_callback"))
+    # Force https for redirect URI behind Azure Container Apps TLS termination
+    redirect_uri = str(request.url_for("auth_callback")).replace("http://", "https://")
     auth_url = multi_auth.get_authorization_url(redirect_uri, state)
     
     return RedirectResponse(url=auth_url)
@@ -133,7 +137,8 @@ async def auth_callback(request: Request, code: str = None, state: str = None, e
     
     try:
         # Exchange code for token (async)
-        redirect_uri = str(request.url_for("auth_callback"))
+        # Force https for redirect URI behind Azure Container Apps TLS termination
+        redirect_uri = str(request.url_for("auth_callback")).replace("http://", "https://")
         result = await multi_auth.exchange_code_for_token(code, redirect_uri)
         
         if "access_token" not in result:
@@ -171,7 +176,7 @@ async def auth_callback(request: Request, code: str = None, state: str = None, e
         except Exception as e:
             logger.warning(f"Could not add user to monitoring: {e}")
 
-        return RedirectResponse(url="/success", status_code=302)
+        return RedirectResponse(url=FRONTEND_URL, status_code=302)
         
     except Exception as e:
         return templates.TemplateResponse("error.html", {
@@ -214,7 +219,7 @@ async def logout(request: Request):
     # Clear session
     request.session.clear()
 
-    return RedirectResponse(url="/", status_code=302)
+    return RedirectResponse(url=FRONTEND_URL, status_code=302)
 
 # Start delta service when application starts
 @app.on_event("startup")

@@ -145,14 +145,14 @@ az containerapp create \
     epicor-client-secret=<your-epicor-client-secret> \
     openai-api-key=<your-openai-key> \
     session-secret=<your-session-secret> \
-    database-url="postgresql+asyncpg://wci_admin:<password>@wci-postgres-server.postgres.database.azure.com:5432/wci_emailagent?sslmode=require" \
-  --secret-env-vars \
-    AZ_CLIENT_SECRET=az-client-secret \
-    EPICOR_API_KEY=epicor-api-key \
-    EPICOR_CLIENT_SECRET=epicor-client-secret \
-    AZURE_OPENAI_API_KEY=openai-api-key \
-    SESSION_SECRET=session-secret \
-    DATABASE_URL=database-url \
+    database-url="postgresql+asyncpg://wci_admin:<password>@wci-postgres-server.postgres.database.azure.com:5432/wci_emailagent?ssl=require" \
+  --env-vars \
+    AZ_CLIENT_SECRET=secretref:az-client-secret \
+    EPICOR_API_KEY=secretref:epicor-api-key \
+    EPICOR_CLIENT_SECRET=secretref:epicor-client-secret \
+    AZURE_OPENAI_API_KEY=secretref:openai-api-key \
+    SESSION_SECRET=secretref:session-secret \
+    DATABASE_URL=secretref:database-url \
   --command "sh -c 'alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000'"
 ```
 

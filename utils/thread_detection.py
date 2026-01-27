@@ -138,14 +138,12 @@ def extract_thread_info(msg: Dict[str, Any]) -> ThreadInfo:
     # Get Microsoft Graph threading fields
     conversation_id = msg.get('conversationId')
     conversation_index = msg.get('conversationIndex')
-    graph_is_reply = msg.get('isReply', False)
-    
-    # Detect from subject as fallback/supplement
+
+    # Detect reply/forward from subject line
     subject_info = detect_thread_info_from_subject(subject)
-    
-    # Use Graph API isReply if available, otherwise fall back to subject detection
-    is_reply = graph_is_reply if graph_is_reply else subject_info["is_reply"]
-    is_forward = subject_info["is_forward"]  # Graph API doesn't have isForward
+
+    is_reply = subject_info["is_reply"]
+    is_forward = subject_info["is_forward"]
     thread_subject = subject_info["thread_subject"]
     
     return ThreadInfo(

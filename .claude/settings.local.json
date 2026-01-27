@@ -14,7 +14,14 @@
       "Bash(awk:*)",
       "Bash(git rev-parse:*)",
       "Bash(find:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git diff-tree:*)",
+      "Bash(git cat-file:*)",
+      "Bash(git add:*)",
+      "Bash(git commit --amend -m \"$\\(cat <<''EOF''\ndeployment\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(git stash:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFIX\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ],
     "deny": [],
     "ask": []

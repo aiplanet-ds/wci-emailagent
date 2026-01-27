@@ -27,7 +27,7 @@ class MultiUserGraphClient:
         url = f"{GRAPH_BASE}/me/messages"
         params = {
             "$top": top,
-            "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex,isReply"
+            "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex"
         }
 
         logger.debug(f"Fetching messages for {user_email}")
@@ -84,10 +84,10 @@ class MultiUserGraphClient:
             response = await client.get(url, headers=headers)
         else:
             # Initial delta query - use inbox folder delta for better compatibility
-            # Include threading fields: conversationId, conversationIndex, isReply
+            # Include threading fields: conversationId, conversationIndex
             url = f"{GRAPH_BASE}/me/mailFolders/inbox/messages/delta"
             params = {
-                "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex,isReply"
+                "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex"
             }
             response = await client.get(url, headers=headers, params=params)
 
