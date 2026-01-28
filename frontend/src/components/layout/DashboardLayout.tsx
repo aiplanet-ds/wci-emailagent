@@ -1,4 +1,4 @@
-import { Mail, LogOut, LayoutDashboard, Inbox, AlertTriangle, Settings } from 'lucide-react';
+import { LogOut, LayoutDashboard, Inbox, AlertTriangle, Settings } from 'lucide-react';
 import { useCurrentUser } from '../../hooks/useEmails';
 import { usePendingEmails } from '../../hooks/useVendorVerification';
 import { Link, useLocation } from 'react-router-dom';
@@ -28,9 +28,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-3">
-              <Mail className="h-8 w-8 text-blue-600" />
+              <img src="/wci-logo.jpeg" alt="WCI Logo" className="h-8 w-8 object-contain" />
               <div>
-                <h1 className="text-xl font-semibold text-gray-900">Price-Change Inbox</h1>
+                <h1 className="text-xl font-semibold text-gray-900">WCI Co-Pilot</h1>
                 <p className="text-sm text-gray-500">Supplier Email Management</p>
               </div>
             </div>
