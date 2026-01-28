@@ -40,6 +40,13 @@ class FollowupRequest(BaseModel):
     missing_fields: List[Dict[str, Any]]
 
 
+class SendFollowupRequest(BaseModel):
+    to_recipients: List[str]
+    cc_recipients: Optional[List[str]] = None
+    subject: str
+    body_html: str
+
+
 class EmailListResponse(BaseModel):
     emails: List[Dict[str, Any]]
     total: int
@@ -209,6 +216,9 @@ async def get_all_price_change_emails_from_db(
             # Pinning fields
             "pinned": state.pinned if state and state.pinned else False,
             "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None,
+            # Followup fields
+            "followup_sent": state.followup_sent if state and state.followup_sent else False,
+            "followup_sent_at": state.followup_sent_at.isoformat() if state and state.followup_sent_at else None,
         })
 
     return emails
@@ -366,7 +376,10 @@ async def get_email_detail(
         "pinned": state.pinned if state and state.pinned else False,
         "pinned_at": state.pinned_at.isoformat() if state and state.pinned_at else None,
         "epicor_validation_performed": state.epicor_validation_performed if state else False,
-        "epicor_validation_result": state.epicor_validation_result if state else None
+        "epicor_validation_result": state.epicor_validation_result if state else None,
+        "followup_sent": state.followup_sent if state and state.followup_sent else False,
+        "followup_sent_at": state.followup_sent_at.isoformat() if state and state.followup_sent_at else None,
+        "llm_detection_performed": state.llm_detection_performed if state else False
     }
 
     # Build Epicor status response
@@ -1069,6 +1082,89 @@ async def generate_followup(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate follow-up email: {str(e)}"
+        )
+
+
+@router.post("/{message_id}/send-followup")
+async def send_followup(
+    message_id: str,
+    send_request: SendFollowupRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send the follow-up email directly via Microsoft Graph API.
+
+    The email will be sent as a reply to the original email thread for proper threading.
+    """
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get email from database
+    email = await get_email_from_db(db, message_id)
+
+    # Verify access
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Validate recipients
+    if not send_request.to_recipients or len(send_request.to_recipients) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one recipient is required"
+        )
+
+    if not send_request.subject or not send_request.subject.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Subject is required"
+        )
+
+    if not send_request.body_html or not send_request.body_html.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Email body is required"
+        )
+
+    try:
+        # Initialize Graph client
+        graph_client = MultiUserGraphClient()
+
+        # Send the email as a reply for proper threading
+        result = await graph_client.send_email(
+            user_email=user_email,
+            to_recipients=send_request.to_recipients,
+            subject=send_request.subject,
+            body_content=send_request.body_html,
+            body_type="HTML",
+            cc_recipients=send_request.cc_recipients,
+            reply_to_message_id=message_id
+        )
+
+        # Update email state to record that a followup was sent
+        state = await EmailStateService.get_state_by_message_id(db, message_id)
+        if state:
+            await EmailStateService.update_state(
+                db=db,
+                message_id=message_id,
+                followup_sent=True,
+                followup_sent_at=datetime.utcnow()
+            )
+            await db.commit()
+
+        return {
+            "success": True,
+            "message": "Follow-up email sent successfully",
+            "sent_at": datetime.utcnow().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send follow-up email: {str(e)}"
         )
 
 

@@ -36,6 +36,8 @@ export function useApproveBomImpact() {
       queryClient.invalidateQueries({ queryKey: ['bomImpact', variables.messageId] });
       // Also invalidate email detail in case it shows approval status
       queryClient.invalidateQueries({ queryKey: ['email', variables.messageId] });
+      // Refresh dashboard stats for Epicor sync counts
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }
@@ -61,6 +63,8 @@ export function useRejectBomImpact() {
       queryClient.invalidateQueries({ queryKey: ['bomImpact', variables.messageId] });
       // Also invalidate email detail
       queryClient.invalidateQueries({ queryKey: ['email', variables.messageId] });
+      // Refresh dashboard stats for Epicor sync counts
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }
@@ -84,6 +88,8 @@ export function useApproveAllBomImpacts() {
       queryClient.invalidateQueries({ queryKey: ['bomImpact', variables.messageId] });
       // Also invalidate email detail
       queryClient.invalidateQueries({ queryKey: ['email', variables.messageId] });
+      // Refresh dashboard stats for Epicor sync counts
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }

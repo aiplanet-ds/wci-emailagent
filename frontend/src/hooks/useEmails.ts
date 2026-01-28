@@ -1,6 +1,6 @@
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { emailApi } from '../services/api';
-import type { EmailFilter, FollowupRequest } from '../types/email';
+import type { EmailFilter, FollowupRequest, SendFollowupRequest } from '../types/email';
 import { APPROVE_EMAIL_MUTATION_KEY } from './useVendorVerification';
 
 export function useCurrentUser() {
@@ -36,9 +36,10 @@ export function useUpdateEmailProcessed() {
     mutationFn: ({ messageId, processed, force = false }: { messageId: string; processed: boolean; force?: boolean }) =>
       emailApi.updateEmailProcessed(messageId, processed, force),
     onSuccess: (_, variables) => {
-      // Invalidate and refetch emails list and detail
+      // Invalidate and refetch emails list, detail, and dashboard stats
       queryClient.invalidateQueries({ queryKey: ['emails'] });
       queryClient.invalidateQueries({ queryKey: ['email', variables.messageId] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }
@@ -52,6 +53,22 @@ export function useGenerateFollowup() {
     onSuccess: (_, variables) => {
       // Invalidate email detail to refresh state
       queryClient.invalidateQueries({ queryKey: ['email', variables.messageId] });
+    },
+  });
+}
+
+export function useSendFollowup() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ messageId, request }: { messageId: string; request: SendFollowupRequest }) =>
+      emailApi.sendFollowup(messageId, request),
+    onSuccess: (_, variables) => {
+      // Invalidate email detail to refresh state
+      queryClient.invalidateQueries({ queryKey: ['email', variables.messageId] });
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      // Refresh dashboard stats for follow-up counts
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }

@@ -33,6 +33,7 @@ export function useApproveEmail() {
       queryClient.invalidateQueries({ queryKey: ['pending-emails'], exact: true });
       queryClient.invalidateQueries({ queryKey: ['emails'] });
       queryClient.invalidateQueries({ queryKey: ['email', messageId] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }
@@ -49,6 +50,7 @@ export function useRejectEmail() {
       // Invalidate pending emails list with exact matching
       queryClient.invalidateQueries({ queryKey: ['pending-emails'], exact: true });
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
   });
 }

@@ -206,6 +206,14 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 
               <Badge variant="warning">Unprocessed</Badge>
             )
           )}
+          {email.followup_sent && (
+            <Badge
+              variant="purple"
+              title={email.followup_sent_at ? `Sent on ${formatDate(email.followup_sent_at)}` : 'Follow-up sent'}
+            >
+              Follow-up Sent
+            </Badge>
+          )}
         </div>
       </td>
       <td className="px-6 py-4">

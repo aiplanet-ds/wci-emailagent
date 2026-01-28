@@ -10,6 +10,8 @@ import type {
   EmailListResponse,
   FollowupRequest,
   FollowupResponse,
+  SendFollowupRequest,
+  SendFollowupResponse,
   ThreadBomImpactResponse,
   ThreadHistoryResponse,
   UserInfo,
@@ -68,6 +70,12 @@ export const emailApi = {
   // Generate follow-up email
   async generateFollowup(messageId: string, request: FollowupRequest): Promise<FollowupResponse> {
     const { data } = await api.post<FollowupResponse>(`/api/emails/${messageId}/followup`, request);
+    return data;
+  },
+
+  // Send follow-up email
+  async sendFollowup(messageId: string, request: SendFollowupRequest): Promise<SendFollowupResponse> {
+    const { data } = await api.post<SendFollowupResponse>(`/api/emails/${messageId}/send-followup`, request);
     return data;
   },
 

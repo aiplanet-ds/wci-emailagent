@@ -16,7 +16,7 @@ CLIENT_ID = os.getenv("AZ_CLIENT_ID")
 CLIENT_SECRET = os.getenv("AZ_CLIENT_SECRET")
 
 # OAuth scopes for delegated permissions
-SCOPES = ["User.Read", "Mail.Read"]
+SCOPES = ["User.Read", "Mail.Read", "Mail.Send"]
 
 class MultiUserAuth:
     def __init__(self):

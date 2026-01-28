@@ -243,6 +243,16 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
                     {data.validation.needs_info && (
                       <Badge variant="warning">Needs Info</Badge>
                     )}
+
+                    {/* Category 4: Follow-up Status */}
+                    {data.state.followup_sent && (
+                      <Badge
+                        variant="purple"
+                        title={data.state.followup_sent_at ? `Sent on ${formatDate(data.state.followup_sent_at)}` : 'Follow-up sent'}
+                      >
+                        Follow-up Sent
+                      </Badge>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 ml-4 flex-shrink-0">
@@ -475,8 +485,8 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
                 <BomImpactPanel messageId={messageId} />
               )}
 
-              {/* Missing Fields Checklist */}
-              {data.validation.all_missing_fields.length > 0 && (
+              {/* Missing Fields Checklist - Only show for unprocessed emails */}
+              {data.validation.all_missing_fields.length > 0 && !data.state.processed && (
                 <MissingFieldsChecklist
                   missingFields={data.validation.all_missing_fields}
                   onGenerateFollowup={handleGenerateFollowup}
@@ -596,6 +606,9 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
         open={showFollowupModal}
         onClose={() => setShowFollowupModal(false)}
         followupDraft={followupDraft}
+        messageId={messageId}
+        originalSender={data?.email_data?.email_metadata?.sender || ''}
+        originalSubject={data?.email_data?.email_metadata?.subject || ''}
       />
 
       {/* Confirmation Dialog for Warnings */}

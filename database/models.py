@@ -183,6 +183,8 @@ class EmailState(Base):
     needs_info = Column(Boolean, default=False)
     selected_missing_fields = Column(JSONB, default=[])
     followup_draft = Column(Text)
+    followup_sent = Column(Boolean, default=False)
+    followup_sent_at = Column(DateTime)
 
     # Vendor verification
     vendor_verified = Column(Boolean, default=False)

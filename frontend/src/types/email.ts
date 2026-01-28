@@ -87,6 +87,9 @@ export interface EmailState {
   // Pinning
   pinned?: boolean;
   pinned_at?: string | null;
+  // Followup tracking
+  followup_sent?: boolean;
+  followup_sent_at?: string | null;
   // Epicor Validation (per-product verification results)
   epicor_validation_performed?: boolean;
   epicor_validation_result?: {
@@ -174,6 +177,9 @@ export interface EmailListItem {
   // Pinning fields
   pinned?: boolean;
   pinned_at?: string | null;
+  // Followup fields
+  followup_sent?: boolean;
+  followup_sent_at?: string | null;
 }
 
 export interface EmailListResponse {
@@ -214,6 +220,19 @@ export interface FollowupResponse {
   success: boolean;
   followup_draft: string;
   generated_at: string;
+}
+
+export interface SendFollowupRequest {
+  to_recipients: string[];
+  cc_recipients?: string[];
+  subject: string;
+  body_html: string;
+}
+
+export interface SendFollowupResponse {
+  success: boolean;
+  message: string;
+  sent_at: string;
 }
 
 export interface UserInfo {

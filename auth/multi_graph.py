@@ -123,6 +123,86 @@ class MultiUserGraphClient:
         except Exception:
             return False
 
+    async def send_email(
+        self,
+        user_email: str,
+        to_recipients: List[str],
+        subject: str,
+        body_content: str,
+        body_type: str = "HTML",
+        cc_recipients: Optional[List[str]] = None,
+        reply_to_message_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Send an email on behalf of the authenticated user using Microsoft Graph API.
+
+        Args:
+            user_email: The authenticated user's email address
+            to_recipients: List of recipient email addresses
+            subject: Email subject line
+            body_content: Email body content (HTML or text)
+            body_type: "HTML" or "Text" (default: "HTML")
+            cc_recipients: Optional list of CC recipient email addresses
+            reply_to_message_id: Optional message ID to reply to (for threading)
+
+        Returns:
+            Response from the Graph API
+        """
+        headers = self._get_headers(user_email)
+        client = await HTTPClientManager.get_graph_client()
+
+        # Build recipient lists
+        to_list = [{"emailAddress": {"address": addr}} for addr in to_recipients]
+        cc_list = [{"emailAddress": {"address": addr}} for addr in (cc_recipients or [])]
+
+        # Build the email message payload
+        message = {
+            "subject": subject,
+            "body": {
+                "contentType": body_type,
+                "content": body_content
+            },
+            "toRecipients": to_list
+        }
+
+        if cc_list:
+            message["ccRecipients"] = cc_list
+
+        # If replying to a message, use the reply endpoint
+        if reply_to_message_id:
+            # Use the reply endpoint for proper threading
+            # Note: For reply endpoint, use EITHER comment OR message.body, not both
+            # We use message with body and omit comment to allow full HTML content
+            url = f"{GRAPH_BASE}/me/messages/{reply_to_message_id}/reply"
+            payload = {
+                "message": {
+                    "body": {
+                        "contentType": body_type,
+                        "content": body_content
+                    },
+                    "toRecipients": to_list
+                }
+            }
+            if cc_list:
+                payload["message"]["ccRecipients"] = cc_list
+            response = await client.post(url, headers=headers, json=payload)
+        else:
+            # Send as a new message
+            url = f"{GRAPH_BASE}/me/sendMail"
+            payload = {
+                "message": message,
+                "saveToSentItems": True
+            }
+            response = await client.post(url, headers=headers, json=payload)
+
+        if response.status_code not in [200, 202]:
+            logger.error(f"Failed to send email: {response.status_code}")
+            logger.error(f"   Response: {response.text[:500]}")
+            response.raise_for_status()
+
+        logger.info(f"Email sent successfully by {user_email} to {to_recipients}")
+        return {"success": True, "status_code": response.status_code}
+
 # Global instance
 graph_client = MultiUserGraphClient()
 
