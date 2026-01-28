@@ -1,5 +1,6 @@
 import httpx
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from auth.oauth import multi_auth
 from utils.http_client import HTTPClientManager
@@ -85,10 +86,15 @@ class MultiUserGraphClient:
         else:
             # Initial delta query - use inbox folder delta for better compatibility
             # Include threading fields: conversationId, conversationIndex
+            # Limit initial sync to last 14 days to avoid overwhelming the system
+            # with a full mailbox fetch for new users
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
             url = f"{GRAPH_BASE}/me/mailFolders/inbox/messages/delta"
             params = {
-                "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex"
+                "$select": "id,subject,body,from,receivedDateTime,hasAttachments,isRead,conversationId,conversationIndex",
+                "$filter": f"receivedDateTime ge {cutoff_date}"
             }
+            logger.info(f"Initial delta sync for {user_email}: fetching emails from last 14 days (since {cutoff_date})")
             response = await client.get(url, headers=headers, params=params)
 
         response.raise_for_status()
