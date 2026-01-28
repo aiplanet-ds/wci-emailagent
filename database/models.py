@@ -114,6 +114,10 @@ class Email(Base):
     is_forward = Column(Boolean, default=False)  # Indicates if email is a forward
     thread_subject = Column(Text, nullable=True)  # Subject with Re:/Fwd: prefixes stripped for grouping
 
+    # Folder tracking (for sent folder support)
+    folder = Column(String(50), default="inbox", index=True)  # "inbox" or "sent"
+    is_outgoing = Column(Boolean, default=False)  # True if sent by user
+
     # Email content
     body_text = Column(Text)
     body_html = Column(Text)
@@ -281,7 +285,8 @@ class DeltaToken(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
-    delta_token = Column(Text, nullable=False)
+    delta_token = Column(Text, nullable=True)  # Inbox folder delta token
+    sent_delta_token = Column(Text, nullable=True)  # Sent folder delta token
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

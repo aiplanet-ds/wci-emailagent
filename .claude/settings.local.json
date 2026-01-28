@@ -22,7 +22,8 @@
       "Bash(git push:*)",
       "Bash(git stash:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nFIX\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(copy:*)"
+      "Bash(copy:*)",
+      "Bash(powershell -Command \"\\(Get-Content test/test_reply_extraction.py\\) -replace ''✅'', ''[OK]'' -replace ''❌'', ''[FAIL]'' -replace ''⚠️'', ''[WARN]'' | Set-Content test/test_reply_extraction.py -Encoding UTF8\")"
     ],
     "deny": [],
     "ask": []

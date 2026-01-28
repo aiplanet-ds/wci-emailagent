@@ -26,6 +26,7 @@ from services.validation_service import validation_service
 from services.epicor_service import EpicorAPIService
 from auth.multi_graph import MultiUserGraphClient
 from services.extractor import generate_followup_email
+from services.thread_aggregation_service import aggregate_thread_extractions
 
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
@@ -50,6 +51,12 @@ class SendFollowupRequest(BaseModel):
 class EmailListResponse(BaseModel):
     emails: List[Dict[str, Any]]
     total: int
+    total_threads: int = 0
+    page: int = 1
+    page_size: int = 15
+    total_pages: int = 1
+    has_next: bool = False
+    has_prev: bool = False
 
 
 class EmailDetailResponse(BaseModel):
@@ -112,62 +119,166 @@ async def get_all_price_change_emails_from_db(
     db: AsyncSession,
     user_id: int,
     filter_type: Optional[str] = None,
-    search: Optional[str] = None
-) -> List[Dict[str, Any]]:
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 15,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None
+) -> Dict[str, Any]:
     """
-    Get all price change emails from database with optional filtering
+    Get all price change emails from database with optional filtering and thread-level pagination
 
     Args:
         db: Database session
         user_id: User ID
         filter_type: Filter type (all, processed, unprocessed, pending_verification, etc.)
         search: Search term for subject or sender
+        page: Page number (1-indexed)
+        page_size: Number of threads per page (default 15)
+        start_date: Filter emails from this date
+        end_date: Filter emails until this date
 
     Returns:
-        List of email dictionaries with metadata
+        Dict with emails list and pagination metadata
     """
-    from sqlalchemy import select, and_, or_
+    from sqlalchemy import select, and_, or_, func, distinct
     from database.models import Email, EmailState, EpicorSyncResult
     from sqlalchemy.orm import joinedload
 
-    # Build query with joins
-    query = (
-        select(Email)
-        .where(Email.user_id == user_id)
-        .options(joinedload(Email.email_state))
-        .order_by(Email.received_at.desc())
-    )
+    # Base filter conditions
+    base_conditions = [Email.user_id == user_id]
 
-    # Apply filters
+    # Exclude sent emails from inbox list (only show received emails)
+    # Sent emails will still appear in thread timeline for full conversation context
+    base_conditions.append(Email.is_outgoing == False)
+
+    # Only show main/first emails in inbox (exclude reply emails)
+    # Reply emails are visible when viewing the thread detail
+    base_conditions.append(or_(Email.is_reply == False, Email.is_reply == None))
+
+    # Apply date range filter
+    if start_date:
+        base_conditions.append(Email.received_at >= start_date)
+    if end_date:
+        base_conditions.append(Email.received_at <= end_date)
+
+    # Build base query for filtering
+    base_query = select(Email).where(and_(*base_conditions))
+
+    # Apply status filters (requires join with EmailState)
     if filter_type and filter_type != "all":
-        query = query.join(EmailState, Email.id == EmailState.email_id, isouter=True)
+        base_query = base_query.join(EmailState, Email.id == EmailState.email_id, isouter=True)
 
         if filter_type == "price_change":
-            query = query.where(EmailState.is_price_change == True)
+            base_query = base_query.where(EmailState.is_price_change == True)
         elif filter_type == "non_price_change":
-            query = query.where(or_(EmailState.is_price_change == False, EmailState.is_price_change == None))
+            base_query = base_query.where(or_(EmailState.is_price_change == False, EmailState.is_price_change == None))
         elif filter_type == "processed":
-            query = query.where(EmailState.processed == True)
+            base_query = base_query.where(EmailState.processed == True)
         elif filter_type == "unprocessed":
-            query = query.where(or_(EmailState.processed == False, EmailState.processed == None))
+            base_query = base_query.where(or_(EmailState.processed == False, EmailState.processed == None))
         elif filter_type == "pending_verification":
-            query = query.where(EmailState.verification_status == "pending_review")
+            base_query = base_query.where(EmailState.verification_status == "pending_review")
         elif filter_type == "rejected":
-            query = query.where(EmailState.verification_status == "rejected")
+            base_query = base_query.where(EmailState.verification_status == "rejected")
 
     # Apply search filter
     if search:
         search_pattern = f"%{search}%"
-        query = query.where(
+        base_query = base_query.where(
             or_(
                 Email.subject.ilike(search_pattern),
                 Email.sender_email.ilike(search_pattern)
             )
         )
 
-    # Execute query
-    result = await db.execute(query)
-    emails_db = result.unique().scalars().all()
+    # THREAD-LEVEL PAGINATION
+    # Step 1: Get distinct conversation_ids with their latest email date, paginated
+    # Use COALESCE to handle NULL conversation_id (treat each as unique thread)
+    conversation_query = (
+        select(
+            func.coalesce(Email.conversation_id, Email.message_id).label('thread_id'),
+            func.max(Email.received_at).label('latest_date')
+        )
+        .where(and_(*base_conditions))
+    )
+
+    # Apply same filters to conversation query
+    if filter_type and filter_type != "all":
+        conversation_query = conversation_query.join(EmailState, Email.id == EmailState.email_id, isouter=True)
+        if filter_type == "price_change":
+            conversation_query = conversation_query.where(EmailState.is_price_change == True)
+        elif filter_type == "non_price_change":
+            conversation_query = conversation_query.where(or_(EmailState.is_price_change == False, EmailState.is_price_change == None))
+        elif filter_type == "processed":
+            conversation_query = conversation_query.where(EmailState.processed == True)
+        elif filter_type == "unprocessed":
+            conversation_query = conversation_query.where(or_(EmailState.processed == False, EmailState.processed == None))
+        elif filter_type == "pending_verification":
+            conversation_query = conversation_query.where(EmailState.verification_status == "pending_review")
+        elif filter_type == "rejected":
+            conversation_query = conversation_query.where(EmailState.verification_status == "rejected")
+
+    if search:
+        search_pattern = f"%{search}%"
+        conversation_query = conversation_query.where(
+            or_(
+                Email.subject.ilike(search_pattern),
+                Email.sender_email.ilike(search_pattern)
+            )
+        )
+
+    conversation_query = (
+        conversation_query
+        .group_by(func.coalesce(Email.conversation_id, Email.message_id))
+        .order_by(func.max(Email.received_at).desc())
+    )
+
+    # Step 2: Count total threads
+    count_subquery = conversation_query.subquery()
+    total_threads_result = await db.execute(select(func.count()).select_from(count_subquery))
+    total_threads = total_threads_result.scalar() or 0
+
+    # Calculate pagination
+    total_pages = max(1, (total_threads + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))  # Clamp page to valid range
+    offset = (page - 1) * page_size
+    has_next = page < total_pages
+    has_prev = page > 1
+
+    # Step 3: Get paginated thread IDs
+    paginated_threads_query = conversation_query.offset(offset).limit(page_size)
+    paginated_result = await db.execute(paginated_threads_query)
+    thread_rows = paginated_result.all()
+    thread_ids = [row.thread_id for row in thread_rows]
+
+    # Step 4: Get all emails for these threads
+    if thread_ids:
+        emails_query = (
+            select(Email)
+            .where(
+                and_(
+                    Email.user_id == user_id,
+                    or_(
+                        Email.conversation_id.in_(thread_ids),
+                        Email.message_id.in_(thread_ids)
+                    )
+                )
+            )
+            .options(joinedload(Email.email_state))
+            .order_by(Email.received_at.desc())
+        )
+
+        # Apply date filter to emails as well
+        if start_date:
+            emails_query = emails_query.where(Email.received_at >= start_date)
+        if end_date:
+            emails_query = emails_query.where(Email.received_at <= end_date)
+
+        result = await db.execute(emails_query)
+        emails_db = result.unique().scalars().all()
+    else:
+        emails_db = []
 
     # Build response list
     emails = []
@@ -177,14 +288,25 @@ async def get_all_price_change_emails_from_db(
         # Get Epicor sync result if exists
         epicor_result = await EpicorSyncResultService.get_sync_result_by_email_id(db, email.id)
 
-        # Validate email data
-        email_dict = {
-            "supplier_info": email.supplier_info,
-            "price_change_summary": email.price_change_summary,
-            "affected_products": email.affected_products,
-            "additional_details": email.additional_details
-        }
-        validation = validation_service.validate_email_data(email_dict)
+        # Validate email data only if email has extraction data
+        # Skip validation for emails without data (e.g., replies to follow-ups)
+        has_extraction_data = (
+            email.supplier_info or
+            email.price_change_summary or
+            email.affected_products
+        )
+
+        if has_extraction_data:
+            email_dict = {
+                "supplier_info": email.supplier_info,
+                "price_change_summary": email.price_change_summary,
+                "affected_products": email.affected_products,
+                "additional_details": email.additional_details
+            }
+            validation = validation_service.validate_email_data(email_dict)
+        else:
+            # No extraction data - skip validation
+            validation = {"is_valid": True, "needs_info": False, "all_missing_fields": []}
 
         emails.append({
             "message_id": email.message_id,
@@ -221,7 +343,16 @@ async def get_all_price_change_emails_from_db(
             "followup_sent_at": state.followup_sent_at.isoformat() if state and state.followup_sent_at else None,
         })
 
-    return emails
+    return {
+        "emails": emails,
+        "total": len(emails),
+        "total_threads": total_threads,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": has_next,
+        "has_prev": has_prev
+    }
 
 
 @router.get("", response_model=EmailListResponse)
@@ -229,27 +360,62 @@ async def list_emails(
     request: Request,
     db: AsyncSession = Depends(get_db),
     filter: Optional[str] = None,  # all, price_change, non_price_change, processed, unprocessed, pending_verification, rejected
-    search: Optional[str] = None
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 15,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
 ):
     """
-    Get list of all emails from database for the authenticated user
+    Get list of all emails from database for the authenticated user with thread-level pagination
 
     Query params:
     - filter: all, price_change, non_price_change, processed, unprocessed, pending_verification, rejected
     - search: search by subject or sender
+    - page: page number (1-indexed, default 1)
+    - page_size: number of threads per page (default 15)
+    - start_date: filter emails from this date (ISO format)
+    - end_date: filter emails until this date (ISO format)
     """
     user_email = get_user_from_session(request)
     user = await get_user_from_db(db, user_email)
 
-    # Get emails from database with filters
-    emails = await get_all_price_change_emails_from_db(
+    # Parse date strings to datetime objects
+    start_dt = None
+    end_dt = None
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+
+    # Get emails from database with filters and pagination
+    result = await get_all_price_change_emails_from_db(
         db=db,
         user_id=user.id,
         filter_type=filter,
-        search=search
+        search=search,
+        page=page,
+        page_size=page_size,
+        start_date=start_dt,
+        end_date=end_dt
     )
 
-    return EmailListResponse(emails=emails, total=len(emails))
+    return EmailListResponse(
+        emails=result["emails"],
+        total=result["total"],
+        total_threads=result["total_threads"],
+        page=result["page"],
+        page_size=result["page_size"],
+        total_pages=result["total_pages"],
+        has_next=result["has_next"],
+        has_prev=result["has_prev"]
+    )
 
 
 # ============================================================================
@@ -266,13 +432,25 @@ async def list_pending_verification_emails(
     user = await get_user_from_db(db, user_email)
 
     # Get all emails with pending_review verification status from database
-    pending_emails = await get_all_price_change_emails_from_db(
+    # No pagination for pending verification - return all
+    result = await get_all_price_change_emails_from_db(
         db=db,
         user_id=user.id,
-        filter_type="pending_verification"
+        filter_type="pending_verification",
+        page=1,
+        page_size=1000  # Return all pending emails
     )
 
-    return EmailListResponse(emails=pending_emails, total=len(pending_emails))
+    return EmailListResponse(
+        emails=result["emails"],
+        total=result["total"],
+        total_threads=result["total_threads"],
+        page=result["page"],
+        page_size=result["page_size"],
+        total_pages=result["total_pages"],
+        has_next=result["has_next"],
+        has_prev=result["has_prev"]
+    )
 
 
 @router.get("/vendors/cache-status")
@@ -353,7 +531,9 @@ async def get_email_detail(
             "date": email.received_at.isoformat() if email.received_at else None,
             "message_id": email.message_id,
             "attachments": []
-        }
+        },
+        "is_outgoing": email.is_outgoing or False,
+        "is_reply": email.is_reply or False
     }
 
     # Validate email data
@@ -440,6 +620,8 @@ async def get_email_thread(
                 "verification_status": None,
                 "is_reply": email.is_reply or False,
                 "is_forward": email.is_forward or False,
+                "folder": email.folder or "inbox",
+                "is_outgoing": email.is_outgoing or False,
             }],
             "total_count": 1
         }
@@ -461,6 +643,8 @@ async def get_email_thread(
             "verification_status": state.verification_status if state else None,
             "is_reply": thread_email.is_reply or False,
             "is_forward": thread_email.is_forward or False,
+            "folder": thread_email.folder or "inbox",
+            "is_outgoing": thread_email.is_outgoing or False,
         })
 
     return {
@@ -584,6 +768,77 @@ async def get_thread_bom_impact(
         "total_parts_affected": len(aggregated_by_part),
         "impacts_by_email": impacts_by_email
     }
+
+
+@router.get("/{message_id}/thread/extracted-data")
+async def get_thread_extracted_data(
+    message_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get aggregated LLM-extracted data from all RECEIVED emails in a conversation thread.
+
+    Aggregates supplier_info, price_change_summary, and affected_products from all
+    received emails (excluding sent/outgoing). Later replies override earlier values
+    when fields conflict.
+
+    This enables showing combined extraction data that includes information from
+    supplier replies to follow-up emails.
+    """
+    from services.thread_aggregation_service import aggregate_thread_extractions
+
+    user_email = get_user_from_session(request)
+    user = await get_user_from_db(db, user_email)
+
+    # Get the email to find its conversation_id
+    email = await get_email_from_db(db, message_id)
+    if email.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # If no conversation_id, just return single email's extracted data
+    if not email.conversation_id:
+        # For single email, return its data directly (if it's a received email)
+        is_received = not email.is_outgoing
+        return {
+            "conversation_id": None,
+            "thread_subject": email.thread_subject or email.subject,
+            "total_emails": 1,
+            "received_emails_count": 1 if is_received else 0,
+            "emails_with_extractions": 1 if is_received and (email.supplier_info or email.price_change_summary or email.affected_products) else 0,
+            "aggregated_supplier_info": {
+                "data": email.supplier_info or {},
+                "sources": {}
+            } if is_received else {"data": {}, "sources": {}},
+            "aggregated_price_change_summary": {
+                "data": email.price_change_summary or {},
+                "sources": {}
+            } if is_received else {"data": {}, "sources": {}},
+            "aggregated_affected_products": [
+                {**p, "source_message_id": email.message_id, "source_received_at": email.received_at.isoformat() if email.received_at else None}
+                for p in (email.affected_products or [])
+            ] if is_received else [],
+            "extractions_by_email": [{
+                "message_id": email.message_id,
+                "subject": email.subject,
+                "received_at": email.received_at.isoformat() if email.received_at else None,
+                "is_outgoing": email.is_outgoing or False,
+                "supplier_info": email.supplier_info,
+                "price_change_summary": email.price_change_summary,
+                "affected_products": email.affected_products
+            }] if is_received else []
+        }
+
+    # Get all emails in thread
+    thread_emails = await EmailService.get_emails_by_conversation_id(
+        db, email.conversation_id, user.id
+    )
+
+    # Aggregate using service
+    result = aggregate_thread_extractions(thread_emails, email.thread_subject or email.subject)
+    result["conversation_id"] = email.conversation_id
+
+    return result
 
 
 class PinRequest(BaseModel):
@@ -787,13 +1042,45 @@ async def update_email_state(
     if email.user_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Build email_data dict for validation service (same format as JSON)
-    email_data = {
-        "supplier_info": email.supplier_info or {},
-        "price_change_summary": email.price_change_summary or {},
-        "affected_products": email.affected_products or [],
-        "additional_details": email.additional_details or {}
-    }
+    # Build email_data dict for validation service
+    # If email is part of a thread, use AGGREGATED data from all received emails
+    # This ensures reason from reply emails, updated supplier info, etc. are included
+    if email.conversation_id:
+        # Get all emails in the thread
+        thread_emails = await EmailService.get_emails_by_conversation_id(
+            db, email.conversation_id, user.id
+        )
+
+        # Aggregate data from all received emails in the thread
+        aggregated = aggregate_thread_extractions(thread_emails, email.thread_subject or email.subject)
+
+        # Use aggregated data for validation and sync
+        email_data = {
+            "supplier_info": aggregated["aggregated_supplier_info"]["data"],
+            "price_change_summary": aggregated["aggregated_price_change_summary"]["data"],
+            "affected_products": [
+                # Strip source tracking fields for validation/sync
+                {k: v for k, v in p.items() if not k.startswith("source_")}
+                for p in aggregated["aggregated_affected_products"]
+            ],
+            "additional_details": email.additional_details or {}
+        }
+
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Using AGGREGATED thread data for Epicor sync:")
+        logger.info(f"  Thread has {aggregated['received_emails_count']} received emails")
+        logger.info(f"  Aggregated supplier_id: {email_data['supplier_info'].get('supplier_id')}")
+        logger.info(f"  Aggregated reason: {email_data['price_change_summary'].get('reason', 'None')[:50] if email_data['price_change_summary'].get('reason') else 'None'}")
+        logger.info(f"  Total products: {len(email_data['affected_products'])}")
+    else:
+        # Single email (no thread) - use individual email data
+        email_data = {
+            "supplier_info": email.supplier_info or {},
+            "price_change_summary": email.price_change_summary or {},
+            "affected_products": email.affected_products or [],
+            "additional_details": email.additional_details or {}
+        }
 
     # If marking as processed, validate and sync to Epicor
     if update.processed is True:

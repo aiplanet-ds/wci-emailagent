@@ -17,6 +17,7 @@ import { MissingFieldsChecklist } from './MissingFieldsChecklist';
 import { PriceChangeSummary } from './PriceChangeSummary';
 import { ProductsTable } from './ProductsTable';
 import { SupplierInfo } from './SupplierInfo';
+import { ThreadAggregatedData } from './ThreadAggregatedData';
 import { ThreadTimeline } from './ThreadTimeline';
 import { WorkflowStepper } from './WorkflowStepper';
 
@@ -63,6 +64,22 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
       onEmailSelect(newMessageId);
     }
   };
+
+  // Check if this is a sent/outgoing email - hide processing UI for these
+  const isOutgoing = data?.email_data?.is_outgoing || false;
+
+  // Check if this is the main email (first in thread) or a reply
+  // Main email: show all extraction sections
+  // Reply email: only show sections if they have data
+  const isReplyEmail = data?.email_data?.is_reply || false;
+  const isMainEmail = !isReplyEmail;
+
+  // For reply emails: check if they have extraction data
+  const replyHasSupplierInfo = data?.email_data?.supplier_info &&
+    Object.keys(data.email_data.supplier_info).length > 0;
+  const replyHasPriceSummary = data?.email_data?.price_change_summary &&
+    Object.keys(data.email_data.price_change_summary).length > 0;
+  const replyHasProducts = (data?.email_data?.affected_products?.length ?? 0) > 0;
 
   // Check if all BOM impact products have been decided (approved or rejected)
   const isPriceChange = data?.state?.is_price_change;
@@ -274,80 +291,82 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="mt-4 flex flex-col gap-2">
-                <div className="flex gap-3 flex-wrap">
-                  <Button
-                    onClick={() => handleToggleProcessed()}
-                    variant={data.state.processed ? 'outline' : 'default'}
-                    disabled={updateProcessed.isPending || (!data.state.processed && !canMarkAsProcessed)}
-                    className="flex items-center gap-2"
-                  >
-                    {data.state.processed ? (
-                      <>
-                        <Circle className="h-4 w-4" />
-                        Mark as Unprocessed
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        {updateProcessed.isPending ? 'Processing...' : 'Mark as Processed'}
-                      </>
-                    )}
-                  </Button>
-                  {/* Reply to Thread button */}
-                  {threadInfo.hasThread && (
+              {/* Actions - Only show for received emails, not sent emails */}
+              {!isOutgoing && (
+                <div className="mt-4 flex flex-col gap-2">
+                  <div className="flex gap-3 flex-wrap">
                     <Button
-                      variant="outline"
-                      onClick={() => {
-                        // Open email client with reply-all to thread
-                        const subject = `Re: ${data.email_data.email_metadata.subject}`;
-                        const to = data.email_data.email_metadata.sender;
-                        window.open(`mailto:${to}?subject=${encodeURIComponent(subject)}`, '_blank');
-                      }}
+                      onClick={() => handleToggleProcessed()}
+                      variant={data.state.processed ? 'outline' : 'default'}
+                      disabled={updateProcessed.isPending || (!data.state.processed && !canMarkAsProcessed)}
                       className="flex items-center gap-2"
                     >
-                      <Reply className="h-4 w-4" />
-                      Reply to Thread
+                      {data.state.processed ? (
+                        <>
+                          <Circle className="h-4 w-4" />
+                          Mark as Unprocessed
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="h-4 w-4" />
+                          {updateProcessed.isPending ? 'Processing...' : 'Mark as Processed'}
+                        </>
+                      )}
                     </Button>
+                    {/* Reply to Thread button */}
+                    {threadInfo.hasThread && (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          // Open email client with reply-all to thread
+                          const subject = `Re: ${data.email_data.email_metadata.subject}`;
+                          const to = data.email_data.email_metadata.sender;
+                          window.open(`mailto:${to}?subject=${encodeURIComponent(subject)}`, '_blank');
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <Reply className="h-4 w-4" />
+                        Reply to Thread
+                      </Button>
+                    )}
+                  </div>
+                  {/* Warning messages when button is disabled */}
+                  {!data.state.processed && isVerificationBlocking && (
+                    <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>
+                        {verificationStatus === 'pending_review'
+                          ? 'Email is pending vendor verification. Please verify or approve the vendor first.'
+                          : 'Email was rejected during vendor verification and cannot be processed.'}
+                      </span>
+                    </div>
+                  )}
+                  {!data.state.processed && !isVerificationBlocking && isNotPriceChange && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>This email is not a price change notification and does not require Epicor sync.</span>
+                    </div>
+                  )}
+                  {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && isBomImpactBlocking && (
+                    <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>Please approve or reject all products in BOM Impact Analysis before marking as processed</span>
+                    </div>
+                  )}
+                  {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && isSupplierUnverified && (
+                    <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>Supplier ID not found in Epicor. This email cannot be processed.</span>
+                    </div>
+                  )}
+                  {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && !isSupplierUnverified && hasUnverifiedSupplierPart && (
+                    <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>One or more products have unverified part-supplier relationships. This email cannot be processed.</span>
+                    </div>
                   )}
                 </div>
-                {/* Warning messages when button is disabled */}
-                {!data.state.processed && isVerificationBlocking && (
-                  <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>
-                      {verificationStatus === 'pending_review'
-                        ? 'Email is pending vendor verification. Please verify or approve the vendor first.'
-                        : 'Email was rejected during vendor verification and cannot be processed.'}
-                    </span>
-                  </div>
-                )}
-                {!data.state.processed && !isVerificationBlocking && isNotPriceChange && (
-                  <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>This email is not a price change notification and does not require Epicor sync.</span>
-                  </div>
-                )}
-                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && isBomImpactBlocking && (
-                  <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>Please approve or reject all products in BOM Impact Analysis before marking as processed</span>
-                  </div>
-                )}
-                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && isSupplierUnverified && (
-                  <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>Supplier ID not found in Epicor. This email cannot be processed.</span>
-                  </div>
-                )}
-                {!data.state.processed && !isVerificationBlocking && !isNotPriceChange && !isBomImpactBlocking && !isSupplierUnverified && hasUnverifiedSupplierPart && (
-                  <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
-                    <AlertCircle className="h-4 w-4" />
-                    <span>One or more products have unverified part-supplier relationships. This email cannot be processed.</span>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
 
             {/* Content */}
@@ -412,90 +431,115 @@ export function EmailDetailDrawer({ messageId, onClose, onEmailSelect }: EmailDe
                 />
               )}
 
-              <div className="border-t border-gray-200 pt-4">
-                <h4 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wide">Extracted Data</h4>
-              </div>
-
-              {/* Workflow Stepper - Shows 3-Stage Workflow */}
-              <WorkflowStepper
-                hasEpicorSync={!!data.epicor_status}
-                verificationStatus={data.state.verification_status}
-                llmDetectionPerformed={data.state.llm_detection_performed}
-              />
-
-              {/* Vendor Verification Status */}
-              {data.state.verification_status && (
-                <div className="bg-white border border-gray-200 rounded-lg p-3">
-                  <h4 className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
-                    <Shield className="h-3.5 w-3.5 text-gray-500" />
-                    Vendor Verification
-                  </h4>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-600">Status:</span>
-                      <VerificationBadge
-                        status={data.state.verification_status}
-                        method={data.state.verification_method}
-                        showMethod
-                      />
-                    </div>
-
-                    {data.state.vendor_info && (
-                      <div className="text-xs">
-                        <span className="text-gray-600">Vendor:</span>{' '}
-                        <span className="font-medium text-gray-900">
-                          {data.state.vendor_info.vendor_name} ({data.state.vendor_info.vendor_id})
-                        </span>
-                      </div>
-                    )}
-
-                    {data.state.manually_approved_by && (
-                      <div className="text-xs text-gray-500 pt-2 border-t border-gray-200">
-                        Manually approved by {data.state.manually_approved_by}
-                        {data.state.manually_approved_at && (
-                          <> on {formatDate(data.state.manually_approved_at)}</>
-                        )}
-                      </div>
-                    )}
-
-                    {data.state.flagged_reason && (
-                      <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                        {data.state.flagged_reason}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Supplier Info */}
-              <SupplierInfo supplier={data.email_data.supplier_info} />
-
-              {/* Price Change Summary */}
-              <PriceChangeSummary summary={data.email_data.price_change_summary} />
-
-              {/* Products Table */}
-              <ProductsTable
-                products={data.email_data.affected_products}
-                validationResults={data.state.epicor_validation_result}
-              />
-
-              {/* BOM Impact Analysis - Show for price change emails */}
-              {data.state.is_price_change && (
-                <BomImpactPanel messageId={messageId} />
-              )}
-
-              {/* Missing Fields Checklist - Only show for unprocessed emails */}
-              {data.validation.all_missing_fields.length > 0 && !data.state.processed && (
-                <MissingFieldsChecklist
-                  missingFields={data.validation.all_missing_fields}
-                  onGenerateFollowup={handleGenerateFollowup}
-                  isGenerating={generateFollowup.isPending}
+              {/* Thread Aggregated Data - Shows combined extracted info from all received emails */}
+              {threadInfo.hasThread && !isOutgoing && onEmailSelect && (
+                <ThreadAggregatedData
+                  messageId={messageId}
+                  onEmailSelect={handleEmailSelect}
                 />
               )}
 
-              {/* Epicor Integration Results */}
-              {data.epicor_status && (
+              {/* Extracted Data Section - Only show for received emails */}
+              {!isOutgoing && (
+                <>
+                  <div className="border-t border-gray-200 pt-4">
+                    <h4 className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wide">Extracted Data</h4>
+                  </div>
+
+                  {/* Workflow Stepper - Shows 3-Stage Workflow */}
+                  <WorkflowStepper
+                    hasEpicorSync={!!data.epicor_status}
+                    verificationStatus={data.state.verification_status}
+                    llmDetectionPerformed={data.state.llm_detection_performed}
+                  />
+
+                  {/* Vendor Verification Status */}
+                  {data.state.verification_status && (
+                    <div className="bg-white border border-gray-200 rounded-lg p-3">
+                      <h4 className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                        <Shield className="h-3.5 w-3.5 text-gray-500" />
+                        Vendor Verification
+                      </h4>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-600">Status:</span>
+                          <VerificationBadge
+                            status={data.state.verification_status}
+                            method={data.state.verification_method}
+                            showMethod
+                          />
+                        </div>
+
+                        {data.state.vendor_info && (
+                          <div className="text-xs">
+                            <span className="text-gray-600">Vendor:</span>{' '}
+                            <span className="font-medium text-gray-900">
+                              {data.state.vendor_info.vendor_name} ({data.state.vendor_info.vendor_id})
+                            </span>
+                          </div>
+                        )}
+
+                        {data.state.manually_approved_by && (
+                          <div className="text-xs text-gray-500 pt-2 border-t border-gray-200">
+                            Manually approved by {data.state.manually_approved_by}
+                            {data.state.manually_approved_at && (
+                              <> on {formatDate(data.state.manually_approved_at)}</>
+                            )}
+                          </div>
+                        )}
+
+                        {data.state.flagged_reason && (
+                          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                            {data.state.flagged_reason}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Supplier Info, Price Change, Products - Only for received emails */}
+              {/* Main email: show all sections; Reply email: only show if has data */}
+              {!isOutgoing && (
+                <>
+                  {/* Supplier Info - main email always shows, reply only if has data */}
+                  {(isMainEmail || replyHasSupplierInfo) && (
+                    <SupplierInfo supplier={data.email_data.supplier_info} />
+                  )}
+
+                  {/* Price Change Summary - main email always shows, reply only if has data */}
+                  {(isMainEmail || replyHasPriceSummary) && (
+                    <PriceChangeSummary summary={data.email_data.price_change_summary} />
+                  )}
+
+                  {/* Products Table - main email always shows, reply only if has products */}
+                  {(isMainEmail || replyHasProducts) && (
+                    <ProductsTable
+                      products={data.email_data.affected_products}
+                      validationResults={data.state.epicor_validation_result}
+                    />
+                  )}
+
+                  {/* BOM Impact Analysis - only for main email with price change */}
+                  {isMainEmail && data.state.is_price_change && (
+                    <BomImpactPanel messageId={messageId} />
+                  )}
+
+                  {/* Missing Fields Checklist - only for main email, unprocessed */}
+                  {isMainEmail && data.validation.all_missing_fields.length > 0 && !data.state.processed && (
+                    <MissingFieldsChecklist
+                      missingFields={data.validation.all_missing_fields}
+                      onGenerateFollowup={handleGenerateFollowup}
+                      isGenerating={generateFollowup.isPending}
+                    />
+                  )}
+                </>
+              )}
+
+              {/* Epicor Integration Results - Only for received emails */}
+              {!isOutgoing && data.epicor_status && (
                 <div className="bg-white border border-gray-200 rounded-lg p-4">
                   <h4 className="text-xs font-semibold text-gray-700 mb-3 flex items-center gap-1.5 uppercase tracking-wide">
                     <CheckCircle2 className="h-3.5 w-3.5" />

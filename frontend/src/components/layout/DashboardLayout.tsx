@@ -28,7 +28,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         <div className="px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-3">
-              <img src="/wci-logo.jpeg" alt="WCI Logo" className="h-8 w-8 object-contain" />
+              <img
+                src="/wci-logo.jpeg"
+                alt="WCI Logo"
+                className="h-9 w-auto object-contain"
+              />
               <div>
                 <h1 className="text-xl font-semibold text-gray-900">WCI Co-Pilot</h1>
                 <p className="text-sm text-gray-500">Supplier Email Management</p>

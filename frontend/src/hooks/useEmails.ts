@@ -11,13 +11,24 @@ export function useCurrentUser() {
   });
 }
 
-export function useEmails(filter?: EmailFilter, search?: string) {
+export interface UseEmailsParams {
+  filter?: EmailFilter;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+export function useEmails(params: UseEmailsParams = {}) {
+  const { filter, search, page = 1, pageSize = 15, startDate, endDate } = params;
   const isApproveMutating = useIsMutating({ mutationKey: APPROVE_EMAIL_MUTATION_KEY });
 
   return useQuery({
-    queryKey: ['emails', filter, search],
-    queryFn: () => emailApi.getEmails(filter, search),
-    refetchInterval: isApproveMutating > 0 ? false : 30000, // Pause polling during mutation
+    queryKey: ['emails', filter, search, page, pageSize, startDate, endDate],
+    queryFn: () => emailApi.getEmails({ filter, search, page, pageSize, startDate, endDate }),
+    refetchInterval: isApproveMutating > 0 ? false : 10000, // 10s polling for responsive updates
+    placeholderData: (previousData) => previousData, // Keep previous data while loading new page
   });
 }
 
@@ -87,7 +98,18 @@ export function useThreadHistory(messageId: string | null) {
     queryKey: ['thread', messageId],
     queryFn: () => emailApi.getThreadHistory(messageId!),
     enabled: !!messageId,
-    staleTime: 2 * 60 * 1000, // Cache for 2 minutes
+    staleTime: 0, // Always refetch to ensure we have latest thread data
+    refetchOnMount: 'always', // Refetch when component mounts (switching emails)
+  });
+}
+
+export function useThreadExtractedData(messageId: string | null) {
+  return useQuery({
+    queryKey: ['threadExtractedData', messageId],
+    queryFn: () => emailApi.getThreadExtractedData(messageId!),
+    enabled: !!messageId,
+    staleTime: 0, // Always refetch to ensure we have latest thread data
+    refetchOnMount: 'always', // Refetch when component mounts (switching emails)
   });
 }
 

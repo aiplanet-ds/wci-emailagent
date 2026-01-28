@@ -40,6 +40,8 @@ export interface EmailData {
   supplier_info: SupplierInfo;
   price_change_summary: PriceChangeSummary;
   affected_products: AffectedProduct[];
+  is_outgoing?: boolean;
+  is_reply?: boolean;
 }
 
 export interface MissingField {
@@ -185,7 +187,16 @@ export interface EmailListItem {
 export interface EmailListResponse {
   emails: EmailListItem[];
   total: number;
+  total_threads: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
 }
+
+// Date range filter options for inbox
+export type InboxDateRangeOption = 'all' | 'today' | 'last7days' | 'last30days' | 'last90days' | 'custom';
 
 // Thread-related types
 export interface ThreadEmail {
@@ -196,6 +207,8 @@ export interface ThreadEmail {
   verification_status: string;
   is_reply: boolean;
   is_forward: boolean;
+  folder?: 'inbox' | 'sent';      // Which folder this email came from
+  is_outgoing?: boolean;           // True if sent by user
 }
 
 export interface ThreadHistoryResponse {
@@ -458,4 +471,47 @@ export interface ThreadBomImpactResponse {
   total_annual_impact: number;
   total_parts_affected: number;
   impacts_by_email: ThreadBomEmailImpact[];
+}
+
+// Thread Extracted Data Aggregation Types
+export interface ThreadExtractedDataSource {
+  message_id: string;
+  received_at: string | null;
+}
+
+export interface AggregatedSupplierInfo {
+  data: SupplierInfo;
+  sources: Record<string, ThreadExtractedDataSource>;
+}
+
+export interface AggregatedPriceChangeSummary {
+  data: PriceChangeSummary;
+  sources: Record<string, ThreadExtractedDataSource>;
+}
+
+export interface AggregatedProduct extends AffectedProduct {
+  source_message_id: string;
+  source_received_at: string | null;
+}
+
+export interface ThreadEmailExtraction {
+  message_id: string;
+  subject: string;
+  received_at: string | null;
+  is_outgoing: boolean;
+  supplier_info: SupplierInfo | null;
+  price_change_summary: PriceChangeSummary | null;
+  affected_products: AffectedProduct[] | null;
+}
+
+export interface ThreadExtractedDataResponse {
+  conversation_id: string | null;
+  thread_subject: string;
+  total_emails: number;
+  received_emails_count: number;
+  emails_with_extractions: number;
+  aggregated_supplier_info: AggregatedSupplierInfo;
+  aggregated_price_change_summary: AggregatedPriceChangeSummary;
+  aggregated_affected_products: AggregatedProduct[];
+  extractions_by_email: ThreadEmailExtraction[];
 }

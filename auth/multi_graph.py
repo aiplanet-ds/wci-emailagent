@@ -115,6 +115,47 @@ class MultiUserGraphClient:
             "delta_token": delta_link
         }
 
+    async def get_user_delta_sent_messages(self, user_email: str, delta_token: Optional[str] = None) -> Dict[str, Any]:
+        """Get delta messages from Sent folder for user - tracks changes since last query"""
+        headers = self._get_headers(user_email)
+        client = await HTTPClientManager.get_graph_client()
+
+        if delta_token:
+            # Use existing delta token to get changes
+            url = delta_token
+            response = await client.get(url, headers=headers)
+        else:
+            # Initial delta query for sent items folder
+            # Include threading fields: conversationId, conversationIndex
+            # Limit initial sync to last 14 days
+            # Note: Microsoft Graph only supports receivedDateTime filter for delta queries (not sentDateTime)
+            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            url = f"{GRAPH_BASE}/me/mailFolders/sentItems/messages/delta"
+            params = {
+                "$select": "id,subject,body,from,toRecipients,sentDateTime,hasAttachments,conversationId,conversationIndex",
+                "$filter": f"receivedDateTime ge {cutoff_date}"
+            }
+            logger.info(f"Initial sent folder delta sync for {user_email}: fetching sent emails from last 14 days")
+            response = await client.get(url, headers=headers, params=params)
+
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract messages and next delta link
+        messages = data.get("value", [])
+        delta_link = None
+
+        # Look for delta link in @odata.deltaLink or @odata.nextLink
+        if "@odata.deltaLink" in data:
+            delta_link = data["@odata.deltaLink"]
+        elif "@odata.nextLink" in data:
+            delta_link = data["@odata.nextLink"]
+
+        return {
+            "messages": messages,
+            "delta_token": delta_link
+        }
+
     def is_user_authenticated(self, user_email: str) -> bool:
         """Check if user has valid authentication"""
         try:

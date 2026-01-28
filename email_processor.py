@@ -1,10 +1,11 @@
 import os, json
 import asyncio
 import logging
+from datetime import datetime
 from auth.multi_graph import graph_client
 from utils.processors import save_attachment, process_all_content
 from utils.thread_detection import extract_thread_info
-from services.extractor import extract_price_change_json
+from services.extractor import extract_price_change_json, extract_reply_email
 
 # Database imports
 from database.config import SessionLocal
@@ -527,7 +528,17 @@ async def process_user_message(msg, user_email, skip_verification=False):
     subject = msg.get("subject", "(no subject)")
     sender_info = msg.get("from", {}).get("emailAddress", {})
     sender = sender_info.get("address", "(no sender)")
-    date_received = msg.get("receivedDateTime", "(no date)")
+    date_received_str = msg.get("receivedDateTime", "")
+    # Parse ISO date string to datetime object (MS Graph API returns ISO 8601 format)
+    date_received = None
+    if date_received_str:
+        try:
+            date_received = datetime.fromisoformat(date_received_str.replace('Z', '+00:00'))
+            # Strip timezone to make it naive (DB uses TIMESTAMP WITHOUT TIME ZONE)
+            if date_received.tzinfo:
+                date_received = date_received.replace(tzinfo=None)
+        except (ValueError, TypeError):
+            logger.warning(f"Could not parse date: {date_received_str}")
     message_id = msg.get("id", "")
 
     # Extract thread information from the message
@@ -618,18 +629,24 @@ async def process_user_message(msg, user_email, skip_verification=False):
     # ========== STAGE 2: AI ENTITY EXTRACTION ==========
     logger.info("STAGE 2: AI ENTITY EXTRACTION")
     logger.info("-" * 80)
-    logger.info("Azure OpenAI GPT-4.1 Processing...")
-    logger.info("   Extracting parallel entities:")
-    logger.info("   - Supplier ID")
-    logger.info("   - Part Name & Number")
-    logger.info("   - Effective Date")
-    logger.info("   - New Price")
-    logger.info("   - Reason for Change")
 
     try:
-        # Note: Email has already been validated as price change by LLM detector in delta_service
-        # This extraction focuses solely on extracting structured data
-        result = await extract_price_change_json(combined_content, email_metadata)
+        # Use specialized extractor for reply emails (lighter weight, focused on partial info)
+        if thread_info.is_reply:
+            logger.info("Reply email detected - using reply extractor")
+            logger.info("   Extracting: reason, clarifications, additional details")
+            result = await extract_reply_email(combined_content, email_metadata)
+        else:
+            logger.info("Azure OpenAI GPT-4.1 Processing...")
+            logger.info("   Extracting parallel entities:")
+            logger.info("   - Supplier ID")
+            logger.info("   - Part Name & Number")
+            logger.info("   - Effective Date")
+            logger.info("   - New Price")
+            logger.info("   - Reason for Change")
+            # Note: Email has already been validated as price change by LLM detector in delta_service
+            # This extraction focuses solely on extracting structured data
+            result = await extract_price_change_json(combined_content, email_metadata)
 
         # Save to database (JSON file writes removed - database is now the primary storage)
         email_id = None

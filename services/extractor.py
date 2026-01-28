@@ -220,6 +220,161 @@ async def extract_from_email(email_data: Dict[str, Any]) -> Dict[str, Any]:
     return await extract_price_change_json(content, metadata)
 
 
+# ============================================================================
+# REPLY EMAIL EXTRACTION
+# ============================================================================
+# Specialized extraction for reply/follow-up emails that contain partial info
+# like reasons, clarifications, or answers to follow-up questions
+
+REPLY_EMAIL_EXTRACTION_PROMPT = """
+You are extracting information from a REPLY email in a price change conversation thread.
+
+This email is a response to a previous price change notification or follow-up request. It may contain:
+- Reason/justification for the price change
+- Clarifications about products, pricing, or dates
+- Additional details requested in a previous follow-up
+- Answers to specific questions
+
+**IMPORTANT:** This is a casual reply email, NOT a formal price change notification. Focus on extracting ANY price-change-related information mentioned, even if informal.
+
+**Extract these fields if mentioned:**
+
+1. **reason** - The reason/justification for the price change. Look for phrases like:
+   - "the reason is...", "due to...", "because of..."
+   - "increased costs", "labor costs", "raw materials", "shipping", "tariffs", "inflation"
+   - Any explanation for why prices are changing
+
+2. **effective_date** - Any date mentioned for when changes take effect
+
+3. **change_type** - Type of change if mentioned: "increase", "decrease", "adjustment"
+
+4. **supplier_info** - Any supplier details mentioned (name, contact info, ID)
+
+5. **product_info** - Any specific products, part numbers, or pricing mentioned
+
+6. **additional_notes** - Any other relevant information or clarifications
+
+**Email Content:**
+{{content}}
+
+**Email Metadata:**
+{{metadata}}
+
+**Return JSON in this format:**
+{
+  "supplier_info": {
+    "supplier_id": string or null,
+    "supplier_name": string or null,
+    "contact_person": string or null,
+    "contact_email": string or null,
+    "contact_phone": string or null
+  },
+  "price_change_summary": {
+    "change_type": string or null,
+    "effective_date": string or null,
+    "reason": string or null,
+    "overall_impact": string or null
+  },
+  "affected_products": [],
+  "additional_notes": string or null
+}
+
+**Rules:**
+- Extract the EXACT text for reason - preserve the supplier's wording
+- Use null for fields not mentioned
+- If no price-change info found, return empty structures with nulls
+- Return ONLY valid JSON, no additional text
+"""
+
+
+async def extract_reply_email(content: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract information from reply/follow-up emails.
+
+    This is a lightweight extractor optimized for casual reply emails that contain
+    partial information like reasons, clarifications, or answers to follow-ups.
+
+    Args:
+        content: Email body content
+        metadata: Email metadata (subject, sender, date, message_id)
+
+    Returns:
+        Dictionary with extracted data in same schema as main extractor
+    """
+    try:
+        # Convert date to string if it's a datetime object
+        date_value = metadata.get("date", None)
+        if date_value is not None and hasattr(date_value, 'isoformat'):
+            date_value = date_value.isoformat()
+
+        safe_metadata = {
+            "subject": metadata.get("subject", None),
+            "sender": metadata.get("from", None),
+            "date": date_value,
+            "message_id": metadata.get("message_id", None),
+        }
+
+        prompt = REPLY_EMAIL_EXTRACTION_PROMPT.replace("{{content}}", content)
+        prompt = prompt.replace("{{metadata}}", json.dumps(safe_metadata, indent=2))
+
+        response = await async_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=2000  # Replies are typically shorter
+        )
+
+        content_response = response.choices[0].message.content.strip()
+
+        try:
+            # Remove markdown code blocks if present
+            if content_response.startswith("```"):
+                content_response = content_response.split("\n", 1)[1] if "\n" in content_response else content_response[3:]
+                if content_response.endswith("```"):
+                    content_response = content_response[:-3]
+                content_response = content_response.strip()
+
+            extracted_data = json.loads(content_response)
+
+            # Ensure required structures exist
+            if "supplier_info" not in extracted_data:
+                extracted_data["supplier_info"] = {}
+            if "price_change_summary" not in extracted_data:
+                extracted_data["price_change_summary"] = {}
+            if "affected_products" not in extracted_data:
+                extracted_data["affected_products"] = []
+
+            # Add email metadata
+            extracted_data["email_metadata"] = {
+                "subject": safe_metadata.get("subject"),
+                "sender": safe_metadata.get("sender"),
+                "date": safe_metadata.get("date"),
+                "message_id": safe_metadata.get("message_id")
+            }
+
+            logger.info(f"Reply extraction complete - reason: {extracted_data.get('price_change_summary', {}).get('reason', 'not found')}")
+
+            return extracted_data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Reply extraction JSON Parse Error: {e}")
+            return {
+                "supplier_info": {},
+                "price_change_summary": {},
+                "affected_products": [],
+                "error": f"Failed to parse reply extraction: {str(e)}"
+            }
+
+    except Exception as e:
+        logger.error(f"Reply extraction failed: {str(e)}")
+        return {
+            "supplier_info": {},
+            "price_change_summary": {},
+            "affected_products": [],
+            "error": f"Reply extraction failed: {str(e)}"
+        }
+
+
 async def generate_followup_email(
     email_data: Dict[str, Any],
     missing_fields: List[Dict[str, Any]],

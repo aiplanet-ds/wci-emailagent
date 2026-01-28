@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Mail, MessageSquare, Package, Pin } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Mail, MessageSquare, Package, Pin } from 'lucide-react';
 import React, { useCallback, useMemo, useState } from 'react';
 import { useToggleEmailPin } from '../../hooks/useEmails';
 import { formatDate } from '../../lib/utils';
@@ -14,6 +14,15 @@ interface InboxTableProps {
   selectedEmailId: string | null;
   onEmailSelect: (emailId: string) => void;
   viewMode?: ViewMode;
+  // Pagination props
+  currentPage?: number;
+  totalPages?: number;
+  totalThreads?: number;
+  totalEmails?: number;
+  hasNext?: boolean;
+  hasPrev?: boolean;
+  onPageChange?: (page: number) => void;
+  isLoadingPage?: boolean;
 }
 
 interface ThreadGroup {
@@ -50,6 +59,35 @@ function getThreadStatusSummary(emails: EmailListItem[]): { text: string; varian
     return { text: `${verified}/${total} verified`, variant: 'info' };
   }
   return { text: 'Mixed status', variant: 'default' };
+}
+
+// Get aggregated thread status for full badge display
+function getThreadAggregatedStatus(emails: EmailListItem[]) {
+  // Find the main email (first received email, not a reply)
+  const mainEmail = emails.find(e => !e.is_reply && !e.is_forward) || emails[0];
+
+  // Check if any email in thread has these properties
+  const hasFollowupSent = emails.some(e => e.followup_sent);
+  const followupSentAt = emails.find(e => e.followup_sent)?.followup_sent_at;
+
+  // Use main email's verification and price change status
+  const verificationStatus = mainEmail.verification_status;
+  const isPriceChange = mainEmail.is_price_change;
+  const llmDetectionPerformed = mainEmail.llm_detection_performed;
+  const isEpicorSynced = mainEmail.epicor_synced;
+
+  // Check if main email is verified/approved
+  const isVerified = verificationStatus === 'verified' || verificationStatus === 'manually_approved';
+
+  return {
+    verificationStatus,
+    isPriceChange,
+    llmDetectionPerformed,
+    isEpicorSynced,
+    isVerified,
+    hasFollowupSent,
+    followupSentAt,
+  };
 }
 
 // Group emails by conversation_id
@@ -98,7 +136,20 @@ function groupEmailsByThread(emails: EmailListItem[]): ThreadGroup[] {
   return groups;
 }
 
-export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 'thread' }: InboxTableProps) {
+export function InboxTable({
+  emails,
+  selectedEmailId,
+  onEmailSelect,
+  viewMode = 'thread',
+  currentPage = 1,
+  totalPages = 1,
+  totalThreads = 0,
+  totalEmails = 0,
+  hasNext = false,
+  hasPrev = false,
+  onPageChange,
+  isLoadingPage = false
+}: InboxTableProps) {
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
   const togglePin = useToggleEmailPin();
 
@@ -239,6 +290,45 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 
     </tr>
   );
 
+  // Pagination controls component
+  const PaginationControls = () => {
+    if (totalPages <= 1 || !onPageChange) return null;
+
+    return (
+      <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+        <div className="text-sm text-gray-700">
+          Showing <span className="font-medium">{totalThreads}</span> threads ({totalEmails} emails) &middot; Page <span className="font-medium">{currentPage}</span> of <span className="font-medium">{totalPages}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onPageChange(currentPage - 1)}
+            disabled={!hasPrev || isLoadingPage}
+            className={`flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
+              hasPrev && !isLoadingPage
+                ? 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50'
+                : 'border-gray-200 text-gray-400 bg-gray-100 cursor-not-allowed'
+            }`}
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </button>
+          <button
+            onClick={() => onPageChange(currentPage + 1)}
+            disabled={!hasNext || isLoadingPage}
+            className={`flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
+              hasNext && !isLoadingPage
+                ? 'border-gray-300 text-gray-700 bg-white hover:bg-gray-50'
+                : 'border-gray-200 text-gray-400 bg-gray-100 cursor-not-allowed'
+            }`}
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // Flat view - render all emails without grouping
   if (viewMode === 'flat') {
     return (
@@ -258,6 +348,7 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 
             {emails.map((email) => renderEmailRow(email, false))}
           </tbody>
         </table>
+        <PaginationControls />
       </div>
     );
   }
@@ -307,9 +398,15 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 
             }
 
             const statusSummary = getThreadStatusSummary(group.emails);
+            const threadStatus = getThreadAggregatedStatus(group.emails);
 
             // Check if any email in thread is pinned
             const isThreadPinned = group.emails.some(e => e.pinned);
+
+            // Calculate aggregated info
+            const totalProducts = group.emails.reduce((sum, e) => sum + e.products_count, 0);
+            const totalMissing = group.emails.reduce((sum, e) => sum + (e.missing_fields_count || 0), 0);
+            const hasNeedsInfo = group.emails.some(e => e.needs_info);
 
             return (
               <React.Fragment key={`thread-${group.conversationId}`}>
@@ -349,12 +446,47 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">{formatDate(latestEmail.date)}</td>
                   <td className="px-6 py-4">
-                    <Badge variant={statusSummary.variant} className="text-xs">{statusSummary.text}</Badge>
+                    <div className="flex gap-2 flex-wrap">
+                      {/* Verification status summary */}
+                      <Badge variant={statusSummary.variant} className="text-xs">{statusSummary.text}</Badge>
+
+                      {/* Price Change badge - show if main email is verified and detected as price change */}
+                      {threadStatus.isVerified && threadStatus.llmDetectionPerformed && threadStatus.isPriceChange !== null && (
+                        <PriceChangeBadge isPriceChange={threadStatus.isPriceChange} />
+                      )}
+
+                      {/* Processed/Unprocessed badge */}
+                      {threadStatus.isVerified && threadStatus.isPriceChange === true && (
+                        threadStatus.isEpicorSynced ? (
+                          <Badge variant="success">Processed</Badge>
+                        ) : (
+                          <Badge variant="warning">Unprocessed</Badge>
+                        )
+                      )}
+
+                      {/* Follow-up Sent badge */}
+                      {threadStatus.hasFollowupSent && (
+                        <Badge
+                          variant="purple"
+                          title={threadStatus.followupSentAt ? `Sent on ${formatDate(threadStatus.followupSentAt)}` : 'Follow-up sent'}
+                        >
+                          Follow-up Sent
+                        </Badge>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-1 text-xs text-gray-500">
-                      <Package className="h-4 w-4" />
-                      <span>{group.emails.reduce((sum, e) => sum + e.products_count, 0)} products</span>
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                      {hasNeedsInfo && (
+                        <div className="flex items-center gap-1 text-yellow-600">
+                          <AlertCircle className="h-4 w-4" />
+                          <span>{totalMissing} missing</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1">
+                        <Package className="h-4 w-4" />
+                        <span>{totalProducts} products</span>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -364,6 +496,7 @@ export function InboxTable({ emails, selectedEmailId, onEmailSelect, viewMode = 
           })}
         </tbody>
       </table>
+      <PaginationControls />
     </div>
   );
 }

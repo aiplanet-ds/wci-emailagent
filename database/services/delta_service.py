@@ -49,6 +49,43 @@ class DeltaService:
         return delta_token
 
     @staticmethod
+    async def get_sent_delta_token(db: AsyncSession, user_id: int) -> Optional[str]:
+        """Get sent folder delta token for a user"""
+        result = await db.execute(
+            select(DeltaToken).where(DeltaToken.user_id == user_id)
+        )
+        delta_token = result.scalar_one_or_none()
+        return delta_token.sent_delta_token if delta_token else None
+
+    @staticmethod
+    async def set_sent_delta_token(
+        db: AsyncSession,
+        user_id: int,
+        token: str,
+    ) -> DeltaToken:
+        """Set or update sent folder delta token for a user"""
+        result = await db.execute(
+            select(DeltaToken).where(DeltaToken.user_id == user_id)
+        )
+        delta_token = result.scalar_one_or_none()
+
+        if delta_token:
+            # Update existing token
+            delta_token.sent_delta_token = token
+            delta_token.updated_at = datetime.utcnow()
+        else:
+            # Create new token record with sent_delta_token
+            delta_token = DeltaToken(
+                user_id=user_id,
+                sent_delta_token=token,
+            )
+            db.add(delta_token)
+
+        await db.flush()
+        await db.refresh(delta_token)
+        return delta_token
+
+    @staticmethod
     async def delete_delta_token(db: AsyncSession, user_id: int) -> bool:
         """Delete delta token for a user"""
         result = await db.execute(

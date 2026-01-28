@@ -50,10 +50,10 @@ class ValidationService:
         missing_fields = []
         validation_errors = []
 
-        # Extract sections
-        supplier_info = email_data.get("supplier_info", {})
-        price_change_summary = email_data.get("price_change_summary", {})
-        affected_products = email_data.get("affected_products", [])
+        # Extract sections - use 'or' to handle None values (key exists but value is None)
+        supplier_info = email_data.get("supplier_info") or {}
+        price_change_summary = email_data.get("price_change_summary") or {}
+        affected_products = email_data.get("affected_products") or []
 
         # Rule 1: Always required - supplier_id, supplier_name, effective_date
         if cls._is_empty(supplier_info.get("supplier_id")):
@@ -178,10 +178,10 @@ class ValidationService:
         blockers = []
         warnings = []
 
-        # Critical blockers only
-        supplier_info = email_data.get("supplier_info", {})
-        price_change_summary = email_data.get("price_change_summary", {})
-        affected_products = email_data.get("affected_products", [])
+        # Critical blockers only - use 'or' to handle None values
+        supplier_info = email_data.get("supplier_info") or {}
+        price_change_summary = email_data.get("price_change_summary") or {}
+        affected_products = email_data.get("affected_products") or []
 
         # BLOCKER: Supplier ID is absolutely required
         if cls._is_empty(supplier_info.get("supplier_id")):

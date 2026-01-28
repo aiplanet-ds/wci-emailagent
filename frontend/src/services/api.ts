@@ -13,6 +13,7 @@ import type {
   SendFollowupRequest,
   SendFollowupResponse,
   ThreadBomImpactResponse,
+  ThreadExtractedDataResponse,
   ThreadHistoryResponse,
   UserInfo,
   VendorCacheStatus
@@ -39,11 +40,22 @@ export const emailApi = {
     return data;
   },
 
-  // Get list of emails
-  async getEmails(filter?: EmailFilter, search?: string): Promise<EmailListResponse> {
+  // Get list of emails with pagination and date range filter
+  async getEmails(options?: {
+    filter?: EmailFilter;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<EmailListResponse> {
     const params = new URLSearchParams();
-    if (filter && filter !== 'all') params.append('filter', filter);
-    if (search) params.append('search', search);
+    if (options?.filter && options.filter !== 'all') params.append('filter', options.filter);
+    if (options?.search) params.append('search', options.search);
+    if (options?.page) params.append('page', String(options.page));
+    if (options?.pageSize) params.append('page_size', String(options.pageSize));
+    if (options?.startDate) params.append('start_date', options.startDate);
+    if (options?.endDate) params.append('end_date', options.endDate);
 
     const { data } = await api.get<EmailListResponse>('/api/emails', { params });
     return data;
@@ -136,6 +148,12 @@ export const emailApi = {
   // Get aggregated BOM impact for a thread
   async getThreadBomImpact(messageId: string): Promise<ThreadBomImpactResponse> {
     const { data } = await api.get<ThreadBomImpactResponse>(`/api/emails/${messageId}/thread/bom-impact`);
+    return data;
+  },
+
+  // Get aggregated extracted data from all received emails in a thread
+  async getThreadExtractedData(messageId: string): Promise<ThreadExtractedDataResponse> {
+    const { data } = await api.get<ThreadExtractedDataResponse>(`/api/emails/${messageId}/thread/extracted-data`);
     return data;
   },
 

@@ -39,6 +39,7 @@ const METHOD_LABELS = {
   exact_email: 'Email Match',
   domain_match: 'Domain Match',
   manual_approval: 'Manual',
+  thread_inheritance: 'Thread',
 };
 
 export function VerificationBadge({

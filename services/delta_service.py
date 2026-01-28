@@ -107,6 +107,10 @@ class DeltaEmailService:
                 # Count active users
                 active_users = await UserService.get_all_users(db, active_only=True)
                 logger.info(f"📊 Total active users: {len(active_users)}")
+
+            # Trigger immediate poll for this user (runs for ALL login cases)
+            logger.info(f"🚀 Starting initial email poll for: {user_email}")
+            await self.poll_user_emails(user_email)
         except Exception as e:
             logger.error(f"Error adding user to monitoring: {e}")
 
@@ -267,6 +271,53 @@ class DeltaEmailService:
 
                 logger.info(f"\n📧 Email {i}/{len(messages)}: {subject} (NEW)")
                 logger.info(f"   From: {sender_email}")
+
+                # THREAD INHERITANCE: Check if this is a reply in a verified thread
+                # If so, skip verification and LLM detection - go straight to extraction
+                thread_info = extract_thread_info(message)
+
+                if thread_info.conversation_id:
+                    logger.info(f"   🧵 Thread detected: conversation_id={thread_info.conversation_id[:20]}...")
+
+                    async with SessionLocal() as db:
+                        # Query existing emails in this thread
+                        thread_emails = await EmailService.get_emails_by_conversation_id(
+                            db, thread_info.conversation_id, user_id
+                        )
+
+                        # Check if any previous email from the same sender was verified
+                        thread_verified = False
+                        for prev_email in thread_emails:
+                            if prev_email.message_id == message_id:
+                                continue  # Skip current email
+
+                            # Check if same sender and verified
+                            if prev_email.sender_email and prev_email.sender_email.lower() == sender_email:
+                                prev_state = await DBEmailStateService.get_state_by_message_id(db, prev_email.message_id)
+                                if prev_state and prev_state.vendor_verified:
+                                    logger.info(f"   ✅ VERIFIED THREAD REPLY - Skipping verification & LLM detection")
+                                    logger.info(f"   Previous email from this sender was verified in this thread")
+
+                                    # Go straight to extraction
+                                    full_message = await self.graph_client.get_user_message_by_id(user_email, message['id'])
+                                    await process_user_message(full_message, user_email)
+
+                                    # Mark as verified via thread inheritance
+                                    await DBEmailStateService.update_vendor_verification(
+                                        db,
+                                        message_id,
+                                        vendor_verified=True,
+                                        verification_status="verified",
+                                        verification_method="thread_inheritance"
+                                    )
+                                    await db.commit()
+
+                                    thread_verified = True
+                                    processed_count += 1
+                                    break
+
+                        if thread_verified:
+                            continue  # Skip to next email - already processed
 
                 # STEP 1: VENDOR VERIFICATION CHECK (before expensive LLM detection)
                 verification_enabled = os.getenv("VENDOR_VERIFICATION_ENABLED", "true").lower() == "true"
@@ -472,6 +523,9 @@ class DeltaEmailService:
                     is_reply=thread_info.is_reply,
                     is_forward=thread_info.is_forward,
                     thread_subject=thread_info.thread_subject,
+                    # Folder tracking - explicitly set for inbox emails
+                    folder="inbox",
+                    is_outgoing=False,
                 )
                 await db.commit()
 
@@ -480,37 +534,157 @@ class DeltaEmailService:
             logger.info(f"   🧵 Thread info: conversation_id={thread_info.conversation_id[:20]}..., is_reply={thread_info.is_reply}, is_forward={thread_info.is_forward}")
 
     async def poll_user_emails(self, user_email: str):
-        """Poll emails for a specific user"""
+        """Poll emails for a specific user (both inbox and sent folders)"""
         try:
-            # Load current delta token for user
+            # Load current delta tokens for user
             delta_tokens = await self.load_delta_tokens()
-            current_token = delta_tokens.get(user_email)
+            current_inbox_token = delta_tokens.get(user_email)
 
             logger.info("="*80)
             logger.info(f"🔍 POLLING EMAILS FOR: {user_email}")
             logger.info("="*80)
 
-            # Get delta messages
-            result = await self.get_user_delta_messages(user_email, current_token)
+            # POLL INBOX FOLDER
+            logger.info("📥 Polling Inbox folder...")
+            result = await self.get_user_delta_messages(user_email, current_inbox_token)
             messages = result.get('messages', [])
-            new_delta_token = result.get('delta_token')
+            new_inbox_token = result.get('delta_token')
 
             if messages:
-                logger.info(f"📬 NEW EMAILS DETECTED: {len(messages)} email(s)")
+                logger.info(f"📬 NEW INBOX EMAILS: {len(messages)} email(s)")
                 logger.info("-"*80)
                 await self.process_user_messages(user_email, messages)
             else:
-                logger.info(f"📭 No new emails")
-                logger.info("="*80 + "\n")
+                logger.info(f"📭 No new inbox emails")
 
-            # Update delta token
-            if new_delta_token:
-                delta_tokens[user_email] = new_delta_token
+            # Update inbox delta token
+            if new_inbox_token:
+                delta_tokens[user_email] = new_inbox_token
                 await self.save_delta_tokens(delta_tokens)
+
+            # POLL SENT FOLDER
+            logger.info("📤 Polling Sent folder...")
+            await self.poll_user_sent_emails(user_email)
+
+            logger.info("="*80 + "\n")
 
         except Exception as e:
             logger.error(f"❌ ERROR POLLING EMAILS: {e}")
             logger.error("="*80 + "\n")
+
+    async def poll_user_sent_emails(self, user_email: str):
+        """Poll sent folder for a specific user"""
+        try:
+            # Load sent delta token for this user
+            async with SessionLocal() as db:
+                user = await UserService.get_user_by_email(db, user_email)
+                if not user:
+                    return
+
+                current_sent_token = await DBDeltaService.get_sent_delta_token(db, user.id)
+
+                # Get delta messages from sent folder
+                result = await self.graph_client.get_user_delta_sent_messages(user_email, current_sent_token)
+                messages = result.get('messages', [])
+                new_sent_token = result.get('delta_token')
+
+                if messages:
+                    logger.info(f"📬 NEW SENT EMAILS: {len(messages)} email(s)")
+                    await self.process_sent_messages(user_email, messages)
+                else:
+                    logger.info(f"📭 No new sent emails")
+
+                # Update sent delta token
+                if new_sent_token:
+                    await DBDeltaService.set_sent_delta_token(db, user.id, new_sent_token)
+                    await db.commit()
+
+        except Exception as e:
+            logger.error(f"❌ ERROR POLLING SENT EMAILS: {e}")
+
+    async def process_sent_messages(self, user_email: str, messages: List[Dict]):
+        """
+        Process sent emails - simplified processing, no LLM detection needed.
+        Just stores the sent emails with folder='sent' and is_outgoing=True.
+        """
+        from datetime import datetime
+
+        async with SessionLocal() as db:
+            user = await UserService.get_user_by_email(db, user_email)
+            if not user:
+                logger.error(f"User {user_email} not found in database")
+                return
+
+            processed_count = 0
+
+            for msg in messages:
+                try:
+                    message_id = msg.get('id', '')
+
+                    # Check if email already exists
+                    existing_email = await EmailService.get_email_by_message_id(db, message_id)
+                    if existing_email:
+                        logger.info(f"   Sent email already exists: {message_id[:20]}...")
+                        continue
+
+                    # Extract email metadata
+                    subject = msg.get('subject', '(no subject)')
+                    sent_datetime_str = msg.get('sentDateTime', '')
+
+                    # Parse sent date
+                    try:
+                        sent_datetime = datetime.fromisoformat(sent_datetime_str.replace('Z', '+00:00'))
+                        if sent_datetime.tzinfo:
+                            sent_datetime = sent_datetime.replace(tzinfo=None)
+                    except:
+                        sent_datetime = datetime.utcnow()
+
+                    # Extract body content
+                    body_data = msg.get("body", {})
+                    body_html = body_data.get("content", "") if body_data else ""
+
+                    # Extract thread information
+                    thread_info = extract_thread_info(msg)
+
+                    # Extract recipients
+                    to_recipients = msg.get('toRecipients', [])
+                    recipient_emails = [r.get('emailAddress', {}).get('address', '') for r in to_recipients]
+
+                    # Create sent email record
+                    email_record = await EmailService.create_email(
+                        db,
+                        message_id=message_id,
+                        user_id=user.id,
+                        subject=subject,
+                        sender_email=user_email,  # Sent by user
+                        received_at=sent_datetime,  # Using sent datetime
+                        has_attachments=msg.get('hasAttachments', False),
+                        body_html=body_html,
+                        raw_email_data=msg,
+                        # Thread information
+                        conversation_id=thread_info.conversation_id,
+                        conversation_index=thread_info.conversation_index,
+                        is_reply=thread_info.is_reply,
+                        is_forward=thread_info.is_forward,
+                        thread_subject=thread_info.thread_subject,
+                        # Sent folder tracking
+                        folder="sent",
+                        is_outgoing=True,
+                        # Minimal extracted data for sent emails
+                        supplier_info={"contact_email": recipient_emails[0] if recipient_emails else ""},
+                        price_change_summary={},
+                        affected_products=[],
+                        additional_details={"sent_to": recipient_emails},
+                    )
+
+                    logger.info(f"   ✅ Saved sent email: {subject[:50]}...")
+                    processed_count += 1
+
+                except Exception as e:
+                    logger.error(f"   ❌ Error processing sent email: {e}")
+
+            await db.commit()
+            logger.info(f"   📊 Processed {processed_count} sent emails")
     
     async def poll_all_users(self):
         """Poll emails for all active users"""

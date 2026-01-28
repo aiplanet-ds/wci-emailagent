@@ -5,7 +5,7 @@ import { APPROVE_EMAIL_MUTATION_KEY } from './useVendorVerification';
 
 /**
  * Hook to fetch dashboard statistics
- * Auto-refetches every 30 seconds to keep data fresh
+ * Auto-refetches every 10 seconds to keep data fresh
  * Pauses polling during approve mutation to prevent race conditions
  */
 export function useDashboardStats(startDate?: string, endDate?: string) {
@@ -14,7 +14,7 @@ export function useDashboardStats(startDate?: string, endDate?: string) {
   return useQuery<DashboardStats>({
     queryKey: ['dashboard-stats', startDate, endDate],
     queryFn: () => emailApi.getDashboardStats(startDate, endDate),
-    staleTime: 30000, // Consider data stale after 30 seconds
-    refetchInterval: isApproveMutating > 0 ? false : 30000, // Pause polling during mutation
+    staleTime: 10000, // Consider data stale after 10 seconds
+    refetchInterval: isApproveMutating > 0 ? false : 10000, // 10s polling for responsive updates
   });
 }

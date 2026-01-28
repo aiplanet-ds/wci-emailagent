@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { EmailDetailDrawer } from '../components/detail/EmailDetailDrawer';
 import { InboxFilters } from '../components/inbox/InboxFilters';
 import { InboxTable, type ViewMode } from '../components/inbox/InboxTable';
 import { useEmails } from '../hooks/useEmails';
-import type { EmailFilter } from '../types/email';
+import type { EmailFilter, InboxDateRangeOption } from '../types/email';
 
 export function Inbox() {
   const [filter, setFilter] = useState<EmailFilter>('all');
@@ -11,7 +11,111 @@ export function Inbox() {
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('thread');
 
-  const { data: emailsData, isLoading, error } = useEmails(filter, search);
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const pageSize = 15;
+
+  // Date range state
+  const [dateOption, setDateOption] = useState<InboxDateRangeOption>('all');
+  const [customStartDate, setCustomStartDate] = useState<string>();
+  const [customEndDate, setCustomEndDate] = useState<string>();
+
+  // Helper to safely parse date string to ISO format
+  const safeParseDate = (dateStr: string | undefined, endOfDay = false): string | undefined => {
+    if (!dateStr) return undefined;
+    try {
+      const date = new Date(dateStr);
+      // Check if date is valid
+      if (isNaN(date.getTime())) return undefined;
+      if (endOfDay) {
+        date.setHours(23, 59, 59, 999);
+      }
+      return date.toISOString();
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Calculate actual date range from option
+  const { startDate, endDate } = useMemo(() => {
+    const now = new Date();
+    let start: string | undefined;
+    let end: string | undefined;
+
+    switch (dateOption) {
+      case 'today': {
+        const todayStart = new Date(now);
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(now);
+        todayEnd.setHours(23, 59, 59, 999);
+        start = todayStart.toISOString();
+        end = todayEnd.toISOString();
+        break;
+      }
+      case 'last7days': {
+        const weekAgo = new Date(now);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        start = weekAgo.toISOString();
+        end = new Date().toISOString();
+        break;
+      }
+      case 'last30days': {
+        const monthAgo = new Date(now);
+        monthAgo.setDate(monthAgo.getDate() - 30);
+        start = monthAgo.toISOString();
+        end = new Date().toISOString();
+        break;
+      }
+      case 'last90days': {
+        const quarterAgo = new Date(now);
+        quarterAgo.setDate(quarterAgo.getDate() - 90);
+        start = quarterAgo.toISOString();
+        end = new Date().toISOString();
+        break;
+      }
+      case 'custom': {
+        start = safeParseDate(customStartDate);
+        end = safeParseDate(customEndDate, true);
+        break;
+      }
+      default:
+        start = undefined;
+        end = undefined;
+    }
+
+    return { startDate: start, endDate: end };
+  }, [dateOption, customStartDate, customEndDate]);
+
+  // Reset page when filters change
+  const handleFilterChange = (newFilter: EmailFilter) => {
+    setFilter(newFilter);
+    setPage(1);
+  };
+
+  const handleSearchChange = (newSearch: string) => {
+    setSearch(newSearch);
+    setPage(1);
+  };
+
+  const handleDateOptionChange = (option: InboxDateRangeOption) => {
+    setDateOption(option);
+    setPage(1);
+  };
+
+  const handleCustomDateChange = (start: string, end: string) => {
+    setCustomStartDate(start);
+    setCustomEndDate(end);
+    setPage(1);
+  };
+
+  const { data: emailsData, isLoading, error, isFetching } = useEmails({
+    filter,
+    search,
+    page,
+    pageSize,
+    startDate,
+    endDate
+  });
 
   return (
     <>
@@ -27,11 +131,16 @@ export function Inbox() {
         {/* Filters */}
         <InboxFilters
           filter={filter}
-          onFilterChange={setFilter}
+          onFilterChange={handleFilterChange}
           search={search}
-          onSearchChange={setSearch}
+          onSearchChange={handleSearchChange}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
+          dateOption={dateOption}
+          onDateOptionChange={handleDateOptionChange}
+          customStartDate={customStartDate}
+          customEndDate={customEndDate}
+          onCustomDateChange={handleCustomDateChange}
         />
 
         {/* Email List */}
@@ -50,12 +159,16 @@ export function Inbox() {
               selectedEmailId={selectedEmailId}
               onEmailSelect={setSelectedEmailId}
               viewMode={viewMode}
+              // Pagination props
+              currentPage={emailsData?.page || 1}
+              totalPages={emailsData?.total_pages || 1}
+              totalThreads={emailsData?.total_threads || 0}
+              totalEmails={emailsData?.total || 0}
+              hasNext={emailsData?.has_next || false}
+              hasPrev={emailsData?.has_prev || false}
+              onPageChange={setPage}
+              isLoadingPage={isFetching && !isLoading}
             />
-
-            {/* Stats */}
-            <div className="text-sm text-gray-600">
-              Showing {emailsData?.emails.length || 0} of {emailsData?.total || 0} emails
-            </div>
           </>
         )}
       </div>

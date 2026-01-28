@@ -106,6 +106,9 @@ class EmailService:
         is_reply: bool = False,
         is_forward: bool = False,
         thread_subject: Optional[str] = None,
+        # Folder tracking
+        folder: str = "inbox",
+        is_outgoing: bool = False,
     ) -> Email:
         """Create a new email record"""
         email = Email(
@@ -129,6 +132,9 @@ class EmailService:
             is_reply=is_reply,
             is_forward=is_forward,
             thread_subject=thread_subject,
+            # Folder tracking
+            folder=folder,
+            is_outgoing=is_outgoing,
         )
         db.add(email)
         await db.flush()

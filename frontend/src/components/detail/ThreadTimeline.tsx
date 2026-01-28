@@ -165,6 +165,8 @@ export function ThreadTimeline({ messageId, currentMessageId, onEmailSelect }: T
                     className={`flex-1 rounded-lg p-3 transition-colors ${
                       isCurrentEmail
                         ? 'bg-blue-50 border border-blue-200'
+                        : email.is_outgoing
+                        ? 'bg-purple-50 border border-purple-100 group-hover:border-purple-200'
                         : 'bg-gray-50 border border-transparent group-hover:border-gray-200'
                     }`}
                   >
@@ -172,12 +174,15 @@ export function ThreadTimeline({ messageId, currentMessageId, onEmailSelect }: T
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-gray-900 truncate">
-                            {email.sender}
+                            {email.is_outgoing ? 'You' : email.sender}
                           </span>
-                          {email.is_reply && (
+                          {email.is_outgoing && (
+                            <Badge variant="purple" className="text-xs">Sent</Badge>
+                          )}
+                          {!email.is_outgoing && email.is_reply && (
                             <Badge variant="info" className="text-xs">Re</Badge>
                           )}
-                          {email.is_forward && (
+                          {!email.is_outgoing && email.is_forward && (
                             <Badge variant="info" className="text-xs">Fwd</Badge>
                           )}
                           {isCurrentEmail && (
