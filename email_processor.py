@@ -27,7 +27,8 @@ async def _process_single_product_bom(
     product: dict,
     supplier_id: str,
     effective_date: str | None,
-    total_products: int
+    total_products: int,
+    pre_validated_data: dict | None = None
 ) -> dict:
     """
     Process BOM impact analysis for a single product (async).
@@ -57,7 +58,8 @@ async def _process_single_product_bom(
             old_price=float(old_price) if old_price else 0,
             new_price=float(new_price) if new_price else 0,
             effective_date=effective_date,
-            email_metadata=None
+            email_metadata=None,
+            pre_validated_data=pre_validated_data
         )
 
         # Log summary
@@ -80,7 +82,7 @@ async def _process_single_product_bom(
 
     except Exception as e:
         logger.error(f"   Product {idx + 1}/{total_products} ({part_num}): Error - {e}")
-        # Return error result
+        # Return error result with pre-validated data for correct validation flags
         error_result = {
             "status": "error",
             "processing_errors": [str(e)],
@@ -91,6 +93,32 @@ async def _process_single_product_bom(
             "actions_required": [],
             "can_auto_approve": False
         }
+        if pre_validated_data:
+            error_result["supplier_part_validated"] = pre_validated_data.get("supplier_part_validated", False)
+            error_result["supplier_part_validation_error"] = pre_validated_data.get("supplier_part_error")
+            if pre_validated_data.get("part_validated") and pre_validated_data.get("part_data"):
+                pd = pre_validated_data["part_data"]
+                error_result["component"] = {
+                    "part_num": part_num,
+                    "description": pd.get("description", ""),
+                    "type_code": pd.get("type_code", ""),
+                    "uom": pd.get("uom", ""),
+                    "current_cost": pd.get("current_cost", 0),
+                    "validated": True
+                }
+            if pre_validated_data.get("supplier_validated") and pre_validated_data.get("supplier_data"):
+                sd = pre_validated_data["supplier_data"]
+                error_result["supplier"] = {
+                    "supplier_id": supplier_id,
+                    "vendor_num": sd.get("vendor_num"),
+                    "name": sd.get("name", ""),
+                    "validated": True
+                }
+            supplier_part_data = pre_validated_data.get("supplier_part_data", {}) or {}
+            supplier_data_pre = pre_validated_data.get("supplier_data", {}) or {}
+            vendor_num = supplier_part_data.get("vendor_num") or supplier_data_pre.get("vendor_num")
+            if vendor_num:
+                error_result["vendor_num"] = vendor_num
         return {
             "idx": idx,
             "part_num": part_num,
@@ -327,6 +355,12 @@ async def run_bom_impact_analysis(
         # Use semaphore to limit concurrency
         semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
+        # Build a lookup map for pre-validated data by product index
+        validation_lookup = {}
+        if validation_results:
+            for pv in validation_results.get("product_validations", []):
+                validation_lookup[pv["idx"]] = pv.get("validation_result")
+
         async def process_with_semaphore(idx: int, product: dict):
             async with semaphore:
                 return await _process_single_product_bom(
@@ -335,7 +369,8 @@ async def run_bom_impact_analysis(
                     product,
                     supplier_id,
                     effective_date,
-                    total_products
+                    total_products,
+                    pre_validated_data=validation_lookup.get(idx)
                 )
 
         # Build set of product indices that passed validation (using passed-in validation_results)
@@ -376,25 +411,55 @@ async def run_bom_impact_analysis(
             if isinstance(result, Exception):
                 logger.error(f"   Unexpected error for product {original_idx}: {result}")
                 product = affected_products[original_idx]
+                part_num = product.get("product_id", "")
+                pre_validated = validation_lookup.get(original_idx)
+                error_result = {
+                    "status": "error",
+                    "processing_errors": [f"Unexpected error: {str(result)}"],
+                    "component": {"part_num": part_num, "validated": False},
+                    "supplier": {"supplier_id": supplier_id, "validated": False},
+                    "price_change": {
+                        "part_num": part_num,
+                        "old_price": product.get("old_price", 0),
+                        "new_price": product.get("new_price", 0)
+                    },
+                    "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
+                    "actions_required": [],
+                    "can_auto_approve": False
+                }
+                # Use pre-validated data for correct validation flags
+                if pre_validated:
+                    error_result["supplier_part_validated"] = pre_validated.get("supplier_part_validated", False)
+                    error_result["supplier_part_validation_error"] = pre_validated.get("supplier_part_error")
+                    if pre_validated.get("part_validated") and pre_validated.get("part_data"):
+                        pd = pre_validated["part_data"]
+                        error_result["component"] = {
+                            "part_num": part_num,
+                            "description": pd.get("description", ""),
+                            "type_code": pd.get("type_code", ""),
+                            "uom": pd.get("uom", ""),
+                            "current_cost": pd.get("current_cost", 0),
+                            "validated": True
+                        }
+                    if pre_validated.get("supplier_validated") and pre_validated.get("supplier_data"):
+                        sd = pre_validated["supplier_data"]
+                        error_result["supplier"] = {
+                            "supplier_id": supplier_id,
+                            "vendor_num": sd.get("vendor_num"),
+                            "name": sd.get("name", ""),
+                            "validated": True
+                        }
+                    sp_data = pre_validated.get("supplier_part_data", {}) or {}
+                    sd_data = pre_validated.get("supplier_data", {}) or {}
+                    vendor_num = sp_data.get("vendor_num") or sd_data.get("vendor_num")
+                    if vendor_num:
+                        error_result["vendor_num"] = vendor_num
                 processed_results.append({
                     "idx": original_idx,
-                    "part_num": product.get("product_id", ""),
+                    "part_num": part_num,
                     "skipped": False,
                     "error": str(result),
-                    "result": {
-                        "status": "error",
-                        "processing_errors": [f"Unexpected error: {str(result)}"],
-                        "component": {"part_num": product.get("product_id", ""), "validated": False},
-                        "supplier": {"supplier_id": supplier_id, "validated": False},
-                        "price_change": {
-                            "part_num": product.get("product_id", ""),
-                            "old_price": product.get("old_price", 0),
-                            "new_price": product.get("new_price", 0)
-                        },
-                        "bom_impact": {"summary": {}, "impact_details": [], "high_risk_assemblies": []},
-                        "actions_required": [],
-                        "can_auto_approve": False
-                    }
+                    "result": error_result
                 })
             else:
                 processed_results.append(result)
@@ -419,25 +484,7 @@ async def run_bom_impact_analysis(
                     skipped_count += 1
                     continue
 
-                # Enrich result with validation data if available
                 impact_data = result["result"]
-                if validation_results:
-                    # Find validation for this product
-                    for pv in validation_results.get("product_validations", []):
-                        if pv["idx"] == result["idx"]:
-                            vr = pv.get("validation_result", {})
-                            impact_data["supplier_part_validated"] = vr.get("supplier_part_validated", False)
-                            impact_data["supplier_part_validation_error"] = vr.get("supplier_part_error")
-
-                            # Extract vendor_num from validation result for direct VendPartSvc updates
-                            # Priority: supplier_part_data (more specific) > supplier_data (fallback)
-                            supplier_part_data = vr.get("supplier_part_data", {})
-                            supplier_data = vr.get("supplier_data", {})
-                            vendor_num = supplier_part_data.get("vendor_num") or supplier_data.get("vendor_num")
-                            if vendor_num:
-                                impact_data["vendor_num"] = vendor_num
-                                logger.info(f"   Captured VendorNum={vendor_num} for part {result.get('part_num', 'unknown')}")
-                            break
 
                 await BomImpactService.create(
                     db,

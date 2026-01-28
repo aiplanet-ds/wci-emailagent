@@ -1367,6 +1367,14 @@ async def approve_and_process_email(
 
                             print(f"   📦 Product {idx + 1}/{len(affected_products)}: {part_num}")
 
+                            # Look up pre-validated data for this product
+                            pre_validated = None
+                            if validation_results:
+                                for pv in validation_results.get("product_validations", []):
+                                    if pv["idx"] == idx:
+                                        pre_validated = pv.get("validation_result")
+                                        break
+
                             try:
                                 # Run the BOM impact analysis (async)
                                 impact_result = await epicor_service.process_supplier_price_change(
@@ -1375,17 +1383,9 @@ async def approve_and_process_email(
                                     old_price=float(old_price) if old_price else 0,
                                     new_price=float(new_price) if new_price else 0,
                                     effective_date=result.get("price_change_summary", {}).get("effective_date"),
-                                    email_metadata=None
+                                    email_metadata=None,
+                                    pre_validated_data=pre_validated
                                 )
-
-                                # Enrich with validation data if available
-                                if validation_results:
-                                    for pv in validation_results.get("product_validations", []):
-                                        if pv["idx"] == idx:
-                                            vr = pv.get("validation_result", {})
-                                            impact_result["supplier_part_validated"] = vr.get("supplier_part_validated", False)
-                                            impact_result["supplier_part_validation_error"] = vr.get("supplier_part_error")
-                                            break
 
                                 # Store the result in database
                                 await BomImpactService.create(
@@ -1403,7 +1403,7 @@ async def approve_and_process_email(
 
                             except Exception as e:
                                 print(f"      ❌ Error analyzing {part_num}: {e}")
-                                # Store error result with validation data
+                                # Store error result with pre-validated data
                                 error_result = {
                                     "status": "error",
                                     "processing_errors": [str(e)],
@@ -1414,14 +1414,33 @@ async def approve_and_process_email(
                                     "actions_required": [],
                                     "can_auto_approve": False
                                 }
-                                # Add validation data if available
-                                if validation_results:
-                                    for pv in validation_results.get("product_validations", []):
-                                        if pv["idx"] == idx:
-                                            vr = pv.get("validation_result", {})
-                                            error_result["supplier_part_validated"] = vr.get("supplier_part_validated", False)
-                                            error_result["supplier_part_validation_error"] = vr.get("supplier_part_error")
-                                            break
+                                # Use pre-validated data for correct validation flags
+                                if pre_validated:
+                                    error_result["supplier_part_validated"] = pre_validated.get("supplier_part_validated", False)
+                                    error_result["supplier_part_validation_error"] = pre_validated.get("supplier_part_error")
+                                    if pre_validated.get("part_validated") and pre_validated.get("part_data"):
+                                        pd = pre_validated["part_data"]
+                                        error_result["component"] = {
+                                            "part_num": part_num,
+                                            "description": pd.get("description", ""),
+                                            "type_code": pd.get("type_code", ""),
+                                            "uom": pd.get("uom", ""),
+                                            "current_cost": pd.get("current_cost", 0),
+                                            "validated": True
+                                        }
+                                    if pre_validated.get("supplier_validated") and pre_validated.get("supplier_data"):
+                                        sd = pre_validated["supplier_data"]
+                                        error_result["supplier"] = {
+                                            "supplier_id": supplier_id,
+                                            "vendor_num": sd.get("vendor_num"),
+                                            "name": sd.get("name", ""),
+                                            "validated": True
+                                        }
+                                    supplier_part_data = pre_validated.get("supplier_part_data", {}) or {}
+                                    supplier_data_pre = pre_validated.get("supplier_data", {}) or {}
+                                    vendor_num = supplier_part_data.get("vendor_num") or supplier_data_pre.get("vendor_num")
+                                    if vendor_num:
+                                        error_result["vendor_num"] = vendor_num
                                 await BomImpactService.create(db, email_id=email.id, product_index=idx, impact_data=error_result)
 
                         await db.commit()

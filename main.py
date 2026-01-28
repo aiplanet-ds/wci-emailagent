@@ -106,8 +106,10 @@ async def login(request: Request):
     request.session["oauth_state"] = state
     
     # Get OAuth authorization URL
-    # Force https for redirect URI behind Azure Container Apps TLS termination
-    redirect_uri = str(request.url_for("auth_callback")).replace("http://", "https://")
+    # Force https for redirect URI behind Azure Container Apps TLS termination (skip for localhost)
+    redirect_uri = str(request.url_for("auth_callback"))
+    if "localhost" not in redirect_uri:
+        redirect_uri = redirect_uri.replace("http://", "https://")
     auth_url = multi_auth.get_authorization_url(redirect_uri, state)
     
     return RedirectResponse(url=auth_url)
@@ -137,8 +139,10 @@ async def auth_callback(request: Request, code: str = None, state: str = None, e
     
     try:
         # Exchange code for token (async)
-        # Force https for redirect URI behind Azure Container Apps TLS termination
-        redirect_uri = str(request.url_for("auth_callback")).replace("http://", "https://")
+        # Force https for redirect URI behind Azure Container Apps TLS termination (skip for localhost)
+        redirect_uri = str(request.url_for("auth_callback"))
+        if "localhost" not in redirect_uri:
+            redirect_uri = redirect_uri.replace("http://", "https://")
         result = await multi_auth.exchange_code_for_token(code, redirect_uri)
         
         if "access_token" not in result:

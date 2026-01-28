@@ -1361,7 +1361,8 @@ class EpicorAPIService:
         old_price: float,
         new_price: float,
         effective_date: Optional[str] = None,
-        email_metadata: Optional[Dict[str, Any]] = None
+        email_metadata: Optional[Dict[str, Any]] = None,
+        pre_validated_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Process a supplier price change email end-to-end.
@@ -1430,49 +1431,73 @@ class EpicorAPIService:
 
         # Step 1: Validate component exists in Epicor
         logger.info("-"*80)
-        logger.info("Step 1: Validating component in Epicor...")
-        try:
-            component_data = await self.get_part(part_num)
-            if component_data:
-                result["component"] = {
-                    "part_num": part_num,
-                    "description": component_data.get("PartDescription", ""),
-                    "type_code": component_data.get("TypeCode", ""),
-                    "uom": component_data.get("IUM", ""),
-                    "current_cost": component_data.get("StdCost") or component_data.get("AvgMaterialCost", 0),
-                    "validated": True
-                }
-                logger.info(f"   Component validated: {component_data.get('PartDescription', part_num)}")
-            else:
-                result["component"] = {"part_num": part_num, "validated": False, "error": "Part not found in Epicor"}
-                processing_errors.append(f"Component {part_num} not found in Epicor")
-                logger.warning(f"   Component {part_num} not found in Epicor")
-        except Exception as e:
-            result["component"] = {"part_num": part_num, "validated": False, "error": str(e)}
-            processing_errors.append(f"Error validating component: {str(e)}")
-            logger.error(f"   Error validating component: {e}")
+        if pre_validated_data and pre_validated_data.get("part_validated"):
+            # Use pre-validated data — skip redundant API call
+            part_data = pre_validated_data.get("part_data", {})
+            result["component"] = {
+                "part_num": part_num,
+                "description": part_data.get("description", ""),
+                "type_code": part_data.get("type_code", ""),
+                "uom": part_data.get("uom", ""),
+                "current_cost": part_data.get("current_cost", 0),
+                "validated": True
+            }
+            logger.info(f"Step 1: Component pre-validated: {part_data.get('description', part_num)}")
+        else:
+            logger.info("Step 1: Validating component in Epicor...")
+            try:
+                component_data = await self.get_part(part_num)
+                if component_data:
+                    result["component"] = {
+                        "part_num": part_num,
+                        "description": component_data.get("PartDescription", ""),
+                        "type_code": component_data.get("TypeCode", ""),
+                        "uom": component_data.get("IUM", ""),
+                        "current_cost": component_data.get("StdCost") or component_data.get("AvgMaterialCost", 0),
+                        "validated": True
+                    }
+                    logger.info(f"   Component validated: {component_data.get('PartDescription', part_num)}")
+                else:
+                    result["component"] = {"part_num": part_num, "validated": False, "error": "Part not found in Epicor"}
+                    processing_errors.append(f"Component {part_num} not found in Epicor")
+                    logger.warning(f"   Component {part_num} not found in Epicor")
+            except Exception as e:
+                result["component"] = {"part_num": part_num, "validated": False, "error": str(e)}
+                processing_errors.append(f"Error validating component: {str(e)}")
+                logger.error(f"   Error validating component: {e}")
 
         # Step 2: Validate supplier exists in Epicor
         logger.info("-"*80)
-        logger.info("Step 2: Validating supplier in Epicor...")
-        try:
-            vendor_data = await self.get_vendor_by_id(supplier_id)
-            if vendor_data:
-                result["supplier"] = {
-                    "supplier_id": supplier_id,
-                    "vendor_num": vendor_data.get("VendorNum"),
-                    "name": vendor_data.get("Name", ""),
-                    "validated": True
-                }
-                logger.info(f"   Supplier validated: {vendor_data.get('Name', supplier_id)}")
-            else:
-                result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": "Supplier not found"}
-                processing_errors.append(f"Supplier {supplier_id} not found in Epicor")
-                logger.warning(f"   Supplier {supplier_id} not found in Epicor")
-        except Exception as e:
-            result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": str(e)}
-            processing_errors.append(f"Error validating supplier: {str(e)}")
-            logger.error(f"   Error validating supplier: {e}")
+        if pre_validated_data and pre_validated_data.get("supplier_validated"):
+            # Use pre-validated data — skip redundant API call
+            supplier_data_pre = pre_validated_data.get("supplier_data", {})
+            result["supplier"] = {
+                "supplier_id": supplier_id,
+                "vendor_num": supplier_data_pre.get("vendor_num"),
+                "name": supplier_data_pre.get("name", ""),
+                "validated": True
+            }
+            logger.info(f"Step 2: Supplier pre-validated: {supplier_data_pre.get('name', supplier_id)}")
+        else:
+            logger.info("Step 2: Validating supplier in Epicor...")
+            try:
+                vendor_data = await self.get_vendor_by_id(supplier_id)
+                if vendor_data:
+                    result["supplier"] = {
+                        "supplier_id": supplier_id,
+                        "vendor_num": vendor_data.get("VendorNum"),
+                        "name": vendor_data.get("Name", ""),
+                        "validated": True
+                    }
+                    logger.info(f"   Supplier validated: {vendor_data.get('Name', supplier_id)}")
+                else:
+                    result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": "Supplier not found"}
+                    processing_errors.append(f"Supplier {supplier_id} not found in Epicor")
+                    logger.warning(f"   Supplier {supplier_id} not found in Epicor")
+            except Exception as e:
+                result["supplier"] = {"supplier_id": supplier_id, "validated": False, "error": str(e)}
+                processing_errors.append(f"Error validating supplier: {str(e)}")
+                logger.error(f"   Error validating supplier: {e}")
 
         # Step 3: Perform comprehensive BOM impact analysis
         logger.info("-"*80)
@@ -1493,6 +1518,17 @@ class EpicorAPIService:
             result["bom_impact"] = {"error": str(e)}
             processing_errors.append(f"Error in BOM analysis: {str(e)}")
             logger.error(f"   Exception in BOM analysis: {e}")
+
+        # Carry forward supplier-part validation from pre-validated data
+        if pre_validated_data:
+            result["supplier_part_validated"] = pre_validated_data.get("supplier_part_validated", False)
+            result["supplier_part_validation_error"] = pre_validated_data.get("supplier_part_error")
+            # Carry forward vendor_num for Epicor sync
+            supplier_part_data = pre_validated_data.get("supplier_part_data", {}) or {}
+            supplier_data_pre = pre_validated_data.get("supplier_data", {}) or {}
+            vendor_num = supplier_part_data.get("vendor_num") or supplier_data_pre.get("vendor_num")
+            if vendor_num:
+                result["vendor_num"] = vendor_num
 
         # Step 4: Determine required actions based on analysis
         logger.info("-"*80)
